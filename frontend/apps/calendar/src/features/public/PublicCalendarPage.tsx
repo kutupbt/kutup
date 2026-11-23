@@ -10,7 +10,7 @@ import { Button } from '@kutup/ui/components/button'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { formatLongDate, formatTime, formatTitle } from '../format'
 import { covers, place, type Placed } from '../placement'
-import { closePublicCalendar, LinkKeyMissing, LinkNotFound, loadBusyBlocks, loadPublicEvents, loadPublicLink, openPublicCalendar, type BusyBlock } from './publicClient'
+import { closePublicCalendar, LinkKeyMissing, LinkNotFound, linkProof, loadBusyBlocks, loadPublicEvents, loadPublicLink, openPublicCalendar, type BusyBlock } from './publicClient'
 
 /** The viewer's own zone: a link has no account, so no calendar zone to read. */
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
@@ -53,7 +53,7 @@ export function PublicCalendarPage() {
   const [date, setDate] = useState<CivilDate>(() => todayIn(ZONE))
   const days = useMemo(() => viewDays('week', date, 1), [date])
 
-  const link = useQuery({ queryKey: ['public-link', linkId], queryFn: () => loadPublicLink(linkId), retry: false, staleTime: Infinity })
+  const link = useQuery({ queryKey: ['public-link', linkId], queryFn: () => loadPublicLink(linkId, secret), retry: false, staleTime: Infinity })
   const calendar = useQuery({
     queryKey: ['public-calendar', linkId, secret],
     enabled: link.data?.kind === 'full',
@@ -86,7 +86,7 @@ export function PublicCalendarPage() {
         const blocks = await loadBusyBlocks(linkId, start, end)
         return { placed: await Promise.all(blocks.map(placeBusy)), unreadable: 0, busy: true }
       }
-      const loaded = await loadPublicEvents(linkId, calendar.data!, start, end)
+      const loaded = await loadPublicEvents(linkId, calendar.data!, start, end, (await linkProof(linkId, secret)) ?? '')
       return { placed: await Promise.all(loaded.events.map((event) => place(event, '', ZONE))), unreadable: loaded.unreadable, busy: false }
     },
   })

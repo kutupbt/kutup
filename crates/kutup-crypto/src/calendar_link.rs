@@ -10,22 +10,30 @@
 //! pad is ever reused and nothing opens under another calendar, link or
 //! generation.
 //!
-//! The calendar's members keep the link secret too, sealed under a key
-//! derived from the newest generation's passphrase ([`seal_link_secret`]), as
-//! Proton seals its `CacheKey` to the calendar key: the owner can show the
-//! URL again and, when the key rotates, re-seal the new passphrase for the
-//! link. Busy-only links carry no secret and need none of this.
+//! The owner keeps the link secret, sealed to its own account key
+//! ([`seal_owner_link_secret`], a [`CalendarLinkSecretEnvelopeV1`] from the
+//! owner to itself), so it can show the URL again and, when the key rotates,
+//! seal the new passphrase for the link. Never under the calendar's
+//! passphrase: every member holds that, and a removed member's old
+//! passphrase would open the secret, and with it every later generation.
 //!
-//! Both envelopes are `version ‖ nonce ‖ ciphertext` (XChaCha20-Poly1305,
-//! suite V1), with the context (calendar id, link id, generation) as the
-//! HKDF info and the associated data.
+//! A keyed link's page proves it holds the secret before the server hands
+//! over anything sealed ([`link_access_proof`]); the server keeps only the
+//! proof's hash. Busy-only links carry no secret and need none of this.
+//!
+//! The passphrase envelopes are `version ‖ nonce ‖ ciphertext`
+//! (XChaCha20-Poly1305, suite V1), with the context (calendar id, link id,
+//! generation) as the HKDF info and the associated data.
 
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use zeroize::Zeroizing;
 
+use crate::account_ref::AccountRef;
 use crate::calendar::{Passphrase, PASSPHRASE_BYTES};
 use crate::error::{CryptoError, Result};
+use crate::identity::AccountIdentityKeysV1;
+pub use crate::named_share::CalendarLinkSecretEnvelopeV1;
 use crate::primitives::{kdf, Aead, Suite};
 
 /// The envelopes' format version.
@@ -173,50 +181,78 @@ pub fn open_link_passphrase(
     Passphrase::from_bytes(&bytes)
 }
 
-/// The link secret, sealed under generation `generation`'s passphrase, for
-/// the calendar's members.
-pub fn seal_link_secret(
-    passphrase: &Passphrase,
-    calendar_id: &str,
-    link_id: &str,
-    generation: u32,
+/// The envelope's version (its "number").
+pub const OWNER_SECRET_VERSION: u32 = 1;
+
+/// The link secret, sealed by `owner` to itself (its account key), bound to
+/// the link.
+pub fn seal_owner_link_secret(
     secret: &LinkSecret,
-) -> Result<Vec<u8>> {
-    seal_link_secret_with(passphrase, calendar_id, link_id, generation, secret, None)
+    link_id: &str,
+    owner: &AccountRef,
+    identity: &AccountIdentityKeysV1,
+) -> Result<CalendarLinkSecretEnvelopeV1> {
+    let incarnation = identity.incarnation_id();
+    CalendarLinkSecretEnvelopeV1::seal(
+        secret.as_bytes(),
+        link_id,
+        OWNER_SECRET_VERSION,
+        owner,
+        &incarnation,
+        identity.drive_signing_key(),
+        owner,
+        &incarnation,
+        &identity.drive_xwing_public_key(),
+    )
 }
 
-fn seal_link_secret_with(
-    passphrase: &Passphrase,
-    calendar_id: &str,
+/// Opens what [`seal_owner_link_secret`] sealed: refused unless the owner's
+/// own key signed it for this link.
+pub fn open_owner_link_secret(
+    envelope: &CalendarLinkSecretEnvelopeV1,
     link_id: &str,
-    generation: u32,
-    secret: &LinkSecret,
-    nonce: Option<&[u8]>,
-) -> Result<Vec<u8>> {
-    let context = context(calendar_id, link_id, generation)?;
-    let aead = aead(
-        &passphrase.to_bytes(),
-        crate::labels::CALENDAR_LINK_SECRET_V1,
-        &context,
-    )?;
-    seal(&aead, &context, nonce, secret.as_bytes())
-}
-
-/// Opens what [`seal_link_secret`] sealed.
-pub fn open_link_secret(
-    passphrase: &Passphrase,
-    calendar_id: &str,
-    link_id: &str,
-    generation: u32,
-    sealed: &[u8],
+    owner: &AccountRef,
+    identity: &AccountIdentityKeysV1,
 ) -> Result<LinkSecret> {
-    let context = context(calendar_id, link_id, generation)?;
-    let aead = aead(
-        &passphrase.to_bytes(),
-        crate::labels::CALENDAR_LINK_SECRET_V1,
+    let incarnation = identity.incarnation_id();
+    let bytes = Zeroizing::new(envelope.open(
+        link_id,
+        OWNER_SECRET_VERSION,
+        owner,
+        &incarnation,
+        &identity.drive_signing_public_key(),
+        owner,
+        &incarnation,
+        identity.drive_xwing_private_key(),
+    )?);
+    LinkSecret::from_bytes(&bytes)
+}
+
+/// What a keyed link's page shows the server to be served the link: derived
+/// from the secret and bound to the link, so the link's id alone opens
+/// nothing. The server keeps its SHA-256.
+pub fn link_access_proof(secret: &LinkSecret, link_id: &str) -> Result<[u8; 32]> {
+    if link_id.is_empty() || link_id.len() > 255 {
+        return Err(CryptoError::InvalidInput(
+            "a link id is 1 to 255 bytes".into(),
+        ));
+    }
+    let mut context = vec![CALENDAR_LINK_VERSION, link_id.len() as u8];
+    context.extend_from_slice(link_id.as_bytes());
+    let mut proof = [0u8; 32];
+    kdf(
+        Suite::V1,
+        secret.as_bytes(),
+        crate::labels::CALENDAR_LINK_ACCESS_V1,
         &context,
+        &mut proof,
     )?;
-    LinkSecret::from_bytes(&open(&aead, &context, sealed)?)
+    Ok(proof)
+}
+
+/// The proof as a request header carries it: base64url without padding.
+pub fn link_access_proof_text(secret: &LinkSecret, link_id: &str) -> Result<String> {
+    Ok(URL_SAFE_NO_PAD.encode(link_access_proof(secret, link_id)?))
 }
 
 /// Base64 for the wire.
@@ -247,24 +283,6 @@ pub mod vectors {
             link_id,
             generation,
             passphrase,
-            Some(nonce),
-        )
-    }
-
-    pub fn seal_link_secret(
-        passphrase: &Passphrase,
-        calendar_id: &str,
-        link_id: &str,
-        generation: u32,
-        secret: &LinkSecret,
-        nonce: &[u8],
-    ) -> Result<Vec<u8>> {
-        seal_link_secret_with(
-            passphrase,
-            calendar_id,
-            link_id,
-            generation,
-            secret,
             Some(nonce),
         )
     }
@@ -305,20 +323,51 @@ mod tests {
     }
 
     #[test]
-    fn members_keep_the_secret_under_the_passphrase() {
+    fn the_owner_keeps_the_secret_on_its_own_key() {
+        use crate::account_roots::IdentityRoot;
+        let keys = |byte: u8| {
+            AccountIdentityKeysV1::derive(&IdentityRoot::from_bytes([byte; 32])).unwrap()
+        };
+        let (owner_keys, member_keys) = (keys(1), keys(2));
+        let owner: AccountRef = "aci:3b0f6a52-7c1e-4d8a-9f2b-5e6c7d8a9b0c@kutup.dev"
+            .parse()
+            .unwrap();
+        let member: AccountRef = "aci:9c4b2f0e-1d3a-4e5b-8c6d-7e8f9a0b1c2d@kutup.dev"
+            .parse()
+            .unwrap();
+        let link = "0b6e1f3a-2c4d-4e5f-8a9b-0c1d2e3f4a5b";
         let secret = LinkSecret::generate();
-        let passphrase = Passphrase::generate();
-        let sealed = seal_link_secret(&passphrase, "cal", "link", 1, &secret).unwrap();
-        let opened = open_link_secret(&passphrase, "cal", "link", 1, &sealed).unwrap();
+        let sealed = seal_owner_link_secret(&secret, link, &owner, &owner_keys).unwrap();
+        let opened = open_owner_link_secret(&sealed, link, &owner, &owner_keys).unwrap();
         assert_eq!(opened.as_bytes(), secret.as_bytes());
-        assert!(open_link_secret(&Passphrase::generate(), "cal", "link", 1, &sealed).is_err());
-        assert!(open_link_secret(&passphrase, "cal", "link", 2, &sealed).is_err());
+        // Nobody else opens it, nor under another link.
+        assert!(open_owner_link_secret(&sealed, link, &member, &member_keys).is_err());
+        assert!(open_owner_link_secret(
+            &sealed,
+            "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+            &owner,
+            &owner_keys
+        )
+        .is_err());
         // The URL form round-trips; the wrong length is refused.
         assert_eq!(
             LinkSecret::from_url(&secret.to_url()).unwrap().as_bytes(),
             secret.as_bytes()
         );
         assert!(LinkSecret::from_url("AAAA").is_err());
+    }
+
+    #[test]
+    fn the_access_proof_is_the_links_alone() {
+        let secret = LinkSecret::generate();
+        let proof = link_access_proof(&secret, "link").unwrap();
+        assert_eq!(proof, link_access_proof(&secret, "link").unwrap());
+        assert_ne!(proof, link_access_proof(&secret, "link2").unwrap());
+        assert_ne!(
+            proof,
+            link_access_proof(&LinkSecret::generate(), "link").unwrap()
+        );
+        assert!(link_access_proof(&secret, "").is_err());
     }
 
     #[test]

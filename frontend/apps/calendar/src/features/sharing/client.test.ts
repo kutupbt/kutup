@@ -12,7 +12,7 @@ const server = vi.hoisted(() => ({
   members: [] as { accountId: string; address: string; permissions: number; addedAt: string }[],
   invitations: [] as { id: string; accountId: string; address: string; permissions: number; state: string; createdAt: string; expiresAt: string }[],
   keys: [] as { keyGeneration: number; publicKey: string; fingerprint: string; lockedSecretKey: string; passphraseShare: string }[],
-  links: [] as { id: string; kind: string; secret: { keyGeneration: number; sealed: string } | null; createdAt: string }[],
+  links: [] as { id: string; kind: string; secret: string | null; createdAt: string }[],
   settings: {},
   calls: [] as { method: string; url: string; body?: unknown }[],
   failAccept: false,
@@ -74,16 +74,18 @@ vi.mock('@kutup/crypto/calendar', () => ({
       ownShare: 'own2',
       memberShares: rotation.members.map((m) => ({ account: m.account, share: `new-${m.account}` })),
       metadata: { keyPacket: 'k', dataPacket: 'd', signature: 's' },
-      links: rotation.links.map((l) => ({ linkId: l.linkId, passphrase: `p-${l.linkId}`, secret: `s-${l.linkId}` })),
+      links: rotation.links.map((l) => ({ linkId: l.linkId, passphrase: `p-${l.linkId}` })),
     })
   },
   createCalendarLink: (_owner: unknown, _id: string, _linkId: string, shares: { keyGeneration: number }[]) =>
     Promise.resolve({
       urlSecret: 'URLSECRET',
-      secret: { keyGeneration: shares[shares.length - 1].keyGeneration, sealed: 'sealed-secret' },
+      secret: 'owner-sealed-secret',
       passphrases: shares.map((s) => ({ keyGeneration: s.keyGeneration, sealed: `pp-${s.keyGeneration}` })),
+      accessProof: 'PROOF',
     }),
-  calendarLinkUrlSecret: () => Promise.resolve('URLSECRET'),
+  calendarLinkUrlSecret: (_owner: unknown, _linkId: string, sealed: string) => (sealed === 'mine' ? Promise.resolve('URLSECRET') : Promise.reject(new Error('not the owner’s'))),
+  unlockCalendar: () => Promise.resolve({ fingerprint: 'f3', free: () => undefined }),
   sealLinkPurpose: (_calendar: unknown, _signer: unknown, calendarId: string, linkId: string, purpose: string) => ({ keyPacket: 'k', dataPacket: `${calendarId}/${linkId}/${purpose}`, signature: 's' }),
 }))
 
@@ -147,7 +149,9 @@ const {
   presetOf,
   PRESET_PERMISSIONS,
   RecipientNotFound,
+  keyRecipients,
   removeMember,
+  rotateKey,
   SelfShare,
   showLink,
   TooManyMembers,
@@ -252,7 +256,7 @@ describe('removing a member', () => {
     pins.people.set('dee@kutup.test', person('00000000-0000-4000-8000-0000000000d0', 'dee@kutup.test'))
     server.invitations.push({ id: 'i2', accountId: '00000000-0000-4000-8000-0000000000d0', address: 'dee@kutup.test', permissions: 96, state: 'pending', createdAt: '', expiresAt: '' })
     server.links = [
-      { id: 'full1', kind: 'full', secret: { keyGeneration: 2, sealed: 'x' }, createdAt: '' },
+      { id: 'full1', kind: 'full', secret: 'mine', createdAt: '' },
       { id: 'busy1', kind: 'busy', secret: null, createdAt: '' },
     ]
     await removeMember(session, me, account, calendar, BO)
@@ -266,7 +270,7 @@ describe('removing a member', () => {
         { accountId: CY, share: `new-aci:${CY}@kutup.test` },
         { accountId: '00000000-0000-4000-8000-0000000000d0', share: 'new-aci:00000000-0000-4000-8000-0000000000d0@kutup.test' },
       ],
-      links: [{ id: 'full1', passphrase: 'p-full1', secret: 's-full1' }],
+      links: [{ id: 'full1', passphrase: 'p-full1' }],
     })
     // The newest generation is the one rotated from; the names kept as they are.
     expect(crypto.rotations[0]).toMatchObject({ own: { keyGeneration: 2, share: 'own-2' }, rotation: { names: { name: 'Team', description: '', rest: { v: 1 } } } })
@@ -282,6 +286,46 @@ describe('removing a member', () => {
     await removeMember(session, me, account, calendar, BO, new Set([CY]))
     pins.people.set('cy@kutup.test', person('00000000-0000-4000-8000-0000000000e0', 'cy@kutup.test'))
     await expect(removeMember(session, me, account, calendar, BO, new Set([CY]))).rejects.toBeInstanceOf(PersonNotConfirmed)
+  })
+})
+
+describe('replacing links, and a rotation that is due', () => {
+  it('deletes the keyed links before the new key, carries none over, and makes them again under fresh secrets', async () => {
+    server.members = [{ accountId: BO, address: 'bo@kutup.test', permissions: 96, addedAt: '' }]
+    server.links = [
+      { id: 'full1', kind: 'full', secret: 'mine', createdAt: '' },
+      { id: 'busy1', kind: 'busy', secret: null, createdAt: '' },
+    ]
+    const replaced = await removeMember(session, me, account, { ...calendar, keyring: new Map() } as unknown as Calendar, BO, new Set(), true)
+    const order = server.calls.map((c) => `${c.method} ${c.url}`)
+    const rotateAt = order.indexOf('post /calendar/calendars/cal-1/keys/rotate')
+    expect(order.indexOf('delete /calendar/calendars/cal-1/links/full1')).toBeLessThan(rotateAt)
+    expect((server.calls[rotateAt].body as { links: unknown[] }).links).toEqual([])
+    const made = server.calls.slice(rotateAt).find((c) => c.method === 'post' && c.url.endsWith('/links'))!
+    expect(made.body).toMatchObject({ kind: 'full', secret: 'owner-sealed-secret', accessProof: 'PROOF' })
+    expect(replaced).toHaveLength(1)
+    expect(replaced[0].urls.page).toMatch(/#URLSECRET$/)
+    // The busy link needs nothing: it holds no key.
+    expect(order).not.toContain('delete /calendar/calendars/cal-1/links/busy1')
+  })
+
+  it('rotates with nobody removed when one is due: everyone stays', async () => {
+    server.members = [
+      { accountId: BO, address: 'bo@kutup.test', permissions: 96, addedAt: '' },
+      { accountId: CY, address: 'cy@kutup.test', permissions: 96, addedAt: '' },
+    ]
+    await rotateKey(session, me, account, calendar, null)
+    const rotate = server.calls.find((c) => c.url.endsWith('/keys/rotate'))!
+    expect(rotate.body).toMatchObject({ removeAccountId: null, memberShares: [{ accountId: BO }, { accountId: CY }] })
+  })
+
+  it('lists who would get the new key, as the pins see them', async () => {
+    server.members = [
+      { accountId: BO, address: 'bo@kutup.test', permissions: 96, addedAt: '' },
+      { accountId: CY, address: 'cy@kutup.test', permissions: 96, addedAt: '' },
+    ]
+    pins.doubtful.add('cy@kutup.test')
+    expect(await keyRecipients(me, 'cal-1', BO)).toEqual([{ accountId: CY, address: 'cy@kutup.test', state: 'changed' }])
   })
 })
 
@@ -328,7 +372,7 @@ describe('links', () => {
     expect(busy.urls.ics).toMatch(/\/api\/v1\/calendar\/links\/.+\/calendar\.ics$/)
     const full = await createLink(session, account, calendar, 'full')
     const body = server.calls.at(-1)!.body as Record<string, unknown>
-    expect(body).toMatchObject({ kind: 'full', secret: { keyGeneration: 2, sealed: 'sealed-secret' }, passphrases: [{ keyGeneration: 1 }, { keyGeneration: 2 }] })
+    expect(body).toMatchObject({ kind: 'full', secret: 'owner-sealed-secret', accessProof: 'PROOF', passphrases: [{ keyGeneration: 1 }, { keyGeneration: 2 }] })
     expect(JSON.stringify(body)).not.toContain('URLSECRET')
     expect(full.urls.page).toMatch(/\/l\/.+#URLSECRET$/)
   })
@@ -347,8 +391,8 @@ describe('links', () => {
     await expect(createLink(session, account, calendar, 'query')).rejects.toThrow()
   })
 
-  it('shows a keyed link again from the members’ copy, and stops at the site’s count', async () => {
-    const urls = await showLink(session, calendar, { id: 'l1', kind: 'full', secret: { keyGeneration: 2, sealed: 'x' }, createdAt: '' })
+  it('shows a keyed link again from the owner’s own envelope, and stops at the site’s count', async () => {
+    const urls = await showLink(session, calendar, { id: 'l1', kind: 'full', secret: 'mine', createdAt: '' })
     expect(urls.page).toMatch(/\/l\/l1#URLSECRET$/)
     server.settings = { calendar: { linksPerCalendar: 1 } }
     server.links = [{ id: 'l1', kind: 'busy', secret: null, createdAt: '' }]

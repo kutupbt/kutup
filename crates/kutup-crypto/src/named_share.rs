@@ -21,6 +21,13 @@ const FILE_HPKE_INFO: &[u8] = crate::labels::DRIVE_FILE_SHARE_HPKE_V1;
 const CALENDAR_MAGIC: &[u8; 8] = b"KUTPCS1\0";
 #[cfg(feature = "calendar")]
 const CALENDAR_HPKE_INFO: &[u8] = crate::labels::CALENDAR_SHARE_HPKE_V1;
+/// A calendar link's secret, from its owner to itself
+/// (docs/plans/calendar-e3.md §3): bound to the link and the envelope's
+/// version, opened only with the owner's account key.
+#[cfg(feature = "calendar")]
+const CALENDAR_LINK_MAGIC: &[u8; 8] = b"KUTPCL1\0";
+#[cfg(feature = "calendar")]
+const CALENDAR_LINK_HPKE_INFO: &[u8] = crate::labels::CALENDAR_LINK_SECRET_HPKE_V1;
 /// The AAD: magic, suite, reserved, object id, number, both incarnations and
 /// both account ids.
 const AAD_LEN: usize = 8 + 2 + 2 + 16 + 4 + 32 + 32 + 2 * ACCOUNT_ID_LEN;
@@ -397,6 +404,19 @@ share_envelope!(
     "calendar",
     "calendar-share",
     "calendar share",
+    true
+);
+
+#[cfg(feature = "calendar")]
+share_envelope!(
+    CalendarLinkSecretEnvelopeV1,
+    link_id,
+    version,
+    CALENDAR_LINK_MAGIC,
+    CALENDAR_LINK_HPKE_INFO,
+    "link",
+    "calendar-link-secret",
+    "calendar link secret",
     true
 );
 

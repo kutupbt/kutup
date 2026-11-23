@@ -3051,7 +3051,8 @@ mod redaction_tests {
     }
 
     /// nginx logs the path of a calendar link without its query
-    /// (`log_format kutup`), and every access log uses that format.
+    /// (`log_format kutup`), every access log uses that format, and the
+    /// error log (which prints whole request lines) is off for those paths.
     #[test]
     fn nginx_logs_calendar_links_without_their_query() {
         let conf = include_str!("../../../nginx/nginx.conf");
@@ -3062,5 +3063,13 @@ mod redaction_tests {
             !conf.contains("$request "),
             "the raw request line carries the query"
         );
+        // The error log prints the request line: off for these paths.
+        let links = conf
+            .split("location ^~ /api/v1/calendar/links/ {")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("a location of its own for calendar links");
+        assert!(links.contains("error_log /dev/null;"));
+        assert!(links.contains("limit_req_log_level info;"));
     }
 }

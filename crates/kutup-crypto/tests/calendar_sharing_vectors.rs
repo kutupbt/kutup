@@ -2,8 +2,9 @@
 //! a calendar at its second key generation, the owner's share of that
 //! generation's passphrase to a member (signed by the owner, sealed to the
 //! member's account key), and a full link: the generation's passphrase
-//! under the link secret and the secret under the passphrase, with fixed
-//! nonces so those bytes are exact. HPKE and OpenPGP output is random, so
+//! under the link secret (a fixed nonce, so its bytes are exact), the
+//! secret sealed to the owner's own account key, and the link's access
+//! proof (exact). HPKE and OpenPGP output is random, so
 //! the share and the key are fixed values that must open (in Rust here and
 //! in the browser through `scripts/test-crypto-wasm.mjs`).
 //! Regenerate only for a deliberate format change:
@@ -58,8 +59,10 @@ struct Vectors {
     link_url_secret: String,
     /// This generation's passphrase under the link secret.
     link_passphrase: String,
-    /// The link secret under this generation's passphrase.
-    link_secret: String,
+    /// The link secret, sealed by the owner to its own account key.
+    link_owner_secret: String,
+    /// The access proof a link's page shows (base64url).
+    link_access_proof: String,
     refused_link_passphrases: Vec<Refused>,
     /// The link's purpose, sealed to the calendar key and signed by the
     /// owner's address key (the mail vectors' key, public here).
@@ -187,15 +190,11 @@ fn write_vectors() {
         &nonce,
     )
     .unwrap();
-    let link_secret = calendar_link::vectors::seal_link_secret(
-        &passphrase,
-        calendar_id,
-        link_id,
-        generation,
-        &secret,
-        &nonce,
-    )
-    .unwrap();
+    let link_owner_secret =
+        calendar_link::seal_owner_link_secret(&secret, link_id, &owner, &owner_keys)
+            .unwrap()
+            .encode_b64()
+            .unwrap();
     let other = |calendar: &str, link: &str, generation: u32| {
         calendar_link::encode(
             &calendar_link::vectors::seal_link_passphrase(
@@ -272,7 +271,8 @@ fn write_vectors() {
         link_id: link_id.into(),
         link_url_secret: secret.to_url(),
         link_passphrase: calendar_link::encode(&link_passphrase),
-        link_secret: calendar_link::encode(&link_secret),
+        link_owner_secret,
+        link_access_proof: calendar_link::link_access_proof_text(&secret, link_id).unwrap(),
         refused_link_passphrases,
         owner_address_public_key: mail["publicKey"].as_str().unwrap().to_owned(),
         link_purpose_text: purpose_text.into(),
@@ -352,18 +352,8 @@ fn calendar_sharing_vectors_open() {
         v.link_passphrase
     );
     assert_eq!(
-        calendar_link::encode(
-            &calendar_link::vectors::seal_link_secret(
-                &passphrase,
-                &v.calendar_id,
-                &v.link_id,
-                v.key_generation,
-                &secret,
-                &nonce,
-            )
-            .unwrap()
-        ),
-        v.link_secret
+        calendar_link::link_access_proof_text(&secret, &v.link_id).unwrap(),
+        v.link_access_proof
     );
     let open_link = |sealed: &str| {
         calendar_link::open_link_passphrase(
@@ -386,15 +376,16 @@ fn calendar_sharing_vectors_open() {
             case.why
         );
     }
-    let opened = calendar_link::open_link_secret(
-        &passphrase,
-        &v.calendar_id,
-        &v.link_id,
-        v.key_generation,
-        &calendar_link::decode(&v.link_secret).unwrap(),
-    )
-    .unwrap();
+    let envelope =
+        calendar_link::CalendarLinkSecretEnvelopeV1::decode_b64(&v.link_owner_secret).unwrap();
+    let opened =
+        calendar_link::open_owner_link_secret(&envelope, &v.link_id, &owner, &owner_keys).unwrap();
     assert_eq!(opened.to_url(), v.link_url_secret);
+    // The member, who holds the passphrase, can't open it.
+    assert!(
+        calendar_link::open_owner_link_secret(&envelope, &v.link_id, &member, &member_keys)
+            .is_err()
+    );
 
     // The link's purpose: opens under its calendar and link, signed by the
     // owner's address key; refused under another link, unverified with

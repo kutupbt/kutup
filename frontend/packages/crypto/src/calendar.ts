@@ -152,7 +152,7 @@ export interface GenerationShare {
   share: string
 }
 
-/** One key generation's sealed copy (a link's passphrase, or its secret). */
+/** One key generation's sealed copy (a link's passphrase). */
 export interface GenerationSealed {
   keyGeneration: number
   sealed: string
@@ -162,7 +162,7 @@ export interface GenerationSealed {
 export interface RotationInput {
   members: CalendarMember[]
   names: CalendarMetadata
-  /** Each full link and its secret, sealed under the current generation's passphrase. */
+  /** Each keyed link and its secret, sealed to the owner's own account key. */
   links: { linkId: string; secret: string }[]
 }
 
@@ -175,14 +175,17 @@ export interface RotatedCalendar {
   ownShare: string
   memberShares: { account: string; share: string }[]
   metadata: SealedMetadata
-  links: { linkId: string; passphrase: string; secret: string }[]
+  links: { linkId: string; passphrase: string }[]
 }
 
 /** A new full link: its URL's secret (never stored), and what the server keeps. */
 export interface NewCalendarLink {
   urlSecret: string
-  secret: GenerationSealed
+  /** The secret sealed to the owner's own account key (never to the calendar's passphrase). */
+  secret: string
   passphrases: GenerationSealed[]
+  /** What the link's page shows the server (base64url); the server keeps its hash. */
+  accessProof: string
 }
 
 interface CalendarWasm {
@@ -212,15 +215,8 @@ interface CalendarWasm {
     ...args: [...KeyArgs, identityRoot: IdentityRoot, ownerAccount: string, calendarId: string, keyGeneration: number, ownShare: string, rotation: RotationInput, createdAtSecs: number]
   ): RotatedCalendar
   createCalendarLink(identityRoot: IdentityRoot, ownerAccount: string, calendarId: string, linkId: string, ownShares: GenerationShare[]): NewCalendarLink
-  calendarLinkUrlSecret(
-    identityRoot: IdentityRoot,
-    ownerAccount: string,
-    calendarId: string,
-    keyGeneration: number,
-    ownShare: string,
-    linkId: string,
-    sealedSecret: string,
-  ): string
+  calendarLinkUrlSecret(identityRoot: IdentityRoot, ownerAccount: string, linkId: string, sealedSecret: string): string
+  calendarLinkAccessProof(urlSecret: string, linkId: string): string
   openCalendarLink(
     urlSecret: string,
     calendarId: string,
@@ -363,9 +359,14 @@ export async function createCalendarLink(owner: CalendarAccount, calendarId: str
   return (await wasm()).createCalendarLink(owner.identityRoot, owner.account, calendarId, linkId, ownShares)
 }
 
-/** A full link's URL secret again, from what the members keep (sealed under `own`'s generation). */
-export async function calendarLinkUrlSecret(owner: CalendarAccount, calendarId: string, own: GenerationShare, linkId: string, sealedSecret: string): Promise<string> {
-  return (await wasm()).calendarLinkUrlSecret(owner.identityRoot, owner.account, calendarId, own.keyGeneration, own.share, linkId, sealedSecret)
+/** A keyed link's URL secret again, from the owner's own envelope. */
+export async function calendarLinkUrlSecret(owner: CalendarAccount, linkId: string, sealedSecret: string): Promise<string> {
+  return (await wasm()).calendarLinkUrlSecret(owner.identityRoot, owner.account, linkId, sealedSecret)
+}
+
+/** What a keyed link's page shows the server, from the URL's secret (base64url). */
+export async function calendarLinkAccessProof(urlSecret: string, linkId: string): Promise<string> {
+  return (await wasm()).calendarLinkAccessProof(urlSecret, linkId)
 }
 
 /** Seals a link's purpose with an unlocked calendar, signed by the owner's address key. */

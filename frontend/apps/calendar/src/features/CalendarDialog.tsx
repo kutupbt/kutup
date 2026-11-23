@@ -56,7 +56,7 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
       ...(owner && (name.trim() !== calendar.name || description !== calendar.description) ? { name: name.trim(), description } : {}),
       ...(color !== calendar.color ? { color } : {}),
       ...(JSON.stringify(defaults) !== JSON.stringify(calendar.defaultReminders) ? { defaultReminders: defaults } : {}),
-      ...(shareBusy !== calendar.shareBusy ? { shareBusy } : {}),
+      ...(calendar.owned && shareBusy !== calendar.shareBusy ? { shareBusy } : {}),
     })
     return calendar.id
   })
@@ -152,13 +152,16 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
                   <Label>{t('reminders.defaults.allDay')}</Label>
                   <ReminderList id="calendar-all-day" allDay reminders={defaults.allDay} max={MAX_DEFAULT_REMINDERS} onChange={(allDay) => setDefaults((d) => ({ ...d, allDay }))} />
                 </div>
-                <div className="flex items-start gap-2">
-                  <Checkbox id="calendar-share-busy" checked={shareBusy} onCheckedChange={(v) => setShareBusy(v === true)} className="mt-0.5" data-testid="calendar-share-busy" />
-                  <div className="space-y-0.5">
-                    <Label htmlFor="calendar-share-busy">{t('busy.share')}</Label>
-                    <p className="text-xs text-muted-foreground">{t('busy.shareHint')}</p>
+                {/* Busy times are answered from the calendars one owns: a member can't show the owner's. */}
+                {calendar?.owned ? (
+                  <div className="flex items-start gap-2">
+                    <Checkbox id="calendar-share-busy" checked={shareBusy} onCheckedChange={(v) => setShareBusy(v === true)} className="mt-0.5" data-testid="calendar-share-busy" />
+                    <div className="space-y-0.5">
+                      <Label htmlFor="calendar-share-busy">{t('busy.share')}</Label>
+                      <p className="text-xs text-muted-foreground">{t('busy.shareHint')}</p>
+                    </div>
                   </div>
-                </div>
+                ) : null}
                 {hasRepeats(defaults.timed) || hasRepeats(defaults.allDay) ? (
                   <p className="text-xs text-destructive" role="alert">
                     {t('reminders.picker.repeats')}

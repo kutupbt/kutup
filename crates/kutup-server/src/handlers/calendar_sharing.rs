@@ -266,6 +266,18 @@ async fn remove_member(
     Ok(())
 }
 
+/// Marks a calendar's key as due for rotation: someone who held its
+/// passphrase no longer may (left, or read an invitation that then went).
+/// The owner's app rotates it the next time it loads the calendar
+/// (docs/plans/calendar-e3.md, "Review fixes", T1).
+async fn rotation_due(tx: &mut Transaction<'_, Postgres>, calendar: Uuid) -> AppResult<()> {
+    sqlx::query("UPDATE calendars SET rotation_due = true WHERE id = $1")
+        .bind(calendar)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 fn address_of(state: &AppState, username: &str) -> String {
     format!("{username}@{}", state.config.chat_server_name)
 }
@@ -336,8 +348,9 @@ pub struct Sharing {
 }
 
 /// `GET /api/v1/calendar/calendars/{id}/members` — the members (not the
-/// owner) and the invitations not accepted (expired ones left out). The
-/// owner's only.
+/// owner) and the invitations not accepted (expired ones left out), of
+/// active accounts only: a suspended or closing account is given no new key
+/// (a rotation drops what it held). The owner's only.
 #[utoipa::path(
     get,
     path = "/api/v1/calendar/calendars/{id}/members",
@@ -361,7 +374,7 @@ pub async fn members(
     let members: Vec<(Uuid, String, i32, time::OffsetDateTime)> = sqlx::query_as(
         "SELECT m.account_id, u.username, m.permissions, m.created_at
            FROM calendar_members m JOIN accounts u ON u.id = m.account_id
-          WHERE m.calendar_id = $1 AND m.account_id <> $2
+          WHERE m.calendar_id = $1 AND m.account_id <> $2 AND u.state = 'active'
           ORDER BY m.created_at, m.account_id",
     )
     .bind(id)
@@ -382,6 +395,7 @@ pub async fn members(
                 i.created_at, i.expires_at
            FROM calendar_invitations i JOIN accounts u ON u.id = i.invitee_account_id
           WHERE i.calendar_id = $1 AND (i.state <> 'pending' OR i.expires_at > now())
+            AND u.state = 'active'
           ORDER BY i.created_at, i.id",
     )
     .bind(id)
@@ -620,18 +634,22 @@ pub async fn revoke(
     limited(user_id)?;
     let mut tx = state.pool.begin().await?;
     owned_calendar(&mut tx, user_id, id).await?;
-    let invitee: Option<Uuid> = sqlx::query_scalar(
+    let invitee: Option<(Uuid, bool)> = sqlx::query_as(
         "DELETE FROM calendar_invitations WHERE id = $1 AND calendar_id = $2
-         RETURNING invitee_account_id",
+         RETURNING invitee_account_id, fetched_at IS NOT NULL",
     )
     .bind(invitation)
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some(invitee) = invitee else {
+    let Some((invitee, fetched)) = invitee else {
         return Err(AppError::not_found("not found"));
     };
     drop_shares(&mut tx, id, invitee).await?;
+    // The invitee read its shares: the key is theirs to know until rotated.
+    if fetched {
+        rotation_due(&mut tx, id).await?;
+    }
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -730,6 +748,7 @@ pub async fn leave(
         Some(_) => {}
     }
     remove_member(&mut tx, id, user_id, "left").await?;
+    rotation_due(&mut tx, id).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -750,15 +769,14 @@ pub struct LinkCarried {
     pub id: Uuid,
     /// The new generation's passphrase sealed under the link's secret.
     pub passphrase: String,
-    /// The link's secret sealed under the new generation's passphrase.
-    pub secret: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Rotation {
-    /// The member removed by this rotation.
-    pub remove_account_id: Uuid,
+    /// The member removed by this rotation; none for a rotation that is
+    /// due (someone left, or an invitation they had read went).
+    pub remove_account_id: Option<Uuid>,
     /// The generation this one follows: refused when another came first.
     pub from_key_generation: i32,
     pub key_generation: i32,
@@ -775,7 +793,26 @@ pub struct Rotation {
     pub links: Vec<LinkCarried>,
 }
 
-/// The largest link envelope taken, in base64 (the columns hold 256 bytes).
+/// The largest owner's link-secret envelope taken, in base64 (the column
+/// holds 4096 bytes).
+const MAX_OWNER_SECRET_B64: usize = 4096 / 3 * 4 + 4;
+
+/// A keyed link's access proof as the wire carries it: base64url, 32 bytes.
+pub(crate) fn access_proof(text: &str) -> Option<[u8; 32]> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    if text.len() > 64 {
+        return None;
+    }
+    URL_SAFE_NO_PAD.decode(text.trim()).ok()?.try_into().ok()
+}
+
+/// What the server keeps of an access proof: its SHA-256.
+pub(crate) fn proof_digest(proof: &[u8; 32]) -> [u8; 32] {
+    kutup_crypto::primitives::hash(kutup_crypto::primitives::Suite::V1, proof).into()
+}
+
+/// The largest link passphrase envelope taken, in base64 (the column holds
+/// 256 bytes).
 const MAX_LINK_SEALED_B64: usize = 256 / 3 * 4 + 4;
 
 fn link_sealed(value: &str, what: &str) -> AppResult<Vec<u8>> {
@@ -792,7 +829,8 @@ fn link_sealed(value: &str, what: &str) -> AppResult<Vec<u8>> {
 }
 
 /// `POST /api/v1/calendar/calendars/{id}/keys/rotate` — the owner removes a
-/// member and moves the calendar to a new key generation, in one
+/// member (or, with none named, carries out a rotation that is due) and
+/// moves the calendar to a new key generation, in one
 /// transaction (plan §2, "Decisions"): the new key, everyone else's shares,
 /// the name and every keyed link all written before the generation becomes
 /// the newest, and the member removed in the same commit. A crash halfway
@@ -848,33 +886,59 @@ pub async fn rotate(
     let most = CALENDAR_KEY_GENERATIONS.load(&mut *tx).await?;
     if generations.len() as i64 >= most {
         return Err(coded(
-            AppError::conflict(format!("a calendar keeps at most {most} key generations")),
+            AppError::conflict(format!(
+                "this calendar has reached {most} key generations, the most a calendar keeps; \
+                 nobody can be removed from it until an administrator raises the limit"
+            )),
             "keyGenerationLimit",
         ));
     }
-    if input.remove_account_id == user_id {
-        return Err(AppError::bad_request("the owner is never removed"));
+    if let Some(removed) = input.remove_account_id {
+        if removed == user_id {
+            return Err(AppError::bad_request("the owner is never removed"));
+        }
+        let is_member: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM calendar_members WHERE calendar_id = $1 AND account_id = $2)",
+        )
+        .bind(id)
+        .bind(removed)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !is_member {
+            return Err(AppError::not_found("no such member"));
+        }
     }
-    let is_member: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM calendar_members WHERE calendar_id = $1 AND account_id = $2)",
-    )
-    .bind(id)
-    .bind(input.remove_account_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if !is_member {
-        return Err(AppError::not_found("no such member"));
-    }
-    // Who stays: every other member and every pending invitation.
-    let mut staying: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT account_id FROM calendar_members WHERE calendar_id = $1 AND account_id <> ALL($2)
+    let leaving: Vec<Uuid> = std::iter::once(user_id)
+        .chain(input.remove_account_id)
+        .collect();
+    // An account that isn't active (suspended, closing) gets nothing new:
+    // it is left out, and what it held of the calendar goes. Its pending
+    // invitation goes with it.
+    let inactive: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT m.account_id FROM calendar_members m JOIN accounts u ON u.id = m.account_id
+          WHERE m.calendar_id = $1 AND u.state <> 'active' AND m.account_id <> ALL($2)
          UNION
-         SELECT invitee_account_id FROM calendar_invitations
-          WHERE calendar_id = $1 AND state = 'pending' AND expires_at > now()
-            AND invitee_account_id <> ALL($2)",
+         SELECT i.invitee_account_id FROM calendar_invitations i
+           JOIN accounts u ON u.id = i.invitee_account_id
+          WHERE i.calendar_id = $1 AND u.state <> 'active'",
     )
     .bind(id)
-    .bind(vec![user_id, input.remove_account_id])
+    .bind(&leaving)
+    .fetch_all(&mut *tx)
+    .await?;
+    // Who stays: every other active member and every pending invitation to
+    // an active account.
+    let mut staying: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT m.account_id FROM calendar_members m JOIN accounts u ON u.id = m.account_id
+          WHERE m.calendar_id = $1 AND m.account_id <> ALL($2) AND u.state = 'active'
+         UNION
+         SELECT i.invitee_account_id FROM calendar_invitations i
+           JOIN accounts u ON u.id = i.invitee_account_id
+          WHERE i.calendar_id = $1 AND i.state = 'pending' AND i.expires_at > now()
+            AND i.invitee_account_id <> ALL($2) AND u.state = 'active'",
+    )
+    .bind(id)
+    .bind(&leaving)
     .fetch_all(&mut *tx)
     .await?;
     staying.sort_unstable();
@@ -913,20 +977,14 @@ pub async fn rotate(
     carried.sort_unstable();
     if carried != keyed {
         return Err(coded(
-            AppError::bad_request("a rotation carries every full link over"),
+            AppError::bad_request("a rotation carries every keyed link over"),
             "linksIncomplete",
         ));
     }
-    let links: Vec<(Uuid, Vec<u8>, Vec<u8>)> = input
+    let links: Vec<(Uuid, Vec<u8>)> = input
         .links
         .iter()
-        .map(|link| {
-            Ok((
-                link.id,
-                link_sealed(&link.passphrase, "a link passphrase")?,
-                link_sealed(&link.secret, "a link secret")?,
-            ))
-        })
+        .map(|link| Ok((link.id, link_sealed(&link.passphrase, "a link passphrase")?)))
         .collect::<AppResult<_>>()?;
     let old_metadata: i64 = sqlx::query_scalar(
         "SELECT (octet_length(metadata_key_packet) + octet_length(metadata_data_packet)
@@ -937,7 +995,19 @@ pub async fn rotate(
     .await?;
     // The member leaves first: its shares' bytes come back before the new
     // ones are charged.
-    remove_member(&mut tx, id, input.remove_account_id, "removed").await?;
+    if let Some(removed) = input.remove_account_id {
+        remove_member(&mut tx, id, removed, "removed").await?;
+    }
+    for account in &inactive {
+        sqlx::query(
+            "DELETE FROM calendar_invitations WHERE calendar_id = $1 AND invitee_account_id = $2",
+        )
+        .bind(id)
+        .bind(account)
+        .execute(&mut *tx)
+        .await?;
+        drop_shares(&mut tx, id, *account).await?;
+    }
     sqlx::query(
         "INSERT INTO calendar_keys (calendar_id, key_generation, public_key, fingerprint, locked_secret_key)
          VALUES ($1, $2, $3, $4, $5)",
@@ -969,15 +1039,8 @@ pub async fn rotate(
         .execute(&mut *tx)
         .await?;
     }
-    for (link, passphrase, secret) in &links {
+    for (link, passphrase) in &links {
         bytes += passphrase.len() as i64;
-        let old_secret: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(octet_length(secret), 0)::bigint FROM calendar_links WHERE id = $1",
-        )
-        .bind(link)
-        .fetch_one(&mut *tx)
-        .await?;
-        bytes += secret.len() as i64 - old_secret;
         sqlx::query(
             "INSERT INTO calendar_link_passphrases (link_id, calendar_id, key_generation, passphrase)
              VALUES ($1, $2, $3, $4)",
@@ -988,14 +1051,6 @@ pub async fn rotate(
         .bind(passphrase)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
-            "UPDATE calendar_links SET secret = $2, secret_key_generation = $3 WHERE id = $1",
-        )
-        .bind(link)
-        .bind(secret)
-        .bind(input.key_generation)
-        .execute(&mut *tx)
-        .await?;
     }
     let new_metadata =
         (metadata.key_packet.len() + metadata.data_packet.len() + metadata.signature.len()) as i64;
@@ -1003,7 +1058,8 @@ pub async fn rotate(
     // The new generation becomes the newest last, with everything above.
     sqlx::query(
         "UPDATE calendars SET key_generation = $2, metadata_key_packet = $3,
-                metadata_data_packet = $4, metadata_signature = $5, updated_at = now()
+                metadata_data_packet = $4, metadata_signature = $5, rotation_due = false,
+                updated_at = now()
           WHERE id = $1",
     )
     .bind(id)
@@ -1076,6 +1132,14 @@ pub async fn invitations(
     )
     .bind(user_id)
     .fetch_all(&state.pool)
+    .await?;
+    // Read: from now on, the invitee may hold the key (T1).
+    let ids: Vec<Uuid> = rows.iter().map(|row| row.0).collect();
+    sqlx::query(
+        "UPDATE calendar_invitations SET fetched_at = now() WHERE id = ANY($1) AND fetched_at IS NULL",
+    )
+    .bind(&ids)
+    .execute(&state.pool)
     .await?;
     let calendars: Vec<Uuid> = rows.iter().map(|row| row.1).collect();
     let keys = keys_of(&state.pool, user_id, &calendars).await?;
@@ -1232,11 +1296,18 @@ pub async fn decline(
     limited(user_id)?;
     let mut tx = state.pool.begin().await?;
     let (calendar, _) = own_invitation(&mut tx, user_id, invitation).await?;
-    sqlx::query("UPDATE calendar_invitations SET state = 'declined' WHERE id = $1")
-        .bind(invitation)
-        .execute(&mut *tx)
-        .await?;
+    let fetched: bool = sqlx::query_scalar(
+        "UPDATE calendar_invitations SET state = 'declined' WHERE id = $1
+         RETURNING fetched_at IS NOT NULL",
+    )
+    .bind(invitation)
+    .fetch_one(&mut *tx)
+    .await?;
     drop_shares(&mut tx, calendar, user_id).await?;
+    // Declined after reading its shares: the key is rotated (T1).
+    if fetched {
+        rotation_due(&mut tx, calendar).await?;
+    }
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1257,12 +1328,20 @@ pub async fn sweep_invitations(pool: &sqlx::PgPool) -> anyhow::Result<u64> {
             .bind(calendar)
             .execute(&mut *tx)
             .await?;
-        let gone =
-            sqlx::query("DELETE FROM calendar_invitations WHERE id = $1 AND expires_at < now()")
-                .bind(id)
-                .execute(&mut *tx)
-                .await?
-                .rows_affected();
+        let gone: Option<bool> = sqlx::query_scalar(
+            "DELETE FROM calendar_invitations WHERE id = $1 AND expires_at < now()
+             RETURNING fetched_at IS NOT NULL AND state = 'pending'",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        // Expired after it was read: the key is rotated (T1).
+        if gone == Some(true) {
+            rotation_due(&mut tx, calendar)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+        }
+        let gone = u64::from(gone.is_some());
         let member: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM calendar_members WHERE calendar_id = $1 AND account_id = $2)",
         )
@@ -1359,8 +1438,7 @@ pub async fn delete_tombstone(
 
 // ----- links: the owner's side -----
 
-/// A generation's sealed copy (a link's secret for the members, or one
-/// generation's passphrase for the link).
+/// One generation's passphrase, sealed for a keyed link.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GenerationSealed {
@@ -1374,9 +1452,9 @@ pub struct LinkView {
     pub id: Uuid,
     /// `full`, `query` or `busy`.
     pub kind: String,
-    /// A keyed link's secret, sealed under the newest generation's
-    /// passphrase, for the members; none on a busy link.
-    pub secret: Option<GenerationSealed>,
+    /// A keyed link's secret, sealed by the owner to its own account key
+    /// (`CalendarLinkSecretEnvelopeV1`, base64); none on a busy link.
+    pub secret: Option<String>,
     /// The owner's label, sealed to the calendar key and signed.
     #[schema(value_type = Option<Object>)]
     pub purpose: Option<SealedMetadataV1>,
@@ -1392,7 +1470,6 @@ pub struct LinkList {
 type LinkRow = (
     Uuid,
     String,
-    Option<i32>,
     Option<Vec<u8>>,
     Option<Vec<u8>>,
     Option<Vec<u8>>,
@@ -1400,20 +1477,15 @@ type LinkRow = (
     time::OffsetDateTime,
 );
 
-const LINK_COLUMNS: &str = "id, kind, secret_key_generation, secret, purpose_key_packet,
+const LINK_COLUMNS: &str = "id, kind, secret, purpose_key_packet,
     purpose_data_packet, purpose_signature, created_at";
 
 fn link_view(row: LinkRow) -> LinkView {
-    let (id, kind, generation, secret, key_packet, data_packet, signature, created_at) = row;
+    let (id, kind, secret, key_packet, data_packet, signature, created_at) = row;
     LinkView {
         id,
         kind,
-        secret: generation
-            .zip(secret)
-            .map(|(generation, secret)| GenerationSealed {
-                key_generation: generation,
-                sealed: STANDARD.encode(secret),
-            }),
+        secret: secret.map(|secret| STANDARD.encode(secret)),
         purpose: match (key_packet, data_packet, signature) {
             (Some(key_packet), Some(data_packet), Some(signature)) => Some(SealedMetadataV1 {
                 key_packet: STANDARD.encode(key_packet),
@@ -1468,10 +1540,15 @@ pub struct LinkCreate {
     pub id: Uuid,
     /// `full`, `query` or `busy`.
     pub kind: String,
-    /// A keyed link's secret, sealed under the newest generation's passphrase.
-    pub secret: Option<GenerationSealed>,
+    /// A keyed link's secret, sealed by the owner to its own account key
+    /// (`CalendarLinkSecretEnvelopeV1`, base64): bound to the link, signed
+    /// by the owner, opened by nobody else.
+    pub secret: Option<String>,
     /// A keyed link's copy of every generation's passphrase.
     pub passphrases: Option<Vec<GenerationSealed>>,
+    /// A keyed link's access proof (base64url, 32 bytes), which its page
+    /// shows; the server keeps its SHA-256.
+    pub access_proof: Option<String>,
     #[schema(value_type = Option<Object>)]
     pub purpose: Option<SealedMetadataV1>,
 }
@@ -1555,17 +1632,41 @@ pub async fn create_link(
             "linkLimit",
         ));
     }
-    let (secret, passphrases) = if keyed {
+    let (secret, passphrases, proof_hash) = if keyed {
         let secret = input
             .secret
             .as_ref()
             .ok_or_else(|| AppError::bad_request("a keyed link carries its sealed secret"))?;
-        if secret.key_generation != newest {
-            return Err(coded(
-                AppError::conflict("the calendar's key changed; reload it"),
-                "keyRotated",
-            ));
+        if secret.len() > MAX_OWNER_SECRET_B64 {
+            return Err(AppError::bad_request("the link secret is too large"));
         }
+        let envelope =
+            kutup_crypto::calendar_link::CalendarLinkSecretEnvelopeV1::decode_b64(secret)
+                .map_err(|_| AppError::bad_request("the link secret does not parse"))?;
+        let owner = party(&state, &mut tx, user_id)
+            .await?
+            .ok_or_else(|| AppError::conflict("account identity is unavailable"))?;
+        envelope
+            .verify_binding_and_signature(
+                &input.id.to_string(),
+                kutup_crypto::calendar_link::OWNER_SECRET_VERSION,
+                &owner.reference,
+                &owner.incarnation,
+                &owner.signing,
+                &owner.reference,
+                &owner.incarnation,
+            )
+            .map_err(|_| {
+                coded(
+                    AppError::bad_request("the link secret is not the owner's own, for this link"),
+                    "shareNotBound",
+                )
+            })?;
+        let proof = input
+            .access_proof
+            .as_deref()
+            .and_then(access_proof)
+            .ok_or_else(|| AppError::bad_request("a keyed link carries its access proof"))?;
         let passphrases = input
             .passphrases
             .as_ref()
@@ -1588,20 +1689,18 @@ pub async fn create_link(
             })
             .collect::<AppResult<_>>()?;
         (
-            Some((
-                secret.key_generation,
-                link_sealed(&secret.sealed, "a link secret")?,
-            )),
+            Some(envelope.encode().map_err(crypto)?),
             passphrases,
+            Some(proof_digest(&proof).to_vec()),
         )
     } else {
-        if input.secret.is_some() || input.passphrases.is_some() {
+        if input.secret.is_some() || input.passphrases.is_some() || input.access_proof.is_some() {
             return Err(AppError::bad_request("a busy link carries no key"));
         }
-        (None, Vec::new())
+        (None, Vec::new(), None)
     };
     let row: LinkRow = sqlx::query_as(&format!(
-        "INSERT INTO calendar_links (id, calendar_id, kind, secret_key_generation, secret,
+        "INSERT INTO calendar_links (id, calendar_id, kind, secret, access_proof_hash,
              purpose_key_packet, purpose_data_packet, purpose_signature, created_by_account_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING {LINK_COLUMNS}"
@@ -1609,8 +1708,8 @@ pub async fn create_link(
     .bind(input.id)
     .bind(id)
     .bind(&input.kind)
-    .bind(secret.as_ref().map(|(generation, _)| *generation))
-    .bind(secret.as_ref().map(|(_, sealed)| sealed.clone()))
+    .bind(secret.clone())
+    .bind(proof_hash)
     .bind(purpose.as_ref().map(|p| p.key_packet.clone()))
     .bind(purpose.as_ref().map(|p| p.data_packet.clone()))
     .bind(purpose.as_ref().map(|p| p.signature.clone()))
@@ -1623,7 +1722,7 @@ pub async fn create_link(
         }
         _ => error.into(),
     })?;
-    let mut bytes = secret.as_ref().map_or(0, |(_, sealed)| sealed.len()) as i64
+    let mut bytes = secret.as_ref().map_or(0, Vec::len) as i64
         + purpose.as_ref().map_or(0, |p| {
             p.key_packet.len() + p.data_packet.len() + p.signature.len()
         }) as i64;
@@ -1702,7 +1801,7 @@ pub struct BusyQuery {
 }
 
 /// `GET /api/v1/calendar/busy?address&start&end` — when a person is busy
-/// (plan §4, Q-3): from their calendars that share busy times, and only to
+/// (plan §4, Q-3): from the calendars they own that share busy times, and only to
 /// someone of their organization (Proton's rule). Anyone else, or an
 /// address that is no one's, is answered nothing, never an error that would
 /// tell which.
@@ -1762,8 +1861,11 @@ pub async fn busy(
             return nothing();
         }
     }
+    // Only the person's own calendars: a calendar someone else shares with
+    // them is that owner's to show, never theirs.
     let calendars: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT calendar_id FROM calendar_members WHERE account_id = $1 AND share_busy",
+        "SELECT m.calendar_id FROM calendar_members m JOIN calendars c ON c.id = m.calendar_id
+          WHERE m.account_id = $1 AND c.owner_account_id = $1 AND m.share_busy",
     )
     .bind(person)
     .fetch_all(&state.pool)

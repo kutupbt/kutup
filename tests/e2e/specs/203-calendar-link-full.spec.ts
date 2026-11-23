@@ -33,6 +33,16 @@ test('calendar links: a full link opens the events without an account, and stops
   await expect(opened).toContainText('Choir', { timeout: 60_000 })
   await expect(opened.getByTestId('public-item').filter({ hasText: 'Rehearsal' })).toBeVisible()
 
+  // The link's id alone opens nothing: without the proof its secret gives,
+  // the server tells only the kind, and serves no events.
+  const linkId = url.replace(/.*\/l\/([^#]+)#.*/, '$1')
+  const bare = await visitor.request.get(url.replace(/\/l\/.*/, `/api/v1/calendar/links/${linkId}`))
+  expect(await bare.json()).toEqual({ calendarId: null, kind: 'full', metadata: null, keys: null })
+  const events = await visitor.request.get(url.replace(/\/l\/.*/, `/api/v1/calendar/links/${linkId}/events?start=2026-01-01T00:00:00Z&end=2026-02-01T00:00:00Z`))
+  expect(events.status()).toBe(404)
+  const busy = await visitor.request.get(url.replace(/\/l\/.*/, `/api/v1/calendar/links/${linkId}/busy?start=2026-01-01T00:00:00Z&end=2026-02-01T00:00:00Z`))
+  expect(busy.status()).toBe(404)
+
   // Without its fragment, the link says it is incomplete.
   await page.goto(url.replace(/#.*/, ''))
   await expect(page.getByText('This link is incomplete')).toBeVisible({ timeout: 60_000 })

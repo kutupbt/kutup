@@ -302,6 +302,26 @@
       "body": "A calendar shared with you by {{address}} stays closed: the account behind the address is not the one you met before. Trust the new one only if you know why it changed.",
       "keepClosed": "Keep it closed",
       "trust": "Trust the new identity"
+    },
+    "recipients": {
+      "title": "The new key goes to",
+      "onlyYou": "Only you: nobody else stays.",
+      "state": {
+        "verified": "Verified",
+        "known": "As before",
+        "new": "First time",
+        "changed": "Identity changed",
+        "invalid": "Keys not signed",
+        "someoneElse": "Someone else now"
+      }
+    },
+    "replaceLinks": {
+      "intro_one": "This calendar has {{count}} link with its key:",
+      "intro_other": "This calendar has {{count}} links with its key:",
+      "label": "Also replace links",
+      "hint": "They are deleted and made again under new keys, so anyone the removed person gave them to loses access. You get the new addresses.",
+      "doneTitle": "New links",
+      "doneDescription": "The old links no longer work. Give these to whoever should keep seeing the calendar."
     }
   },
   "busy": {

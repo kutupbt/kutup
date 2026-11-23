@@ -282,6 +282,87 @@ fn storage(c: &Client, base: &str, user: &User) -> i64 {
         .unwrap()
 }
 
+/// A rotation's body from generation `from`: a new key and passphrase,
+/// the owner's share, the given members' shares and links, the name sealed
+/// again. Answers the body and the new passphrase.
+fn rotation_body(
+    owner: &Person,
+    calendar: &str,
+    name: &str,
+    from: i64,
+    removed: Option<&str>,
+    member_shares: Value,
+    links: Value,
+) -> (Value, Passphrase) {
+    let passphrase = Passphrase::generate();
+    let key = cal::generate_calendar_key(&passphrase, 1_790_000_300).unwrap();
+    let metadata = key
+        .unlocked
+        .seal_metadata(calendar, name, "", &owner.secret_key)
+        .unwrap();
+    let generation = (from + 1) as u32;
+    let own = cal::seal_own_passphrase(
+        &passphrase,
+        calendar,
+        generation,
+        &owner.user.person,
+        &owner.user.identity,
+    )
+    .unwrap()
+    .encode_b64()
+    .unwrap();
+    (
+        json!({
+            "removeAccountId": removed,
+            "fromKeyGeneration": from,
+            "keyGeneration": from + 1,
+            "publicKey": b64(&key.public_key),
+            "lockedSecretKey": b64(&key.locked_secret_key),
+            "ownShare": own,
+            "memberShares": member_shares,
+            "metadata": SealedMetadataV1::of(&metadata),
+            "links": links,
+        }),
+        passphrase,
+    )
+}
+
+/// Generation `generation`'s passphrase, opened from the owner's own share
+/// on the server, shared with `member`.
+fn own_generation(
+    c: &Client,
+    base: &str,
+    owner: &Person,
+    calendar: &str,
+    generation: u32,
+    member: &Person,
+) -> String {
+    let keys = get(
+        c,
+        base,
+        &owner.user,
+        &format!("/api/v1/calendar/calendars/{calendar}/keys"),
+    );
+    let share = keys["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|key| key["keyGeneration"] == generation)
+        .unwrap()["passphraseShare"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let passphrase = cal::open_own_passphrase(
+        &CalendarShareEnvelopeV1::decode_b64(&share).unwrap(),
+        calendar,
+        generation,
+        &owner.user.person,
+        &owner.user.identity,
+    )
+    .unwrap();
+    share_for(calendar, generation, &passphrase, owner, member)
+}
+
 fn live() -> Option<String> {
     match std::env::var("KUTUP_LIVE_SERVER") {
         Ok(base) => Some(base.trim_end_matches('/').to_string()),
@@ -666,6 +747,32 @@ fn invitations_members_and_rotation() {
         delete(&c, &base, &ada.user, &format!("{calendar}/members/me")),
         StatusCode::BAD_REQUEST
     );
+    // Cem held the key: Ada's calendar is due a rotation (never shown to
+    // a member), which her app makes with nobody removed.
+    let due = |user: &User| {
+        get(&c, &base, user, "/api/v1/calendar/calendars")["calendars"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == made.id.as_str())
+            .map(|row| row["rotationDue"].clone())
+    };
+    assert_eq!(due(&ada.user), Some(json!(true)));
+    let (body, _) = rotation_body(&ada, &made.id, "Aile", 2, None, json!([]), json!([]));
+    let r = post(
+        &c,
+        &base,
+        &ada.user,
+        &format!("{calendar}/keys/rotate"),
+        body,
+    );
+    assert_eq!(
+        r.status(),
+        StatusCode::NO_CONTENT,
+        "{}",
+        r.text().unwrap_or_default()
+    );
+    assert_eq!(due(&ada.user), Some(json!(false)));
 
     // Declined: the owner sees it, the shares are gone.
     assert_eq!(
@@ -684,6 +791,7 @@ fn invitations_members_and_rotation() {
             "shares": [
                 { "keyGeneration": 1, "share": share_for(&made.id, 1, &made.passphrase, &ada, &bob) },
                 { "keyGeneration": 2, "share": share_for(&made.id, 2, &passphrase, &ada, &bob) },
+                { "keyGeneration": 3, "share": own_generation(&c, &base, &ada, &made.id, 3, &bob) },
             ],
         }),
     );
@@ -726,6 +834,7 @@ fn links_and_their_feeds() {
     let Some(base) = live() else { return };
     let c = client();
     let ada = person(&c, &base);
+    let bob = person(&c, &base);
     let made = make_calendar(&c, &base, &ada, "Kulüp");
     let calendar = format!("/api/v1/calendar/calendars/{}", made.id);
     let result = create_event(
@@ -742,159 +851,7 @@ fn links_and_their_feeds() {
         ),
     );
     assert_eq!(result["status"], 200, "{result}");
-
-    // A keyed link: the members' copy of its secret, every generation's
-    // passphrase under it.
-    let keyed = |kind: &str| {
-        let id = uuid::Uuid::new_v4().to_string();
-        let secret = LinkSecret::generate();
-        let passphrase =
-            calendar_link::seal_link_passphrase(&secret, &made.id, &id, 1, &made.passphrase)
-                .unwrap();
-        let sealed =
-            calendar_link::seal_link_secret(&made.passphrase, &made.id, &id, 1, &secret).unwrap();
-        let r = post(
-            &c,
-            &base,
-            &ada.user,
-            &format!("{calendar}/links"),
-            json!({
-                "id": id, "kind": kind,
-                "secret": { "keyGeneration": 1, "sealed": calendar_link::encode(&sealed) },
-                "passphrases": [{ "keyGeneration": 1, "sealed": calendar_link::encode(&passphrase) }],
-            }),
-        );
-        assert_eq!(
-            r.status(),
-            StatusCode::CREATED,
-            "{}",
-            r.text().unwrap_or_default()
-        );
-        (id, secret)
-    };
-    let (full, full_secret) = keyed("full");
-    let (query, query_secret) = keyed("query");
-    let busy_id = uuid::Uuid::new_v4().to_string();
-    let r = post(
-        &c,
-        &base,
-        &ada.user,
-        &format!("{calendar}/links"),
-        json!({ "id": busy_id, "kind": "busy" }),
-    );
-    assert_eq!(r.status(), StatusCode::CREATED);
-    let links = get(&c, &base, &ada.user, &format!("{calendar}/links"));
-    assert_eq!(links["links"].as_array().unwrap().len(), 3);
-
-    // The full link's page, without an account: the key opens from the
-    // URL's secret, and the events with it.
-    let anonymous = client();
-    let info: Value = anonymous
-        .get(format!("{base}/api/v1/calendar/links/{full}"))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    assert_eq!(info["kind"], "full");
-    assert!(info.get("owner").is_none() && info.get("members").is_none());
-    let key = &info["keys"][0];
-    let passphrase = calendar_link::open_link_passphrase(
-        &full_secret,
-        &made.id,
-        &full,
-        1,
-        &b64_decode(key["passphrase"].as_str().unwrap()),
-    )
-    .unwrap();
-    assert_eq!(passphrase.as_str(), made.passphrase.as_str());
-    let events: Value = anonymous
-        .get(format!(
-            "{base}/api/v1/calendar/links/{full}/events?start=2026-12-01T00:00:00Z&end=2026-12-08T00:00:00Z"
-        ))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    assert_eq!(events["events"].as_array().unwrap().len(), 1);
-    assert!(events["events"][0].get("authorAddress").is_none());
-    // A full link has no feed: its key never reaches the server.
-    assert_eq!(
-        anonymous
-            .get(format!("{base}/api/v1/calendar/links/{full}/calendar.ics"))
-            .send()
-            .unwrap()
-            .status(),
-        StatusCode::NOT_FOUND
-    );
-
-    // The query link's feed opens with its key, and with no other.
-    let feed = anonymous
-        .get(format!(
-            "{base}/api/v1/calendar/links/{query}/calendar.ics?key={}",
-            query_secret.to_url()
-        ))
-        .send()
-        .unwrap();
-    assert_eq!(feed.status(), StatusCode::OK);
-    assert!(feed.headers()["content-type"]
-        .to_str()
-        .unwrap()
-        .starts_with("text/calendar"));
-    let text = feed.text().unwrap();
-    assert!(text.contains("SUMMARY:Derby\\, at home"), "{text}");
-    assert!(text.contains("X-WR-CALNAME:Kulüp"), "{text}");
-    assert_eq!(text.matches("UID:").count(), 1);
-    let wrong = anonymous
-        .get(format!(
-            "{base}/api/v1/calendar/links/{query}/calendar.ics?key={}",
-            LinkSecret::generate().to_url()
-        ))
-        .send()
-        .unwrap();
-    assert_eq!(wrong.status(), StatusCode::NOT_FOUND);
-
-    // The busy link: times only, no key, no name.
-    let info: Value = anonymous
-        .get(format!("{base}/api/v1/calendar/links/{busy_id}"))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    assert!(info["metadata"].is_null() && info["keys"].is_null());
-    let busy: Value = anonymous
-        .get(format!(
-            "{base}/api/v1/calendar/links/{busy_id}/busy?start=2026-12-01T00:00:00Z&end=2026-12-08T00:00:00Z"
-        ))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    assert_eq!(
-        busy["busy"],
-        json!([{ "startUtc": "2026-12-05T15:00:00Z", "endUtc": "2026-12-05T17:00:00Z", "fullDay": false }])
-    );
-    assert_eq!(
-        anonymous
-            .get(format!(
-                "{base}/api/v1/calendar/links/{busy_id}/events?start=2026-12-01T00:00:00Z&end=2026-12-08T00:00:00Z"
-            ))
-            .send()
-            .unwrap()
-            .status(),
-        StatusCode::NOT_FOUND
-    );
-    let feed = anonymous
-        .get(format!(
-            "{base}/api/v1/calendar/links/{busy_id}/calendar.ics"
-        ))
-        .send()
-        .unwrap()
-        .text()
-        .unwrap();
-    assert!(feed.starts_with("BEGIN:VCALENDAR") && !feed.contains("Derby"));
-
-    // A rotation carries the keyed links over; leaving one out is refused.
-    let bob = person(&c, &base);
+    // Bob is a member: he holds the calendar's passphrase.
     assert_eq!(
         invite(&c, &base, &ada, &made, &bob, VIEW).status(),
         StatusCode::CREATED
@@ -915,49 +872,279 @@ fn links_and_their_feeds() {
         .status(),
         StatusCode::NO_CONTENT
     );
-    let new_passphrase = Passphrase::generate();
-    let new_key = cal::generate_calendar_key(&new_passphrase, 1_790_000_200).unwrap();
-    let metadata = new_key
-        .unlocked
-        .seal_metadata(&made.id, "Kulüp", "", &ada.secret_key)
+
+    // A keyed link: its secret sealed to Ada's own account key, every
+    // generation's passphrase under the secret, its access proof.
+    let keyed = |kind: &str| {
+        let id = uuid::Uuid::new_v4().to_string();
+        let secret = LinkSecret::generate();
+        let passphrase =
+            calendar_link::seal_link_passphrase(&secret, &made.id, &id, 1, &made.passphrase)
+                .unwrap();
+        let sealed = calendar_link::seal_owner_link_secret(
+            &secret,
+            &id,
+            &ada.user.person,
+            &ada.user.identity,
+        )
         .unwrap();
-    let carried = |link: &str, secret: &LinkSecret| {
+        let r = post(
+            &c,
+            &base,
+            &ada.user,
+            &format!("{calendar}/links"),
+            json!({
+                "id": id, "kind": kind,
+                "secret": sealed.encode_b64().unwrap(),
+                "passphrases": [{ "keyGeneration": 1, "sealed": calendar_link::encode(&passphrase) }],
+                "accessProof": calendar_link::link_access_proof_text(&secret, &id).unwrap(),
+            }),
+        );
+        assert_eq!(
+            r.status(),
+            StatusCode::CREATED,
+            "{}",
+            r.text().unwrap_or_default()
+        );
+        (id, secret)
+    };
+    // A secret sealed by someone else, or for another link, is refused.
+    let stray = uuid::Uuid::new_v4().to_string();
+    let r = post(
+        &c,
+        &base,
+        &ada.user,
+        &format!("{calendar}/links"),
+        json!({
+            "id": stray, "kind": "full",
+            "secret": calendar_link::seal_owner_link_secret(&LinkSecret::generate(), &stray, &bob.user.person, &bob.user.identity).unwrap().encode_b64().unwrap(),
+            "passphrases": [],
+            "accessProof": LinkSecret::generate().to_url(),
+        }),
+    );
+    assert_eq!(code(r), (StatusCode::BAD_REQUEST, "shareNotBound".into()));
+    let (full, full_secret) = keyed("full");
+    let (query, query_secret) = keyed("query");
+    let busy_id = uuid::Uuid::new_v4().to_string();
+    let r = post(
+        &c,
+        &base,
+        &ada.user,
+        &format!("{calendar}/links"),
+        json!({ "id": busy_id, "kind": "busy" }),
+    );
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let links = get(&c, &base, &ada.user, &format!("{calendar}/links"));
+    assert_eq!(links["links"].as_array().unwrap().len(), 3);
+    // The members' passphrase never opens a link's secret: only Ada's own
+    // account key does (review finding 1).
+    let held = links["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|link| link["id"] == full.as_str())
+        .unwrap()["secret"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let envelope = calendar_link::CalendarLinkSecretEnvelopeV1::decode_b64(&held).unwrap();
+    assert!(calendar_link::open_owner_link_secret(
+        &envelope,
+        &full,
+        &bob.user.person,
+        &bob.user.identity
+    )
+    .is_err());
+    assert_eq!(
+        calendar_link::open_owner_link_secret(
+            &envelope,
+            &full,
+            &ada.user.person,
+            &ada.user.identity
+        )
+        .unwrap()
+        .as_bytes(),
+        full_secret.as_bytes()
+    );
+
+    // The full link's page, without an account: the id alone tells only
+    // the kind; the proof opens it; a wrong proof opens nothing (finding 4).
+    let anonymous = client();
+    let proof =
+        |secret: &LinkSecret, id: &str| calendar_link::link_access_proof_text(secret, id).unwrap();
+    let link_info = |id: &str, shown: Option<String>| {
+        let mut request = anonymous.get(format!("{base}/api/v1/calendar/links/{id}"));
+        if let Some(shown) = shown {
+            request = request.header("X-Kutup-Link-Proof", shown);
+        }
+        request.send().unwrap()
+    };
+    let bare: Value = link_info(&full, None).json().unwrap();
+    assert_eq!(bare["kind"], "full");
+    assert!(bare["calendarId"].is_null() && bare["keys"].is_null() && bare["metadata"].is_null());
+    assert_eq!(
+        link_info(&full, Some(LinkSecret::generate().to_url())).status(),
+        StatusCode::NOT_FOUND
+    );
+    let info: Value = link_info(&full, Some(proof(&full_secret, &full)))
+        .json()
+        .unwrap();
+    assert_eq!(info["calendarId"], made.id.as_str());
+    assert!(info.get("owner").is_none() && info.get("members").is_none());
+    let key = &info["keys"][0];
+    let passphrase = calendar_link::open_link_passphrase(
+        &full_secret,
+        &made.id,
+        &full,
+        1,
+        &b64_decode(key["passphrase"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(passphrase.as_str(), made.passphrase.as_str());
+    let window = "start=2026-12-01T00:00:00Z&end=2026-12-08T00:00:00Z";
+    let events = |id: &str, shown: Option<String>| {
+        let mut request =
+            anonymous.get(format!("{base}/api/v1/calendar/links/{id}/events?{window}"));
+        if let Some(shown) = shown {
+            request = request.header("X-Kutup-Link-Proof", shown);
+        }
+        request.send().unwrap()
+    };
+    assert_eq!(events(&full, None).status(), StatusCode::NOT_FOUND);
+    let listed: Value = events(&full, Some(proof(&full_secret, &full)))
+        .json()
+        .unwrap();
+    assert_eq!(listed["events"].as_array().unwrap().len(), 1);
+    assert!(listed["events"][0].get("authorAddress").is_none());
+    // Busy times come from a busy link only.
+    for keyed_id in [&full, &query] {
+        assert_eq!(
+            anonymous
+                .get(format!(
+                    "{base}/api/v1/calendar/links/{keyed_id}/busy?{window}"
+                ))
+                .send()
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    // A full link has no feed: its key never reaches the server.
+    assert_eq!(
+        anonymous
+            .get(format!("{base}/api/v1/calendar/links/{full}/calendar.ics"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    // A query link has no page, and serves no events even with its proof.
+    assert_eq!(
+        code(link_info(&query, Some(proof(&query_secret, &query)))),
+        (StatusCode::NOT_FOUND, "feedOnly".into())
+    );
+    assert_eq!(
+        events(&query, Some(proof(&query_secret, &query))).status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // The query link's feed opens with its key, and with no other.
+    let feed = |key: &LinkSecret| {
+        anonymous
+            .get(format!(
+                "{base}/api/v1/calendar/links/{query}/calendar.ics?key={}",
+                key.to_url()
+            ))
+            .send()
+            .unwrap()
+    };
+    let r = feed(&query_secret);
+    assert_eq!(r.status(), StatusCode::OK);
+    assert!(r.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/calendar"));
+    let text = r.text().unwrap();
+    assert!(text.contains("SUMMARY:Derby\\, at home"), "{text}");
+    assert!(text.contains("X-WR-CALNAME:Kulüp"), "{text}");
+    assert_eq!(text.matches("UID:").count(), 1);
+    assert_eq!(
+        feed(&LinkSecret::generate()).status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // The busy link: times only, no key, no name.
+    let info: Value = link_info(&busy_id, None).json().unwrap();
+    assert!(info["metadata"].is_null() && info["keys"].is_null());
+    let busy: Value = anonymous
+        .get(format!(
+            "{base}/api/v1/calendar/links/{busy_id}/busy?{window}"
+        ))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(
+        busy["busy"],
+        json!([{ "startUtc": "2026-12-05T15:00:00Z", "endUtc": "2026-12-05T17:00:00Z", "fullDay": false }])
+    );
+    assert_eq!(events(&busy_id, None).status(), StatusCode::NOT_FOUND);
+    let text = anonymous
+        .get(format!(
+            "{base}/api/v1/calendar/links/{busy_id}/calendar.ics"
+        ))
+        .send()
+        .unwrap()
+        .text()
+        .unwrap();
+    assert!(text.starts_with("BEGIN:VCALENDAR") && !text.contains("Derby"));
+
+    // Bob is removed: the rotation carries the keyed links over (their
+    // secrets stay Ada's), and leaving one out is refused.
+    let carried = |link: &str, secret: &LinkSecret, passphrase: &Passphrase| {
         json!({
             "id": link,
-            "passphrase": calendar_link::encode(&calendar_link::seal_link_passphrase(secret, &made.id, link, 2, &new_passphrase).unwrap()),
-            "secret": calendar_link::encode(&calendar_link::seal_link_secret(&new_passphrase, &made.id, link, 2, secret).unwrap()),
+            "passphrase": calendar_link::encode(&calendar_link::seal_link_passphrase(secret, &made.id, link, 2, passphrase).unwrap()),
         })
     };
-    let rotation = |links: Value| {
-        json!({
-            "removeAccountId": bob.user.id,
-            "fromKeyGeneration": 1,
-            "keyGeneration": 2,
-            "publicKey": b64(&new_key.public_key),
-            "lockedSecretKey": b64(&new_key.locked_secret_key),
-            "ownShare": cal::seal_own_passphrase(&new_passphrase, &made.id, 2, &ada.user.person, &ada.user.identity).unwrap().encode_b64().unwrap(),
-            "memberShares": [],
-            "metadata": SealedMetadataV1::of(&metadata),
-            "links": links,
-        })
-    };
+    let (_, next) = rotation_body(&ada, &made.id, "Kulüp", 1, None, json!([]), json!([]));
+    let (incomplete, _) = rotation_body(
+        &ada,
+        &made.id,
+        "Kulüp",
+        1,
+        Some(&bob.user.id),
+        json!([]),
+        json!([carried(&full, &full_secret, &next)]),
+    );
     let r = post(
         &c,
         &base,
         &ada.user,
         &format!("{calendar}/keys/rotate"),
-        rotation(json!([carried(&full, &full_secret)])),
+        incomplete,
     );
     assert_eq!(code(r), (StatusCode::BAD_REQUEST, "linksIncomplete".into()));
+    let (body, passphrase) = rotation_body(
+        &ada,
+        &made.id,
+        "Kulüp",
+        1,
+        Some(&bob.user.id),
+        json!([]),
+        json!([]),
+    );
+    let mut body = body;
+    body["links"] = json!([
+        carried(&full, &full_secret, &passphrase),
+        carried(&query, &query_secret, &passphrase)
+    ]);
     let r = post(
         &c,
         &base,
         &ada.user,
         &format!("{calendar}/keys/rotate"),
-        rotation(json!([
-            carried(&full, &full_secret),
-            carried(&query, &query_secret)
-        ])),
+        body,
     );
     assert_eq!(
         r.status(),
@@ -965,58 +1152,43 @@ fn links_and_their_feeds() {
         "{}",
         r.text().unwrap_or_default()
     );
-    let info: Value = anonymous
-        .get(format!("{base}/api/v1/calendar/links/{full}"))
-        .send()
-        .unwrap()
+    let info: Value = link_info(&full, Some(proof(&full_secret, &full)))
         .json()
         .unwrap();
     assert_eq!(info["keys"].as_array().unwrap().len(), 2);
-    let links = get(&c, &base, &ada.user, &format!("{calendar}/links"));
-    assert!(links["links"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|link| link["kind"] != "busy")
-        .all(|link| link["secret"]["keyGeneration"] == 2));
-    // Still the same feed, opened with both generations.
-    let text = anonymous
-        .get(format!(
-            "{base}/api/v1/calendar/links/{query}/calendar.ics?key={}",
-            query_secret.to_url()
-        ))
-        .send()
-        .unwrap()
-        .text()
-        .unwrap();
-    assert!(text.contains("Derby"), "{text}");
+    assert!(feed(&query_secret).text().unwrap().contains("Derby"));
+
+    // Query links turned off by the administrators: the feed stops too
+    // (finding 2).
+    if let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") {
+        let (name, password) = admin.split_once(':').unwrap();
+        let admin_token = admin_token(&c, &base, password, name);
+        let set = |value: Value| {
+            let r = bearer(c.put(format!("{base}/api/v1/admin/settings")), &admin_token)
+                .json(&json!({ "calendarQueryLinksAllowed": value }))
+                .send()
+                .unwrap();
+            assert_eq!(r.status(), StatusCode::OK);
+        };
+        set(json!(0));
+        let off = feed(&query_secret);
+        set(Value::Null);
+        assert_eq!(code(off), (StatusCode::GONE, "queryLinksOff".into()));
+        assert_eq!(feed(&query_secret).status(), StatusCode::OK);
+    }
 
     // Deleted, a link opens nothing.
     assert_eq!(
         delete(&c, &base, &ada.user, &format!("{calendar}/links/{full}")),
         StatusCode::NO_CONTENT
     );
-    assert_eq!(
-        anonymous
-            .get(format!("{base}/api/v1/calendar/links/{full}"))
-            .send()
-            .unwrap()
-            .status(),
-        StatusCode::NOT_FOUND
-    );
+    assert_eq!(link_info(&full, None).status(), StatusCode::NOT_FOUND);
     assert_eq!(
         delete(&c, &base, &ada.user, &calendar),
         StatusCode::NO_CONTENT
     );
     assert_eq!(storage(&c, &base, &ada.user), 0);
-    assert_eq!(
-        anonymous
-            .get(format!("{base}/api/v1/calendar/links/{busy_id}"))
-            .send()
-            .unwrap()
-            .status(),
-        StatusCode::NOT_FOUND
-    );
+    assert_eq!(link_info(&busy_id, None).status(), StatusCode::NOT_FOUND);
 }
 
 #[test]
@@ -1026,46 +1198,96 @@ fn busy_times_and_their_switch() {
     let ada = person(&c, &base);
     let bob = person(&c, &base);
     let made = make_calendar(&c, &base, &ada, "İş");
-    let result = create_event(
-        &c,
-        &base,
-        &ada,
-        &made.id,
-        &made.key,
-        &event(
+    for (uid, start, end) in [
+        (
             "work@kutup.test",
             "2026-12-07T09:00:00Z",
             "2026-12-07T12:00:00Z",
-            "Planning",
         ),
-    );
-    assert_eq!(result["status"], 200);
-    let busy = |asker: &User| {
+        // Overlapping and touching: one block with the first.
+        (
+            "more@kutup.test",
+            "2026-12-07T11:00:00Z",
+            "2026-12-07T13:00:00Z",
+        ),
+        (
+            "then@kutup.test",
+            "2026-12-07T13:00:00Z",
+            "2026-12-07T14:00:00Z",
+        ),
+    ] {
+        let result = create_event(
+            &c,
+            &base,
+            &ada,
+            &made.id,
+            &made.key,
+            &event(uid, start, end, "Planning"),
+        );
+        assert_eq!(result["status"], 200);
+    }
+    let busy = |asker: &User, address: &str| {
         let r = bearer(c.get(format!("{base}/api/v1/calendar/busy")), &asker.token)
             .query(&[
-                ("address", ada.address.as_str()),
+                ("address", address),
                 ("start", "2026-12-07T00:00:00Z"),
                 ("end", "2026-12-14T00:00:00Z"),
             ])
             .send()
             .unwrap();
         assert_eq!(r.status(), StatusCode::OK);
-        r.json::<Value>().unwrap()["busy"].as_array().unwrap().len()
+        r.json::<Value>().unwrap()["busy"].clone()
     };
     // Off by default: nothing, even to herself.
-    assert_eq!(busy(&ada.user), 0);
-    let r = bearer(
-        c.put(format!("{base}/api/v1/calendar/calendars/{}", made.id)),
-        &ada.user.token,
-    )
-    .json(&json!({ "shareBusy": true }))
-    .send()
-    .unwrap();
+    assert_eq!(busy(&ada.user, &ada.address), json!([]));
+    let switch = |user: &User, on: bool| {
+        bearer(
+            c.put(format!("{base}/api/v1/calendar/calendars/{}", made.id)),
+            &user.token,
+        )
+        .json(&json!({ "shareBusy": on }))
+        .send()
+        .unwrap()
+    };
+    let r = switch(&ada.user, true);
     assert_eq!(r.status(), StatusCode::OK);
     assert_eq!(r.json::<Value>().unwrap()["shareBusy"], true);
-    assert_eq!(busy(&ada.user), 1);
+    // Merged: the three events are one block (finding 8).
+    assert_eq!(
+        busy(&ada.user, &ada.address),
+        json!([{ "startUtc": "2026-12-07T09:00:00Z", "endUtc": "2026-12-07T14:00:00Z", "fullDay": false }])
+    );
     // Someone outside her organization is told nothing (Proton's rule).
-    assert_eq!(busy(&bob.user), 0);
+    assert_eq!(busy(&bob.user, &ada.address), json!([]));
+
+    // A member can't show the owner's busy times as his own (finding 5):
+    // the switch is the owner's, and his answer counts only what he owns.
+    assert_eq!(
+        invite(&c, &base, &ada, &made, &bob, VIEW).status(),
+        StatusCode::CREATED
+    );
+    let invitation = get(&c, &base, &bob.user, "/api/v1/calendar/invitations")["invitations"][0]
+        ["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        post(
+            &c,
+            &base,
+            &bob.user,
+            &format!("/api/v1/calendar/invitations/{invitation}/accept"),
+            json!({})
+        )
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        code(switch(&bob.user, true)),
+        (StatusCode::FORBIDDEN, "notOwner".into())
+    );
+    assert_eq!(busy(&bob.user, &bob.address), json!([]));
+
     // A window past the setting is refused.
     let r = bearer(
         c.get(format!("{base}/api/v1/calendar/busy")),

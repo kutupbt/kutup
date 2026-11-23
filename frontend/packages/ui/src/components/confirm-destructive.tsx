@@ -45,6 +45,8 @@ export interface ConfirmDestructiveProps {
   warningVariant?: 'error' | 'warn'
   /** An obstacle known before the attempt; non-null disables the submit. */
   blocked?: ReactNode
+  /** More to see or choose before confirming, above the warning. */
+  children?: ReactNode
   /** The destructive verb on the button: "Delete folder", not "Confirm". */
   submit: string
   pending?: boolean
@@ -72,6 +74,7 @@ export function ConfirmDestructive({
   confirmPhrase,
   passwordLabel,
   onConfirm,
+  children,
 }: ConfirmDestructiveProps) {
   const { t } = useTranslation()
   const phraseId = useId()
@@ -117,6 +120,7 @@ export function ConfirmDestructive({
         ) : null}
 
         <form className="space-y-4" onSubmit={handleSubmit}>
+          {children}
           {warning ? <Alert variant={warningVariant}>{warning}</Alert> : null}
           {confirmPhrase !== undefined ? (
             <div className="space-y-1.5">

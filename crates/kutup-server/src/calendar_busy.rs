@@ -199,7 +199,26 @@ fn expand(
     }
     out.sort_by_key(|block| (block.start_utc, block.end_utc));
     out.truncate(MAX_BLOCKS);
-    out
+    merge(out)
+}
+
+/// Overlapping and touching blocks as one (in order of start): an answer
+/// says when someone is busy, never how many events make it up. A merged
+/// block is all-day only when every block in it is.
+fn merge(blocks: Vec<BusyBlock>) -> Vec<BusyBlock> {
+    let mut merged: Vec<BusyBlock> = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match merged.last_mut() {
+            Some(last) if block.start_utc <= last.end_utc => {
+                if block.end_utc > last.end_utc {
+                    last.end_utc = block.end_utc;
+                }
+                last.full_day &= block.full_day;
+            }
+            _ => merged.push(block),
+        }
+    }
+    merged
 }
 
 /// Busy blocks as an iCalendar feed (a busy-only link's `calendar.ics`):
@@ -297,6 +316,24 @@ mod tests {
         assert_eq!(blocks.len(), 4);
         assert!(blocks.iter().all(|block| !block.full_day));
         assert_eq!(blocks[1].start_utc, at(first + 2 * 86_400).unwrap());
+    }
+
+    #[test]
+    fn overlapping_and_touching_blocks_become_one() {
+        let block = |start: i64, end: i64| BusyBlock {
+            start_utc: at(start).unwrap(),
+            end_utc: at(end).unwrap(),
+            full_day: false,
+        };
+        assert_eq!(
+            merge(vec![
+                block(0, 10),
+                block(5, 20),
+                block(20, 30),
+                block(40, 50)
+            ]),
+            vec![block(0, 30), block(40, 50)]
+        );
     }
 
     #[test]

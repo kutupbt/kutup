@@ -1506,14 +1506,17 @@ if (build === 'crypto') {
   }
   assert.throws(() => viaLink(s.linkUrlSecret, s.linkPassphrase, s.keyGeneration + 1))
   assert.throws(() => viaLink(Buffer.alloc(32, 1).toString('base64url'), s.linkPassphrase))
-  assert.equal(
-    crypto.calendarLinkUrlSecret(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, s.keyGeneration, s.ownShare, s.linkId, s.linkSecret),
-    s.linkUrlSecret,
-  )
+  // The secret is the owner's alone: its own account key opens it, the
+  // member's (who holds the passphrase) doesn't.
+  assert.equal(crypto.calendarLinkUrlSecret(s.ownerIdentityRoot, s.ownerAccount, s.linkId, s.linkOwnerSecret), s.linkUrlSecret)
+  assert.throws(() => crypto.calendarLinkUrlSecret(s.memberIdentityRoot, s.memberAccount, s.linkId, s.linkOwnerSecret))
+  // The access proof is exact.
+  assert.equal(crypto.calendarLinkAccessProof(s.linkUrlSecret, s.linkId), s.linkAccessProof)
   // A new link from the owner's share of each live generation.
   const link2 = '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f'
   const made2 = crypto.createCalendarLink(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, link2, [{ keyGeneration: s.keyGeneration, share: s.ownShare }])
-  assert.equal(made2.secret.keyGeneration, s.keyGeneration)
+  assert.equal(crypto.calendarLinkUrlSecret(s.ownerIdentityRoot, s.ownerAccount, link2, made2.secret), made2.urlSecret)
+  assert.equal(made2.accessProof, crypto.calendarLinkAccessProof(made2.urlSecret, link2))
   assert.deepEqual(made2.passphrases.map((p) => p.keyGeneration), [s.keyGeneration])
   viaLink(made2.urlSecret, made2.passphrases[0].sealed, s.keyGeneration, link2).free()
   assert.throws(() => crypto.createCalendarLink(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, link2, []))
@@ -1523,7 +1526,7 @@ if (build === 'crypto') {
   const rotated = crypto.rotateCalendar(...owner, s.ownerIdentityRoot, s.ownerAccount, s.calendarId, s.keyGeneration, s.ownShare, {
     members: [member],
     names: { name: 'Ekip', description: '' },
-    links: [{ linkId: s.linkId, secret: s.linkSecret }],
+    links: [{ linkId: s.linkId, secret: s.linkOwnerSecret }],
   }, 1790000000)
   assert.equal(rotated.keyGeneration, s.keyGeneration + 1)
   assert.notEqual(rotated.fingerprint, s.calendarFingerprint)
@@ -1537,10 +1540,7 @@ if (build === 'crypto') {
   const linked3 = crypto.openCalendarLink(s.linkUrlSecret, s.calendarId, s.linkId, rotated.keyGeneration, rotated.links[0].passphrase, rotated.lockedSecretKey)
   assert.equal(linked3.fingerprint, rotated.fingerprint)
   linked3.free()
-  assert.equal(
-    crypto.calendarLinkUrlSecret(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, rotated.keyGeneration, rotated.ownShare, s.linkId, rotated.links[0].secret),
-    s.linkUrlSecret,
-  )
+  assert.equal(rotated.links[0].secret, undefined)
 
   // Recurrence (E2): every vector case expands in the browser as in Rust and
   // as python-dateutil does.

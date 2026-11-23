@@ -834,6 +834,10 @@ arrival, and direct sending. Phases, each with its own plan before code:
   seeing other people's busy times beside an event's participants (E4,
   Q-4), a default for "show others when I'm busy" on new calendars, and
   calendars shared with accounts on other servers (after E5, Q-2).
+  Also: compacting a calendar's key generations (re-encrypting its events
+  and links under the newest generation and pruning the old ones), so a
+  calendar never reaches `calendar.key_generations` (1000 by default; past
+  it a removal is refused until the limit is raised).
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed
   2026-10-10; G1 done): distribution lists and shared mailboxes with
   their own storage quota, owner/manager/member roles and post policies;

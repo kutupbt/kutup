@@ -13,10 +13,11 @@ import {
   rotateCalendar,
   sealLinkPurpose,
   shareCalendarPassphrase,
+  unlockCalendar,
   unlockSharedCalendar,
   type CalendarAccount,
+  type CalendarMember,
   type CalendarOwner,
-  type GenerationSealed,
   type GenerationShare,
 } from '@kutup/crypto/calendar'
 import { accountKeyOf, type AccountRef } from '@kutup/crypto/accountRef'
@@ -110,8 +111,8 @@ export type LinkKind = 'full' | 'query' | 'busy'
 export interface LinkRow {
   id: string
   kind: LinkKind
-  /** A full or query link's secret, sealed under the newest generation's passphrase, for the members; null for busy. */
-  secret: GenerationSealed | null
+  /** A full or query link's secret, sealed to the owner's own account key (never to the calendar's passphrase); null for busy. */
+  secret: string | null
   /** The owner's optional label for it (Proton's), sealed to the calendar key and signed. */
   purpose?: SealedMetadata | null
   createdAt: string
@@ -229,6 +230,24 @@ export async function loadSharingSettings(): Promise<SharingSettings> {
 
 // ------------------------------------------------------------ the owner's side
 
+/** The server's code for a refused change, if it gave one. */
+function refusal(error: unknown): string | undefined {
+  return (error as { response?: { data?: { code?: string } } })?.response?.data?.code
+}
+
+/**
+ * Runs `fn` again, once, when the calendar's key generations changed under
+ * it (the owner's app may be rotating a key that is due at the same time).
+ */
+async function onFreshKeys<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch (error) {
+    if (refusal(error) !== 'sharesIncomplete') throw error
+    return fn()
+  }
+}
+
 /** The calendar's members and the invitations not yet accepted. */
 export async function loadSharing(calendarId: string): Promise<{ members: MemberRow[]; invitations: SentInvitationRow[] }> {
   const { data } = await api.get<{ members: MemberRow[]; invitations: SentInvitationRow[] }>(calendarPath(calendarId, '/members'))
@@ -268,15 +287,17 @@ export async function invite(
     xwingPublicKey: sealableDriveKey(typed, person.driveXwingPublicKey, person.identitySuite),
   }
   const owner = await calendarAccount(session)
-  const keys = await loadKeys(calendar.id)
-  const shares = await Promise.all(
-    sharesOf(keys).map(async (own) => ({ keyGeneration: own.keyGeneration, share: await shareCalendarPassphrase(owner, calendar.id, own, member) })),
-  )
-  await api.post(calendarPath(calendar.id, '/invitations'), {
-    accountId: person.accountId,
-    incarnationId: person.accountIncarnationId,
-    permissions: PRESET_PERMISSIONS[preset],
-    shares,
+  await onFreshKeys(async () => {
+    const keys = await loadKeys(calendar.id)
+    const shares = await Promise.all(
+      sharesOf(keys).map(async (own) => ({ keyGeneration: own.keyGeneration, share: await shareCalendarPassphrase(owner, calendar.id, own, member) })),
+    )
+    await api.post(calendarPath(calendar.id, '/invitations'), {
+      accountId: person.accountId,
+      incarnationId: person.accountIncarnationId,
+      permissions: PRESET_PERMISSIONS[preset],
+      shares,
+    })
   })
 }
 
@@ -289,30 +310,78 @@ export async function revokeInvitation(calendarId: string, invitationId: string)
   await api.delete(calendarPath(calendarId, `/invitations/${encodeURIComponent(invitationId)}`))
 }
 
+/** Who gets a calendar's next key: every member who stays and every pending invitation. */
+function stayers(sharing: { members: MemberRow[]; invitations: SentInvitationRow[] }, removed: string | null): { accountId: string; address: string }[] {
+  return [
+    ...sharing.members.filter((m) => m.accountId !== removed).map((m) => ({ accountId: m.accountId, address: m.address })),
+    ...sharing.invitations.filter((i) => i.state === 'pending' && i.accountId !== removed).map((i) => ({ accountId: i.accountId, address: i.address })),
+  ]
+}
+
+/** One person a new key goes to, as the pins see them (the remove dialog lists them: a person the server added shows). */
+export interface KeyRecipient {
+  accountId: string
+  address: string
+  /** `ok` (verified or known), `new` (first met), or a doubt: `changed`, `invalid`, `someoneElse`. */
+  state: 'verified' | 'known' | 'new' | 'changed' | 'invalid' | 'someoneElse'
+}
+
+/** Who would get the calendar's next key if `removed` (an account id, or none) went now. */
+export async function keyRecipients(me: DriveIdentity, calendarId: string, removed: string | null): Promise<KeyRecipient[]> {
+  const sharing = await loadSharing(calendarId)
+  return Promise.all(
+    stayers(sharing, removed).map(async (person) => {
+      const answer = await lookupAddress(me, person.address)
+      if (!answer || answer.accountId !== person.accountId) return { ...person, state: 'someoneElse' as const }
+      const status = await checkIdentity(me, person.address, {
+        driveXwingPublicKey: answer.driveXwingPublicKey,
+        driveSigningPublicKey: answer.driveSigningPublicKey,
+        incarnationId: answer.accountIncarnationId,
+      })
+      const state: KeyRecipient['state'] =
+        status.kind === 'ok' || status.kind === 'renamed'
+          ? status.verified
+            ? 'verified'
+            : 'known'
+          : status.kind === 'changed' || status.kind === 'invalid' || status.kind === 'someoneElse'
+            ? status.kind
+            : 'new'
+      return { ...person, state }
+    }),
+  )
+}
+
+/** A keyed link made again in a link's place (the remove dialog's "Also replace links"). */
+export interface ReplacedLink {
+  kind: LinkKind
+  label: string
+  urls: LinkUrls
+}
+
 /**
- * Removes a member, rotating the calendar's key in the same request (§2):
- * a new generation sealed to everyone who stays (members and pending
- * invitations, each checked against the pins again; a changed identity stops
- * it with `PersonNotConfirmed` unless its account is in `confirmed`), the
- * name re-sealed, and every keyed link carried over. The removed member keeps
- * only what it could already read.
+ * Moves the calendar to a new key generation (§2), removing `removed` (an
+ * account id) in the same request, or none for a rotation that is due: a
+ * new generation sealed to everyone who stays (members and pending
+ * invitations, each checked against the pins again; a changed identity
+ * stops it with `PersonNotConfirmed` unless its account is in `confirmed`),
+ * the name re-sealed, every keyed link carried over. With `replaceLinks`
+ * the keyed links are deleted first and made again after under fresh
+ * secrets (the old addresses stop working); their new URLs come back. The
+ * removed member keeps only what it could already read.
  */
-export async function removeMember(
+export async function rotateKey(
   session: Session,
   me: DriveIdentity,
   account: MailAccount,
   calendar: Calendar,
-  accountId: string,
-  confirmed: ReadonlySet<string> = new Set(),
-): Promise<void> {
+  removed: string | null,
+  options: { confirmed?: ReadonlySet<string>; replaceLinks?: boolean } = {},
+): Promise<ReplacedLink[]> {
+  const confirmed = options.confirmed ?? new Set<string>()
   const [sharing, keys, links] = await Promise.all([loadSharing(calendar.id), loadKeys(calendar.id), loadLinks(calendar.id)])
   const newest = keys[keys.length - 1]
-  const stay = [
-    ...sharing.members.filter((m) => m.accountId !== accountId).map((m) => ({ accountId: m.accountId, address: m.address })),
-    ...sharing.invitations.filter((i) => i.state === 'pending' && i.accountId !== accountId).map((i) => ({ accountId: i.accountId, address: i.address })),
-  ]
   const members = await Promise.all(
-    stay.map(async (person) => {
+    stayers(sharing, removed).map(async (person): Promise<{ accountId: string; member: CalendarMember }> => {
       const answer = await lookupAddress(me, person.address)
       // The address now leads elsewhere: whoever holds it is not the member.
       if (!answer || answer.accountId !== person.accountId) throw new PersonNotConfirmed(person.address, { kind: 'someoneElse' })
@@ -333,21 +402,25 @@ export async function removeMember(
     }),
   )
   const keyed = links.filter((link) => link.kind !== 'busy')
-  if (keyed.some((link) => link.secret?.keyGeneration !== newest.keyGeneration)) throw new CalendarChangedError()
+  // Replaced: gone before the new key exists, so no old address opens it.
+  const replacing = options.replaceLinks ? keyed.map((link) => ({ kind: link.kind, label: linkPurpose(account, calendar, link) ?? '' })) : []
+  if (options.replaceLinks) for (const link of keyed) await deleteLink(calendar.id, link.id)
+  const carried = options.replaceLinks ? [] : keyed
+  const owner = await calendarAccount(session)
   const rotated = await rotateCalendar(
-    await calendarAccount(session),
+    owner,
     account.key,
     calendar.id,
     { keyGeneration: newest.keyGeneration, share: newest.passphraseShare },
     {
       members: members.map((m) => m.member),
       names: { name: calendar.name, description: calendar.description, rest: calendar.metadataRest },
-      links: keyed.map((link) => ({ linkId: link.id, secret: link.secret!.sealed })),
+      links: carried.map((link) => ({ linkId: link.id, secret: link.secret! })),
     },
   )
   const byAccount = new Map(members.map((m) => [m.member.account, m.accountId]))
   await api.post(calendarPath(calendar.id, '/keys/rotate'), {
-    removeAccountId: accountId,
+    removeAccountId: removed,
     // The generation this rotation follows: refused if another one came first.
     fromKeyGeneration: newest.keyGeneration,
     keyGeneration: rotated.keyGeneration,
@@ -356,8 +429,36 @@ export async function removeMember(
     ownShare: rotated.ownShare,
     memberShares: rotated.memberShares.map((share) => ({ accountId: byAccount.get(share.account)!, share: share.share })),
     metadata: rotated.metadata,
-    links: rotated.links.map((link) => ({ id: link.linkId, passphrase: link.passphrase, secret: link.secret })),
+    links: rotated.links.map((link) => ({ id: link.linkId, passphrase: link.passphrase })),
   })
+  // Made again under the new key (its name sealed with it), each under a fresh secret.
+  const fresh = { ...calendar, unlocked: await unlockNewest(session, calendar.id, owner) }
+  const replaced: ReplacedLink[] = []
+  for (const link of replacing) {
+    const made = await createLink(session, account, fresh, link.kind, link.label)
+    replaced.push({ kind: link.kind, label: link.label, urls: made.urls })
+  }
+  return replaced
+}
+
+/** The calendar's newest key, unlocked from the owner's own share (after a rotation). */
+async function unlockNewest(session: Session, calendarId: string, owner: CalendarAccount): Promise<Calendar['unlocked']> {
+  const keys = await loadKeys(calendarId)
+  const newest = keys[keys.length - 1]
+  return unlockCalendar(owner, { calendarId, keyGeneration: newest.keyGeneration, passphraseShare: newest.passphraseShare, lockedSecretKey: newest.lockedSecretKey })
+}
+
+/** Removes a member: a new key for everyone who stays (see {@link rotateKey}). */
+export async function removeMember(
+  session: Session,
+  me: DriveIdentity,
+  account: MailAccount,
+  calendar: Calendar,
+  accountId: string,
+  confirmed: ReadonlySet<string> = new Set(),
+  replaceLinks = false,
+): Promise<ReplacedLink[]> {
+  return rotateKey(session, me, account, calendar, accountId, { confirmed, replaceLinks })
 }
 
 // ------------------------------------------------------------ the member's side
@@ -538,10 +639,12 @@ export async function createLink(
     const { data } = await api.post<LinkRow>(calendarPath(calendar.id, '/links'), { id, kind, purpose })
     return { link: data, urls: await linkUrls(kind, id) }
   }
-  const keys = await loadKeys(calendar.id)
-  const made = await createCalendarLink(await calendarAccount(session), calendar.id, id, sharesOf(keys))
-  const { data } = await api.post<LinkRow>(calendarPath(calendar.id, '/links'), { id, kind, secret: made.secret, passphrases: made.passphrases, purpose })
-  return { link: data, urls: await linkUrls(kind, id, made.urlSecret) }
+  return onFreshKeys(async () => {
+    const keys = await loadKeys(calendar.id)
+    const made = await createCalendarLink(await calendarAccount(session), calendar.id, id, sharesOf(keys))
+    const { data } = await api.post<LinkRow>(calendarPath(calendar.id, '/links'), { id, kind, secret: made.secret, passphrases: made.passphrases, accessProof: made.accessProof, purpose })
+    return { link: data, urls: await linkUrls(kind, id, made.urlSecret) }
+  })
 }
 
 /** The calendar has as many links as the site allows. */
@@ -552,20 +655,11 @@ export class TooManyLinks extends Error {
   }
 }
 
-/** A link's URLs again: a keyed link's secret opened from the members' copy. */
+/** A link's URLs again: a keyed link's secret opened from the owner's own envelope. */
 export async function showLink(session: Session, calendar: Calendar, link: LinkRow): Promise<LinkUrls> {
   if (link.kind === 'busy') return linkUrls('busy', link.id)
   if (!link.secret) throw new Error('the link has no secret')
-  const keys = await loadKeys(calendar.id)
-  const own = keys.find((key) => key.keyGeneration === link.secret!.keyGeneration)
-  if (!own) throw new Error('no key of the link’s generation')
-  const secret = await calendarLinkUrlSecret(
-    await calendarAccount(session),
-    calendar.id,
-    { keyGeneration: own.keyGeneration, share: own.passphraseShare },
-    link.id,
-    link.secret.sealed,
-  )
+  const secret = await calendarLinkUrlSecret(await calendarAccount(session), link.id, link.secret)
   return linkUrls(link.kind, link.id, secret)
 }
 

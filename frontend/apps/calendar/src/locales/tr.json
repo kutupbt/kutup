@@ -302,6 +302,26 @@
       "body": "{{address}} tarafından sizinle paylaşılan bir takvim kapalı kalıyor: adresin arkasındaki hesap, daha önce tanıdığınız hesap değil. Yeni kimliğe yalnızca neden değiştiğini biliyorsanız güvenin.",
       "keepClosed": "Kapalı kalsın",
       "trust": "Yeni kimliğe güven"
+    },
+    "recipients": {
+      "title": "Yeni anahtarı alacaklar",
+      "onlyYou": "Yalnızca siz: başka kimse kalmıyor.",
+      "state": {
+        "verified": "Doğrulandı",
+        "known": "Önceki gibi",
+        "new": "İlk kez",
+        "changed": "Kimliği değişti",
+        "invalid": "Anahtarları imzasız",
+        "someoneElse": "Artık başka biri"
+      }
+    },
+    "replaceLinks": {
+      "intro_one": "Bu takvimin anahtarını taşıyan {{count}} bağlantısı var:",
+      "intro_other": "Bu takvimin anahtarını taşıyan {{count}} bağlantısı var:",
+      "label": "Bağlantıları da yenile",
+      "hint": "Silinip yeni anahtarlarla yeniden oluşturulurlar; çıkarılan kişinin onları verdiği herkes erişimini kaybeder. Yeni adresleri siz alırsınız.",
+      "doneTitle": "Yeni bağlantılar",
+      "doneDescription": "Eski bağlantılar artık çalışmıyor. Takvimi görmeye devam etmesi gerekenlere bunları verin."
     }
   },
   "busy": {

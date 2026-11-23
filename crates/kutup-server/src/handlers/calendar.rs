@@ -109,6 +109,10 @@ pub struct CalendarView {
     /// This member shows others when they're busy from this calendar
     /// (docs/plans/calendar-e3.md §4).
     pub share_busy: bool,
+    /// The owner's: someone who held the key no longer may, and the owner's
+    /// app rotates it when it next loads the calendar (always false for a
+    /// member).
+    pub rotation_due: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -174,6 +178,7 @@ struct ViewRow {
     default_reminders_timed: serde_json::Value,
     default_reminders_all_day: serde_json::Value,
     share_busy: bool,
+    rotation_due: bool,
     created_at: time::OffsetDateTime,
     updated_at: time::OffsetDateTime,
 }
@@ -190,7 +195,8 @@ const VIEW: &str =
         c.key_generation, s.share AS passphrase_share,
         c.metadata_key_packet, c.metadata_data_packet, c.metadata_signature,
         m.permissions, m.default_reminders_timed, m.default_reminders_all_day,
-        m.share_busy, c.created_at, c.updated_at
+        m.share_busy, c.rotation_due AND m.account_id = c.owner_account_id AS rotation_due,
+        c.created_at, c.updated_at
    FROM calendar_members m
    JOIN calendars c ON c.id = m.calendar_id
    JOIN calendar_keys k ON k.calendar_id = c.id AND k.key_generation = c.key_generation
@@ -200,6 +206,7 @@ const VIEW: &str =
 fn view(row: ViewRow) -> CalendarView {
     CalendarView {
         share_busy: row.share_busy,
+        rotation_due: row.rotation_due,
         owner: None,
         keys: Vec::new(),
         id: row.id,
@@ -609,12 +616,18 @@ pub async fn update(
         .map(|metadata| metadata.to_sealed().map_err(crypto))
         .transpose()?;
     let mut tx = state.pool.begin().await?;
+    // The calendar's row first, as every other change locks it (a sync, a
+    // sharing change): never the member's before it.
+    sqlx::query("SELECT id FROM calendars WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     let member: Option<(i32, Uuid, Vec<u8>, i64)> = sqlx::query_as(
         "SELECT m.permissions, c.owner_account_id, k.public_key, c.bytes
            FROM calendar_members m JOIN calendars c ON c.id = m.calendar_id
            JOIN calendar_keys k ON k.calendar_id = c.id AND k.key_generation = c.key_generation
           WHERE m.calendar_id = $1 AND m.account_id = $2
-          FOR UPDATE OF m, c",
+          FOR UPDATE OF m",
     )
     .bind(id)
     .bind(user_id)
@@ -678,6 +691,14 @@ pub async fn update(
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
     if let Some(share_busy) = input.share_busy {
+        // Busy times are answered from the calendars a person owns: a
+        // member can't show the owner's (docs/plans/calendar-e3.md §4).
+        if permissions & SUPER_OWNER == 0 {
+            return Err(coded(
+                AppError::forbidden("only a calendar's owner shows its busy times"),
+                "notOwner",
+            ));
+        }
         sqlx::query(
             "UPDATE calendar_members SET share_busy = $3 WHERE calendar_id = $1 AND account_id = $2",
         )

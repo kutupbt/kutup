@@ -34,6 +34,7 @@ import { useCalendarPrefs } from '../features/prefs'
 import { SettingsDialog } from '../features/SettingsDialog'
 import { ShareCalendarDialog } from '../features/sharing/ShareCalendarDialog'
 import { SharedWithYou } from '../features/sharing/SharedWithYou'
+import { useDueRotations } from '../features/sharing/useDueRotations'
 import { useToday } from '../features/today'
 
 /**
@@ -103,6 +104,7 @@ export function CalendarShell() {
   useAccountZone()
   usePush()
   useEventLink()
+  useDueRotations()
   const session = useRequiredSession()
   const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()

@@ -24,17 +24,17 @@ async function copy(text: string, done: string, failed: string) {
   }
 }
 
-/** A link's URLs, each with its copy button. */
-function UrlFields({ urls }: { urls: LinkUrls }) {
+/** A link's URLs, each with its copy button; `prefix` keeps several on one page apart. */
+export function UrlFields({ urls, prefix = 'link' }: { urls: LinkUrls; prefix?: string }) {
   const { t } = useTranslation()
   return (
     <div className="space-y-3">
       {(['page', 'ics'] as const).map((which) =>
         urls[which] ? (
           <div key={which} className="space-y-1.5">
-            <Label htmlFor={`link-${which}`}>{t(`sharing.links.url.${which}`)}</Label>
+            <Label htmlFor={`${prefix}-${which}`}>{t(`sharing.links.url.${which}`)}</Label>
             <div className="flex gap-2">
-              <Input id={`link-${which}`} readOnly value={urls[which]} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" data-testid={`link-url-${which}`} />
+              <Input id={`${prefix}-${which}`} readOnly value={urls[which]} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" data-testid={`${prefix}-url-${which}`} />
               <Button
                 type="button"
                 variant="outline"

@@ -7,7 +7,7 @@
 // this origin). A full link's key is the URL's fragment, which never
 // reaches the server; the events open in WASM.
 
-import { calendarEventKeyId, openCalendarLink, type SealedEvent, type SealedMetadata, type UnlockedCalendar } from '@kutup/crypto/calendar'
+import { calendarEventKeyId, calendarLinkAccessProof, openCalendarLink, type SealedEvent, type SealedMetadata, type UnlockedCalendar } from '@kutup/crypto/calendar'
 import { timesOf, type CalendarEvent } from '@kutup/calendar-core/api'
 import { resolveApiBase } from '@kutup/session/apiBase'
 
@@ -20,9 +20,13 @@ export interface PublicKeyRow {
   passphrase: string
 }
 
-/** What `GET /api/v1/calendar/links/{id}` answers: never the calendar's members or owner. */
+/**
+ * What `GET /api/v1/calendar/links/{id}` answers: never the calendar's
+ * members or owner. A keyed link asked without its access proof tells only
+ * its kind.
+ */
 export interface PublicLinkRow {
-  calendarId: string
+  calendarId?: string
   kind: 'full' | 'query' | 'busy'
   /** A full link's sealed name; absent on busy links (the name is not theirs to show). */
   metadata?: SealedMetadata
@@ -65,10 +69,15 @@ export class LinkKeyMissing extends Error {
 /** The most pages one window's events are read in, against a server that never ends a listing. */
 const MAX_PAGES = 1000
 
-async function getJson<T>(path: string, params?: Record<string, string>): Promise<T> {
+/** The header a keyed link's page shows its access proof in (derived from the URL's secret; the server keeps its hash). */
+const PROOF_HEADER = 'X-Kutup-Link-Proof'
+
+async function getJson<T>(path: string, params?: Record<string, string>, proof?: string): Promise<T> {
   const base = await resolveApiBase()
   const query = params ? `?${new URLSearchParams(params).toString()}` : ''
-  const response = await fetch(`${base}${path}${query}`, { credentials: 'omit', headers: { Accept: 'application/json' }, cache: 'no-store' })
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (proof) headers[PROOF_HEADER] = proof
+  const response = await fetch(`${base}${path}${query}`, { credentials: 'omit', headers, cache: 'no-store' })
   if (response.status === 404 || response.status === 410) throw new LinkNotFound()
   if (!response.ok) throw new Error(`the server answered ${response.status}`)
   return (await response.json()) as T
@@ -78,8 +87,20 @@ function linkPath(linkId: string, rest = ''): string {
   return `/calendar/links/${encodeURIComponent(linkId)}${rest}`
 }
 
-export function loadPublicLink(linkId: string): Promise<PublicLinkRow> {
-  return getJson<PublicLinkRow>(linkPath(linkId))
+/** The link's access proof from the URL's secret; none without one (a busy link, or a link missing its fragment). */
+export async function linkProof(linkId: string, urlSecret: string): Promise<string | undefined> {
+  if (!urlSecret) return undefined
+  try {
+    return await calendarLinkAccessProof(urlSecret, linkId)
+  } catch {
+    // Not a secret at all: the link opens as one without it.
+    return undefined
+  }
+}
+
+/** The link, with its access proof when the URL carries a secret. */
+export async function loadPublicLink(linkId: string, urlSecret = ''): Promise<PublicLinkRow> {
+  return getJson<PublicLinkRow>(linkPath(linkId), undefined, await linkProof(linkId, urlSecret))
 }
 
 /** A full link's calendar, opened from the URL's secret. */
@@ -99,13 +120,15 @@ export interface PublicCalendar {
  * page shows it as the link's, not as verified.
  */
 export async function openPublicCalendar(linkId: string, link: PublicLinkRow, urlSecret: string): Promise<PublicCalendar> {
-  if (link.kind !== 'full' || !link.keys?.length || !link.metadata) throw new Error('not a full link')
+  if (link.kind !== 'full') throw new Error('not a full link')
   if (!urlSecret) throw new LinkKeyMissing()
+  if (!link.calendarId || !link.keys?.length || !link.metadata) throw new LinkKeyMissing()
+  const calendarId = link.calendarId
   const keyring = new Map<string, UnlockedCalendar>()
   try {
     const keys = [...link.keys].sort((a, b) => a.keyGeneration - b.keyGeneration)
     for (const key of keys) {
-      const opened = await openCalendarLink(urlSecret, link.calendarId, linkId, {
+      const opened = await openCalendarLink(urlSecret, calendarId, linkId, {
         keyGeneration: key.keyGeneration,
         sealedPassphrase: key.passphrase,
         lockedSecretKey: key.lockedSecretKey,
@@ -114,8 +137,8 @@ export async function openPublicCalendar(linkId: string, link: PublicLinkRow, ur
       if (opened.fingerprint !== key.fingerprint.toLowerCase()) throw new Error('the calendar key is not the one listed')
     }
     const newest = [...keyring.values()].at(-1)!
-    const metadata = newest.openMetadata(link.metadata, link.calendarId, [])
-    return { calendarId: link.calendarId, name: metadata.name, description: metadata.description, keyring }
+    const metadata = newest.openMetadata(link.metadata, calendarId, [])
+    return { calendarId, name: metadata.name, description: metadata.description, keyring }
   } catch (error) {
     for (const key of keyring.values()) key.free()
     throw error
@@ -132,13 +155,13 @@ export function closePublicCalendar(calendar: PublicCalendar): void {
  * names. Their authors can't be checked without an account, so none is
  * shown as verified; the times come from the signed fields, as in the app.
  */
-export async function loadPublicEvents(linkId: string, calendar: PublicCalendar, start: string, end: string): Promise<{ events: CalendarEvent[]; unreadable: number }> {
+export async function loadPublicEvents(linkId: string, calendar: PublicCalendar, start: string, end: string, proof: string): Promise<{ events: CalendarEvent[]; unreadable: number }> {
   const events: CalendarEvent[] = []
   let unreadable = 0
   let after: { afterStart: string; afterId: string } | null = null
   for (let page = 0; page < MAX_PAGES; page++) {
     const params: Record<string, string> = { start, end, ...(after ?? {}) }
-    const data: { events: PublicEventRow[]; next: { afterStart: string; afterId: string } | null } = await getJson(linkPath(linkId, '/events'), params)
+    const data: { events: PublicEventRow[]; next: { afterStart: string; afterId: string } | null } = await getJson(linkPath(linkId, '/events'), params, proof)
     for (const row of data.events) {
       try {
         const key = calendar.keyring.get(await calendarEventKeyId(row.event))

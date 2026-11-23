@@ -93,6 +93,11 @@ export interface CalendarRow {
    * times from it. Absent before E3b: off.
    */
   shareBusy?: boolean
+  /**
+   * The owner's: someone who held the key no longer may (left, or read an
+   * invitation that then went), and the owner's app rotates it.
+   */
+  rotationDue?: boolean
   createdAt: string
   updatedAt: string
   /**
@@ -142,8 +147,10 @@ export interface Calendar {
   /** The settings' version and a newer client's fields, sealed again on a change. */
   settingsRest?: Record<string, unknown>
   defaultReminders: DefaultReminders
-  /** Others may see when this member is busy from this calendar (times only). */
+  /** Others may see when this member is busy from this calendar (times only; the owner's only). */
   shareBusy: boolean
+  /** The owner's app rotates the key (docs/plans/calendar-e3.md, T1). */
+  rotationDue: boolean
   unlocked: UnlockedCalendar
   /** Every generation's unlocked key by its key ID: an event opens with the one its key packets name. */
   keyring: Map<string, UnlockedCalendar>
@@ -376,6 +383,7 @@ export async function loadCalendars(
         settingsRest: own ? settingsRest(own.value) : undefined,
         defaultReminders: row.defaultReminders,
         shareBusy: row.shareBusy ?? false,
+        rotationDue: owned && (row.rotationDue ?? false),
         unlocked: keys.newest,
         keyring: keys.keyring,
         keyGeneration: keys.generation,
@@ -444,7 +452,12 @@ async function writeSettings(session: Session, id: string, value: CalendarSettin
 export async function fileSharedCalendarSettings(session: Session, calendarId: string, color: string): Promise<string> {
   const id = await settingsId(session, calendarId)
   const revision = await writeSettings(session, id, { color, display: true })
-  await revisionGuard(session).accept(GUARD_SCOPE, calendarId, revision)
+  // A fresh accept, which the user chose after opening the owner's signed
+  // invitation: whatever this browser remembers of an earlier membership
+  // (left, so marked deleted) starts over with this record.
+  const guard = revisionGuard(session)
+  await guard.reset(GUARD_SCOPE, calendarId)
+  await guard.accept(GUARD_SCOPE, calendarId, revision)
   return id
 }
 

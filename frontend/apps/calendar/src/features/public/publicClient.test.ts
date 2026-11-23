@@ -19,6 +19,7 @@ vi.mock('@kutup/crypto/calendar', () => ({
     })
   },
   calendarEventKeyId: (event: { kid: string }) => Promise.resolve(event.kid),
+  calendarLinkAccessProof: (secret: string, linkId: string) => Promise.resolve(`proof(${secret},${linkId})`),
 }))
 vi.mock('@kutup/calendar-core/api', () => ({
   timesOf: () => Promise.resolve({ startUtc: '2026-11-20T09:00:00Z', endUtc: '2026-11-20T10:00:00Z', fullDay: false }),
@@ -50,10 +51,11 @@ beforeEach(() => {
 })
 
 describe('a full link', () => {
-  it('asks the server with no credentials, and opens every generation from the URL’s secret', async () => {
+  it('asks the server with no credentials and the link’s access proof, and opens every generation from the URL’s secret', async () => {
     http.routes.set('/api/v1/calendar/links/l1', [{ status: 200, body: fullLink }])
-    const link = await loadPublicLink('l1')
+    const link = await loadPublicLink('l1', 'SECRET')
     expect(http.calls[0].init.credentials).toBe('omit')
+    expect((http.calls[0].init.headers as Record<string, string>)['X-Kutup-Link-Proof']).toBe('proof(SECRET,l1)')
     const calendar = await openPublicCalendar('l1', link, 'SECRET')
     expect(crypto.opened).toEqual([
       { calendarId: 'cal', linkId: 'l1', keyGeneration: 1, sealedPassphrase: 'pp1', lockedSecretKey: 'L' },
@@ -66,6 +68,11 @@ describe('a full link', () => {
 
   it('refuses without the key, with another key, and a key that is not the one listed (freeing what it opened)', async () => {
     await expect(openPublicCalendar('l1', fullLink, '')).rejects.toBeInstanceOf(LinkKeyMissing)
+    // Asked without its proof, the server tells only the kind: the key is missing.
+    await expect(openPublicCalendar('l1', { kind: 'full' }, 'SECRET')).rejects.toBeInstanceOf(LinkKeyMissing)
+    http.routes.set('/api/v1/calendar/links/l1', [{ status: 200, body: { kind: 'full' } }])
+    await loadPublicLink('l1')
+    expect((http.calls.at(-1)!.init.headers as Record<string, string>)['X-Kutup-Link-Proof']).toBeUndefined()
     await expect(openPublicCalendar('l1', fullLink, 'OTHER')).rejects.toThrow()
     await expect(openPublicCalendar('l1', { ...fullLink, keys: [key(1), key(2, 'another')] }, 'SECRET')).rejects.toThrow('not the one listed')
     expect(crypto.freed).toBe(2)
@@ -82,7 +89,8 @@ describe('a full link', () => {
       { status: 200, body: { events: [{ id: 'e1', event: { kid: 'kid-1', summary: 'Old' } }, { id: 'e2', event: { kid: 'kid-9', summary: 'X' } }], next: { afterStart: 'a', afterId: 'e2' } } },
       { status: 200, body: { events: [{ id: 'e3', event: { kid: 'kid-2', summary: 'New' } }], next: null } },
     ])
-    const { events, unreadable } = await loadPublicEvents('l1', calendar, '2026-11-16T00:00:00Z', '2026-11-23T00:00:00Z')
+    const { events, unreadable } = await loadPublicEvents('l1', calendar, '2026-11-16T00:00:00Z', '2026-11-23T00:00:00Z', 'P')
+    expect((http.calls.at(-1)!.init.headers as Record<string, string>)['X-Kutup-Link-Proof']).toBe('P')
     expect(events.map((e) => [e.id, e.fields.summary, e.verified])).toEqual([
       ['e1', 'Old', false],
       ['e3', 'New', false],
@@ -94,7 +102,7 @@ describe('a full link', () => {
   it('refuses a server that hands the same page again', async () => {
     const calendar = await openPublicCalendar('l1', fullLink, 'SECRET')
     http.routes.set('/api/v1/calendar/links/l1/events', [{ status: 200, body: { events: [], next: { afterStart: 'a', afterId: 'x' } } }])
-    await expect(loadPublicEvents('l1', calendar, '2026-11-16T00:00:00Z', '2026-11-23T00:00:00Z')).rejects.toThrow('repeats a page')
+    await expect(loadPublicEvents('l1', calendar, '2026-11-16T00:00:00Z', '2026-11-23T00:00:00Z', 'P')).rejects.toThrow('repeats a page')
   })
 })
 

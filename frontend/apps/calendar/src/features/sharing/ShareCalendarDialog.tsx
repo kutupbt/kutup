@@ -15,11 +15,15 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
+import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@kutup/ui/components/tabs'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import {
   IdentityNotConfirmed,
   invite,
+  keyRecipients,
+  linkPurpose,
+  loadLinks,
   loadSharing,
   presetOf,
   removeMember,
@@ -27,10 +31,11 @@ import {
   setMemberPreset,
   type MemberRow,
   type Preset,
+  type ReplacedLink,
   type SentInvitationRow,
 } from './client'
 import { inviteErrorText } from './errorText'
-import { LinksPanel } from './LinksPanel'
+import { LinksPanel, UrlFields } from './LinksPanel'
 
 function PresetSelect({ value, onChange, label, disabled }: { value: Preset; onChange: (preset: Preset) => void; label: string; disabled?: boolean }) {
   const { t } = useTranslation()
@@ -84,7 +89,20 @@ function PeoplePanel({ calendar }: { calendar: Calendar }) {
   const add = useCalendarMutation((confirm: boolean) => invite(session, me.data!, calendar, address, preset, confirm))
   const change = useCalendarMutation((v: { member: MemberRow; preset: Preset }) => setMemberPreset(calendar.id, v.member.accountId, v.preset))
   const revoke = useCalendarMutation((invitation: SentInvitationRow) => revokeInvitation(calendar.id, invitation.id))
-  const remove = useCalendarMutation((v: { member: MemberRow; confirmed: Set<string> }) => removeMember(session, me.data!, account.data!, calendar, v.member.accountId, v.confirmed))
+  const remove = useCalendarMutation((v: { member: MemberRow; confirmed: Set<string> }) =>
+    removeMember(session, me.data!, account.data!, calendar, v.member.accountId, v.confirmed, replaceLinks),
+  )
+  // Removing: who gets the new key (as the pins see them, so an account the
+  // server slipped in shows), and the keyed links, replaced by default.
+  const [replaceLinks, setReplaceLinks] = useState(true)
+  const [replaced, setReplaced] = useState<ReplacedLink[] | null>(null)
+  const recipients = useQuery({
+    queryKey: ['calendar', 'recipients', calendar.id, removing?.accountId],
+    enabled: removing !== null && !!me.data,
+    queryFn: () => keyRecipients(me.data!, calendar.id, removing!.accountId),
+  })
+  const links = useQuery({ queryKey: ['calendar', 'links', calendar.id], enabled: removing !== null, queryFn: () => loadLinks(calendar.id) })
+  const keyedLinks = (links.data ?? []).filter((link) => link.kind !== 'busy')
 
   function submit(confirm: boolean) {
     if (!address.trim() || !me.data) return
@@ -100,9 +118,11 @@ function PeoplePanel({ calendar }: { calendar: Calendar }) {
     remove.mutate(
       { member, confirmed: people },
       {
-        onSuccess: () => {
+        onSuccess: (made) => {
           setRemoving(null)
           setConfirmed(new Set())
+          setReplaceLinks(true)
+          if (made.length) setReplaced(made)
           toast.success(t('sharing.removed', { address: member.address }))
         },
       },
@@ -254,7 +274,66 @@ function PeoplePanel({ calendar }: { calendar: Calendar }) {
         error={doubtful ? undefined : remove.error}
         errorFallback={t('sharing.errors.removeFailed')}
         onConfirm={() => removing && doRemove(removing, confirmed)}
-      />
+      >
+        <section className="space-y-1.5" aria-labelledby="remove-recipients-title">
+          <h4 id="remove-recipients-title" className="text-sm font-medium">
+            {t('sharing.recipients.title')}
+          </h4>
+          {recipients.isPending ? (
+            <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+          ) : recipients.isError ? (
+            <Alert variant="error">{apiErrorMessage(recipients.error, t('sharing.errors.loadFailed'))}</Alert>
+          ) : recipients.data.length ? (
+            <ul className="divide-y divide-border rounded-md border border-border text-sm" data-testid="remove-recipients">
+              {recipients.data.map((person) => (
+                <li key={person.accountId} className="flex flex-wrap items-center gap-2 px-3 py-1.5">
+                  <span className="min-w-0 flex-1 truncate">{person.address}</span>
+                  <span className={person.state === 'verified' || person.state === 'known' ? 'text-xs text-muted-foreground' : 'text-xs text-destructive'}>
+                    {t(`sharing.recipients.state.${person.state}`)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">{t('sharing.recipients.onlyYou')}</p>
+          )}
+        </section>
+        {keyedLinks.length ? (
+          <section className="space-y-1.5">
+            <p className="text-sm">{t('sharing.replaceLinks.intro', { count: keyedLinks.length })}</p>
+            <ul className="list-inside list-disc text-sm text-muted-foreground" data-testid="remove-links">
+              {keyedLinks.map((link) => (
+                <li key={link.id}>{(account.data && linkPurpose(account.data, calendar, link)) ?? t(`sharing.links.kind.${link.kind}.name`)}</li>
+              ))}
+            </ul>
+            <div className="flex items-start gap-2">
+              <Checkbox id="remove-replace-links" checked={replaceLinks} onCheckedChange={(v) => setReplaceLinks(v === true)} className="mt-0.5" data-testid="remove-replace-links" />
+              <div className="space-y-0.5">
+                <Label htmlFor="remove-replace-links">{t('sharing.replaceLinks.label')}</Label>
+                <p className="text-xs text-muted-foreground">{t('sharing.replaceLinks.hint')}</p>
+              </div>
+            </div>
+          </section>
+        ) : null}
+      </ConfirmDestructive>
+
+      <Dialog open={replaced !== null} onOpenChange={(o) => !o && setReplaced(null)}>
+        <DialogContent data-testid="replaced-links">
+          <DialogHeader>
+            <DialogTitle>{t('sharing.replaceLinks.doneTitle')}</DialogTitle>
+            <DialogDescription>{t('sharing.replaceLinks.doneDescription')}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {(replaced ?? []).map((link, index) => (
+              <div key={index} className="space-y-2">
+                <p className="text-sm font-medium">{link.label || t(`sharing.links.kind.${link.kind}.name`)}</p>
+                <UrlFields urls={link.urls} prefix={`replaced-${index}`} />
+              </div>
+            ))}
+          </div>
+          <Button onClick={() => setReplaced(null)}>{t('sharing.links.done')}</Button>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -3030,8 +3030,12 @@ its pins). `PUT /calendars/{id}` takes `shareBusy` too.
   pending invitation (`400 sharesIncomplete`), `links` every full and query
   link (`400 linksIncomplete`); `409 keyGenerationBehind` when
   `fromKeyGeneration` is not the newest, `409 keyGenerationLimit` at
-  `calendarKeyGenerations` (50). The removed member's shares, alarms and
-  reminders go; it keeps what it could already read.
+  `calendarKeyGenerations` (1000). The removed member's shares, alarms and
+  reminders go; it keeps what it could already read. `removeAccountId` may
+  be null: a rotation that is due (the calendar view's `rotationDue`, the
+  owner's: set when a member leaves, or an invitation its invitee had read
+  is revoked, declined or expires). Accounts that aren't active are left out
+  and lose what they held; `links` entries are `{ id, passphrase }`.
 - `GET /api/v1/calendar/invitations` → `{ invitations: [{ id, calendarId,
   owner, permissions, metadata, keys, createdAt, expiresAt }] }`, the
   caller's pending ones; `POST …/invitations/{id}/accept` (after the client
@@ -3043,8 +3047,9 @@ its pins). `PUT /calendars/{id}` takes `shareBusy` too.
   calendar's settings record, then `DELETE
   /api/v1/calendar/tombstones/{calendarId}`.
 - `GET /api/v1/calendar/busy?address=&start=&end=` → `{ busy: [{ startUtc,
-  endUtc, fullDay }] }`: the person's busy blocks from their calendars with
-  `shareBusy`, from the readable times (transparent and cancelled events
+  endUtc, fullDay }] }`: the person's busy blocks, merged, from the
+  calendars they own with `shareBusy` (only an owner sets it: `403
+  notOwner`), from the readable times (transparent and cancelled events
   left out, series expanded), answered only to the person or a member of
   their organization (Proton's rule); anyone else gets an empty list. The
   window is at most `calendarBusyWindowDays` (31; `400 busyWindowTooLong`);
@@ -3057,29 +3062,35 @@ deleted by the owner while public sharing is on (`403 sharingOff`):
 
 - `full`: the page `https://calendar.<domain>/l/{id}#<secret>`; the secret
   stays in the fragment. The link holds every generation's passphrase sealed
-  under a key derived from the secret, and the members' copy of the secret
-  sealed under the newest passphrase.
+  under a key derived from the secret, the secret sealed by the owner to its
+  own account key (`CalendarLinkSecretEnvelopeV1`), and the SHA-256 of its
+  access proof, which the page sends as `X-Kutup-Link-Proof`.
 - `query`: the feed `…/calendar/links/{id}/calendar.ics?key=<secret>` for
   other calendar apps; the server opens the calendar with the key on each
-  fetch. Off when `calendarQueryLinksAllowed` is 0 (`403 queryLinksOff`).
-  Neither the server's request log nor nginx's access log carries the
-  query of a link's path.
+  fetch (the events of a month back to a year ahead). Off when
+  `calendarQueryLinksAllowed` is 0: none is made (`403 queryLinksOff`) and
+  existing ones answer `410 queryLinksOff`. Neither the server's request
+  log nor nginx's logs carry the query of a link's path.
 - `busy`: page and feed of busy blocks only, no key.
 
 `GET /api/v1/calendar/calendars/{id}/links` → `{ links: [{ id, kind,
-secret: { keyGeneration, sealed } | null, purpose?, createdAt }] }`; `POST`
-the same with `{ id, kind, secret?, passphrases?: [{ keyGeneration, sealed
-}], purpose? }` (`409 linkLimit`); `DELETE …/links/{linkId}`.
+secret: string | null, purpose?, createdAt }] }`; `POST` with `{ id, kind,
+secret?, passphrases?: [{ keyGeneration, sealed }], accessProof?, purpose?
+}` (`409 linkLimit`, `400 shareNotBound` for a secret not the owner's own
+for this link); `DELETE …/links/{linkId}`.
 
-Without an account (`calendar.rate.link_fetches`, 120 a minute per address,
-and `…link_fetches_per_link`, 600 a minute per link; `410 sharingOff` while
+Without an account (`calendar.rate.link_fetches`, 30 a minute per address,
+and `…link_fetches_per_link`, 60 a minute per link; `410 sharingOff` while
 sharing is off for the site or the owner):
 
 - `GET /api/v1/calendar/links/{id}` → `{ calendarId, kind, metadata?, keys?:
-  [{ keyGeneration, fingerprint, lockedSecretKey, passphrase }] }`;
+  [{ keyGeneration, fingerprint, lockedSecretKey, passphrase }] }`; a keyed
+  link without its proof tells only `{ kind }`, with a wrong one `404`; a
+  query link with its proof is `404 feedOnly`;
 - `GET …/links/{id}/events?start=&end=&afterStart=&afterId=` → `{ events:
-  [{ id, event, startUtc, endUtc, fullDay }], next }` (keyed links);
-- `GET …/links/{id}/busy?start=&end=` → `{ busy }`;
+  [{ id, event, startUtc, endUtc, fullDay }], next }` (full links, with
+  their proof);
+- `GET …/links/{id}/busy?start=&end=` → `{ busy }` (busy links only);
 - `GET …/links/{id}/calendar.ics[?key=]`: a busy link's blocks (a month back
   to a year ahead, `SUMMARY:Busy`) or a query link's events; a full link has
   none. A wrong key answers `404`, as a link that isn't there.

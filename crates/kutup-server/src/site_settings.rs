@@ -852,13 +852,15 @@ pub const CALENDAR_BUSY_WINDOW_DAYS: NumericSetting = NumericSetting {
     unit: SettingUnit::Days,
     per_account: false,
 };
-/// The key generations one calendar keeps (each removal makes one).
+/// The key generations one calendar keeps (each removal, leave or read
+/// invitation that went makes one). Past it a removal is refused until the
+/// limit is raised; compacting old generations is on the roadmap.
 pub const CALENDAR_KEY_GENERATIONS: NumericSetting = NumericSetting {
     key: "calendar.key_generations",
     field: "calendarKeyGenerations",
-    default: 50,
+    default: 1000,
     min: 2,
-    max: 1000,
+    max: 100_000,
     unit: SettingUnit::Count,
     per_account: false,
 };

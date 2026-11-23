@@ -2,14 +2,18 @@
 //! one opens them, without an account:
 //! - a **full** link's page (`/l/{id}#secret`): the sealed name, each
 //!   generation's key and passphrase sealed under the link's secret, and the
-//!   sealed events. The secret stays in the URL's fragment; the server never
-//!   opens anything.
+//!   sealed events, served only to a page that shows the link's access proof
+//!   (derived from the secret; the server keeps its hash), so the link's id
+//!   alone opens nothing. The secret stays in the URL's fragment; the server
+//!   never opens anything.
 //! - a **query** link's feed (`…/calendar.ics?key=<secret>`), for other
-//!   calendar apps: the server opens the calendar with the secret on each
-//!   fetch and serves it as iCalendar. The query is never logged
-//!   (`crate::redact_uri`, and nginx's `kutup` log format).
-//! - a **busy** link's page and feed: busy blocks from the readable times,
-//!   no key at all.
+//!   calendar apps, while the site allows them: the server opens the
+//!   calendar with the secret on each fetch (the events of a window around
+//!   now) and serves it as iCalendar. It has no page. The query is never
+//!   logged (`crate::redact_uri`, and nginx's `kutup` log format and its
+//!   error log off for these paths).
+//! - a **busy** link's page and feed: merged busy blocks from the readable
+//!   times, no key at all. Only a busy link answers busy blocks.
 //!
 //! Each fetch counts against the caller's address and against the link.
 
@@ -32,7 +36,10 @@ use crate::calendar_busy::BusyList;
 use crate::error::{AppError, AppResult};
 use crate::handlers::calendar::{coded, event_view, event_view_sql, instant, EventCursor};
 use crate::middleware::AuthAccount;
-use crate::site_settings::{CALENDAR_BUSY_WINDOW_DAYS, CALENDAR_EVENTS_PAGE, CALENDAR_WINDOW_DAYS};
+use crate::site_settings::{
+    CALENDAR_BUSY_WINDOW_DAYS, CALENDAR_EVENTS_PAGE, CALENDAR_QUERY_LINKS_ALLOWED,
+    CALENDAR_WINDOW_DAYS,
+};
 use crate::AppState;
 
 /// Fetches per address (`calendar.rate.link_fetches`).
@@ -48,7 +55,8 @@ pub(crate) static LINK_FETCHES_PER_LINK: std::sync::LazyLock<crate::ratelimit::R
         )
     });
 
-/// How far a feed reaches: busy blocks from a month back to a year ahead.
+/// How far a feed reaches: a month back to a year ahead (busy blocks, and a
+/// query link's events).
 const FEED_PAST_DAYS: i64 = 31;
 const FEED_AHEAD_DAYS: i64 = 366;
 
@@ -61,6 +69,31 @@ struct Link {
     id: Uuid,
     calendar: Uuid,
     kind: String,
+    /// A keyed link's access proof's SHA-256.
+    proof_hash: Option<Vec<u8>>,
+}
+
+/// Whether `proof` is the link's (its hash compared in constant time).
+fn proof_matches(link: &Link, proof: &[u8; 32]) -> bool {
+    link.proof_hash.as_deref().is_some_and(|hash| {
+        kutup_crypto::primitives::ct_eq(
+            hash,
+            &crate::handlers::calendar_sharing::proof_digest(proof),
+        )
+    })
+}
+
+/// The header a keyed link's page shows its access proof in.
+const PROOF_HEADER: &str = "x-kutup-link-proof";
+
+/// Whether the request proves it holds a keyed link's secret: `None` when
+/// it shows no proof, `Some(false)` for a wrong one.
+fn proven(headers: &HeaderMap, link: &Link) -> Option<bool> {
+    let shown = headers.get(PROOF_HEADER)?.to_str().ok()?;
+    let Some(proof) = crate::handlers::calendar_sharing::access_proof(shown) else {
+        return Some(false);
+    };
+    Some(proof_matches(link, &proof))
 }
 
 async fn open_link(
@@ -76,15 +109,15 @@ async fn open_link(
         return Err(AppError::too_many_requests("too many requests")
             .with_details(serde_json::json!({ "code": "rateLimited" })));
     }
-    let row: Option<(Uuid, String, Uuid)> = sqlx::query_as(
-        "SELECT l.calendar_id, l.kind, c.owner_account_id
+    let row: Option<(Uuid, String, Uuid, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT l.calendar_id, l.kind, c.owner_account_id, l.access_proof_hash
            FROM calendar_links l JOIN calendars c ON c.id = l.calendar_id
           WHERE l.id = $1",
     )
     .bind(link)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((calendar, kind, owner)) = row else {
+    let Some((calendar, kind, owner, proof_hash)) = row else {
         return Err(not_found());
     };
     crate::public_sharing::ensure_calendar_link_up(&state.pool, owner, viewer.is_some()).await?;
@@ -92,6 +125,7 @@ async fn open_link(
         id: link,
         calendar,
         kind,
+        proof_hash,
     })
 }
 
@@ -109,7 +143,9 @@ pub struct PublicKeyView {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicLinkView {
-    pub calendar_id: Uuid,
+    /// None on a keyed link asked without its access proof: only its kind
+    /// is told (so its page can say the link is incomplete, or for apps).
+    pub calendar_id: Option<Uuid>,
     /// `full`, `query` or `busy`.
     pub kind: String,
     /// A keyed link's sealed name; none on a busy link.
@@ -120,7 +156,10 @@ pub struct PublicLinkView {
 }
 
 /// `GET /api/v1/calendar/links/{id}` — what a link's page opens: never the
-/// calendar's members or owner.
+/// calendar's members or owner. A full link's keys and name go only with its
+/// access proof (`X-Kutup-Link-Proof`); without one only the kind is told, a
+/// wrong one is `404`. A query link has no page (`404 feedOnly` with its
+/// proof).
 #[utoipa::path(
     get,
     path = "/api/v1/calendar/links/{id}",
@@ -136,6 +175,29 @@ pub async fn link(
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
     let link = open_link(&state, addr, &headers, &viewer, id).await?;
+    if link.kind != "busy" {
+        match proven(&headers, &link) {
+            None => {
+                return Ok(no_store(
+                    Json(PublicLinkView {
+                        calendar_id: None,
+                        kind: link.kind,
+                        metadata: None,
+                        keys: None,
+                    })
+                    .into_response(),
+                ))
+            }
+            Some(false) => return Err(not_found()),
+            Some(true) if link.kind == "query" => {
+                return Err(coded(
+                    AppError::not_found("this link is for calendar apps"),
+                    "feedOnly",
+                ))
+            }
+            Some(true) => {}
+        }
+    }
     let (metadata, keys) = if link.kind == "busy" {
         (None, None)
     } else {
@@ -177,7 +239,7 @@ pub async fn link(
     };
     Ok(no_store(
         Json(PublicLinkView {
-            calendar_id: link.calendar,
+            calendar_id: Some(link.calendar),
             kind: link.kind,
             metadata,
             keys,
@@ -216,8 +278,9 @@ pub struct LinkEventsQuery {
     pub after_id: Option<Uuid>,
 }
 
-/// `GET /api/v1/calendar/links/{id}/events?start&end` — a keyed link's
-/// sealed events meeting a window, paged as the members' listing.
+/// `GET /api/v1/calendar/links/{id}/events?start&end` — a full link's
+/// sealed events meeting a window, paged as the members' listing, with the
+/// link's access proof only.
 #[utoipa::path(
     get,
     path = "/api/v1/calendar/links/{id}/events",
@@ -234,11 +297,8 @@ pub async fn events(
     Query(query): Query<LinkEventsQuery>,
 ) -> AppResult<Response> {
     let link = open_link(&state, addr, &headers, &viewer, id).await?;
-    if link.kind == "busy" {
-        return Err(coded(
-            AppError::not_found("this link shows busy times only"),
-            "busyOnly",
-        ));
+    if link.kind != "full" || proven(&headers, &link) != Some(true) {
+        return Err(not_found());
     }
     let (start, end) = (instant(&query.start, "start")?, instant(&query.end, "end")?);
     let window_days = CALENDAR_WINDOW_DAYS.load(&state.pool).await?;
@@ -303,8 +363,8 @@ pub struct BusyWindow {
     pub end: String,
 }
 
-/// `GET /api/v1/calendar/links/{id}/busy?start&end` — when the link's
-/// calendar is busy: times only.
+/// `GET /api/v1/calendar/links/{id}/busy?start&end` — when a busy link's
+/// calendar is busy: merged blocks, times only. A keyed link answers none.
 #[utoipa::path(
     get,
     path = "/api/v1/calendar/links/{id}/busy",
@@ -321,6 +381,9 @@ pub async fn busy(
     Query(query): Query<BusyWindow>,
 ) -> AppResult<Response> {
     let link = open_link(&state, addr, &headers, &viewer, id).await?;
+    if link.kind != "busy" {
+        return Err(not_found());
+    }
     let (start, end) = (instant(&query.start, "start")?, instant(&query.end, "end")?);
     let days = CALENDAR_BUSY_WINDOW_DAYS.load(&state.pool).await?;
     if end <= start || end - start > time::Duration::days(days) {
@@ -377,11 +440,28 @@ pub async fn feed(
             crate::calendar_busy::ics(&blocks, link.id, &state.config.chat_server_name)
         }
         "query" => {
+            // Turned off by the administrators: existing links stop too.
+            if CALENDAR_QUERY_LINKS_ALLOWED.load(&state.pool).await? == 0 {
+                return Err(coded(
+                    AppError::new(
+                        StatusCode::GONE,
+                        "this server no longer allows links with the key in the address",
+                    ),
+                    "queryLinksOff",
+                ));
+            }
             let secret = query
                 .key
                 .as_deref()
                 .and_then(|key| LinkSecret::from_url(key).ok())
                 .ok_or_else(not_found)?;
+            // The key is checked against the link's proof before anything
+            // is opened with it.
+            let proof = calendar_link::link_access_proof(&secret, &link.id.to_string())
+                .map_err(|_| not_found())?;
+            if !proof_matches(&link, &proof) {
+                return Err(not_found());
+            }
             query_feed(&state, &link, secret).await?
         }
         _ => return Err(not_found()),
@@ -406,10 +486,11 @@ fn no_store(mut response: Response) -> Response {
     response
 }
 
-/// A query link's events as iCalendar, opened with its secret: every
-/// generation's key from the link's copy of its passphrase. A wrong secret
-/// opens nothing and answers as a link that isn't there.
+/// A query link's events as iCalendar (those meeting a month back to a year
+/// ahead), opened with its secret: every generation's key from the link's
+/// copy of its passphrase.
 async fn query_feed(state: &AppState, link: &Link, secret: LinkSecret) -> AppResult<String> {
+    let now = time::OffsetDateTime::now_utc();
     let keys: Vec<(i32, Vec<u8>, Vec<u8>)> = sqlx::query_as(
         "SELECT k.key_generation, k.locked_secret_key, p.passphrase
            FROM calendar_keys k JOIN calendar_link_passphrases p
@@ -445,9 +526,13 @@ async fn query_feed(state: &AppState, link: &Link, secret: LinkSecret) -> AppRes
                 e.calendar_signed, e.calendar_signed_signature,
                 e.calendar_encrypted, e.calendar_encrypted_signature
            FROM calendar_events e JOIN calendar_shared_events se ON se.id = e.shared_event_id
-          WHERE e.calendar_id = $1 ORDER BY se.start_utc, e.id",
+          WHERE e.calendar_id = $1 AND se.start_utc < $3
+            AND COALESCE(se.range_end_utc, 'infinity'::timestamptz) >= $2
+          ORDER BY se.start_utc, e.id",
     )
     .bind(link.calendar)
+    .bind(now - time::Duration::days(FEED_PAST_DAYS))
+    .bind(now + time::Duration::days(FEED_AHEAD_DAYS))
     .fetch_all(&state.pool)
     .await?;
     let (calendar, link_id) = (link.calendar, link.id);

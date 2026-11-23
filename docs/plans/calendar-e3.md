@@ -146,12 +146,10 @@ makes or deletes links.
      `kutup/calendar/link-passphrase/v1` in `labels.rs`; AEAD in
      `kutup-crypto`). This differs from Proton's XOR, so no pad is reused
      across generations.
-   - The members' copy of the secret is sealed under a key derived from the
-     newest generation's passphrase (label `kutup/calendar/link-secret/v1`),
-     where Proton seals its `CacheKey` to the calendar key. Whoever can
-     unlock the calendar key holds that passphrase, so the access is the same
-     with no second OpenPGP message. That lets the owner show the URL again
-     and re-seal it on rotation.
+   - The owner keeps the secret, sealed to its own account key (see "Review
+     fixes" 1: it was first sealed under the newest passphrase, which every
+     member holds). That lets the owner show the URL again and seal the new
+     passphrase for the link on rotation.
    - The page fetches `GET /api/v1/calendar/links/{id}/events?start&end` (no
      account; rate limited per IP and per link) with the keys and sealed
      passphrases. It opens them in WASM and shows a read-only calendar.
@@ -231,11 +229,11 @@ Busy-only links need nothing.
 **E3a as built** (`feat/calendar-e3`, no schema):
 
 - `kutup_crypto::calendar_link`: `LinkSecret` (32 bytes, base64url in the
-  URL), `seal_link_passphrase` / `open_link_passphrase` and
-  `seal_link_secret` / `open_link_secret`. Each is
-  `version ‖ nonce ‖ XChaCha20-Poly1305`, with the key from HKDF over
+  URL), `seal_link_passphrase` / `open_link_passphrase`
+  (`version ‖ nonce ‖ XChaCha20-Poly1305`, with the key from HKDF over
   (calendar id, link id, generation), and the same context as associated
-  data.
+  data); since the review, `seal_owner_link_secret` /
+  `open_owner_link_secret` and `link_access_proof`.
 - `calendar::event_key_id` (the generation an event needs),
   `UnlockedCalendarKey::key_id`, `next_key_generation`. Member shares per
   generation reuse `seal_passphrase` / `open_passphrase`, which already
@@ -244,7 +242,7 @@ Busy-only links need nothing.
   `unlockSharedCalendar`, `calendarEventKeyId`, `UnlockedCalendar.keyId`,
   `rotateCalendar` (new key, own and member shares, metadata, each link's
   new copies, all in one result for one request), `createCalendarLink`,
-  `calendarLinkUrlSecret`, `openCalendarLink`.
+  `calendarLinkUrlSecret`, `calendarLinkAccessProof`, `openCalendarLink`.
 - Vectors: `calendar-sharing-v1.json` (a generation-2 member share,
   refused shares, and the link envelopes with fixed nonces, so their bytes
   are exact), run in Rust and in `scripts/test-crypto-wasm.mjs`.
@@ -354,7 +352,7 @@ tables are the W7 baseline's):
   (49) and `calendar.links_per_calendar` (5), both per account (they limit
   the owner); `calendar.query_links_allowed` (1; a whole-number setting, 0
   or 1, as the registry has no switch type); `calendar.invitation_days`
-  (7); `calendar.busy_window_days` (31); `calendar.key_generations` (50: a
+  (7); `calendar.busy_window_days` (31); `calendar.key_generations` (1000: a
   rotation past it is refused, nothing is pruned).
 - Rate limits: `calendar.rate.busy` (per account) and, for the public link
   routes, `calendar.rate.link_fetches` (per address) and
@@ -368,6 +366,78 @@ tables are the W7 baseline's):
   a calendar link's query out; unit tests check both.
 - Tests: `crates/kutup-server/tests/calendar_sharing_live.rs` (in the live
   backup gate), browser specs 201–206.
+
+**Review fixes** (2026-11-23, after an independent security review of
+`post-wipe/calendar-e3`; migration `20261202000000_calendar_link_proofs`):
+
+1. **A link's secret is the owner's alone.** It was sealed under the
+   newest generation's passphrase, which every member holds: with an old
+   copy and a removed member's old passphrase, every later generation
+   opened through the link's passphrase copies. It is now a
+   `CalendarLinkSecretEnvelopeV1` from the owner to itself (HPKE to the
+   owner's account key, signed, bound to the link; label
+   `kutup/calendar/link-secret-hpke/v1`), checked by the server against
+   the owner's binding. A rotation carries a link over with the new
+   generation's passphrase only.
+2. **Query links off stops existing ones**: the feed answers `410
+   queryLinksOff`, and a query link has no page and serves no events.
+3. **nginx's error log** (which prints whole request lines on an upstream
+   error or a refused request) is off for `/api/v1/calendar/links/`, in a
+   location of its own with `limit_req_log_level info`.
+4. **A link's id alone opens nothing.** A keyed link's page shows an access
+   proof (HKDF of the secret over the link id, label
+   `kutup/calendar/link-access/v1`, checked-in vector) in
+   `X-Kutup-Link-Proof`; the server keeps its SHA-256 and serves the keys
+   and events only with it (without it, only the kind). The query feed
+   checks its key against the same hash before opening anything. Busy
+   blocks come from a busy link only.
+5. **Busy times are the owner's**: answered from calendars the person owns;
+   `shareBusy` on a calendar someone else owns is `403 notOwner`, and the
+   switch shows only to the owner.
+6. **Generations**: `calendar.key_generations` defaults to 1000; at the cap a
+   removal is `409 keyGenerationLimit` with a message saying so. Compacting
+   (re-encrypting under the newest generation and pruning) is on the
+   roadmap.
+7. **Inactive accounts** are left out of a rotation (and of the member
+   list); what they held of the calendar goes, with a pending invitation.
+8. **Busy blocks merge** (overlapping and touching), in answers and feeds.
+9. **The query feed** opens only the events of a month back to a year
+   ahead; the link fetch limits are 30 a minute per address and 60 per
+   link.
+10. **Lock order**: a calendar's change locks the calendar row first.
+11. **Joining again** after leaving: a fresh accept clears this browser's
+   replay guard for the calendar (`RevisionGuard.reset`).
+
+Trade-offs decided (stricter than Proton):
+
+- **T1, rotation due.** Leaving, a revoked invitation its invitee had read,
+  a declined one read first, and one that expired after it was read mark
+  the calendar `rotation_due`. The owner's app makes the rotation (the
+  removal's code, nobody removed) when it next loads the calendar; one it
+  can't make (a doubtful identity, another device first) waits for the
+  next load.
+- **T2, links on removal.** The remove dialog lists the keyed links with
+  "Also replace links" checked by default: they are deleted before the
+  rotation and made again after under fresh secrets, and the owner is
+  shown the new addresses.
+- **T3, recipients.** The remove dialog lists who gets the new key, each
+  with what the pins say (verified, as before, first time, changed, not
+  signed, someone else now), so an account the server slipped in shows.
+
+Threat notes:
+
+- **T5, the link page's origin.** `/l/{id}` is served by the Calendar app
+  on `calendar.<domain>`, beside the signed-in app, as Drive's public pages
+  are on Drive's origin. It reads no session, sends no credentials and
+  writes nothing on the origin, and its secret stays in the fragment; a
+  script injected into the origin could read both, as it could in Drive.
+  Kept as Drive does.
+- A query link gives the server the calendar on each fetch, by design;
+  the access and error logs leave the key out, and the administrators can
+  turn such links off (existing ones stop).
+- A removed member keeps the passphrases it had, so the events it could
+  read; nothing written after. Its copies of keyed links' addresses stop
+  working when the links are replaced (T2).
 
 Each slice is its own PR from its own worktree (`feat/calendar-e3a…`),
 opened after the wipe.
