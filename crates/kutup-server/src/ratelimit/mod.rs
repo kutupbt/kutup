@@ -446,6 +446,26 @@ impl RateLimiter {
         }
     }
 
+    /// How long until `key` has room again: zero when it has some now.
+    pub fn wait(&self, key: &str) -> Duration {
+        let limit = self.limit(key);
+        let now = Instant::now();
+        let window = self.window.get();
+        let mut map = self.requests.lock().unwrap();
+        let Some(times) = map.get_mut(key) else {
+            return Duration::ZERO;
+        };
+        times.retain(|t| now.duration_since(*t) < window);
+        if times.len() < limit {
+            return Duration::ZERO;
+        }
+        // The event whose leaving makes room: the oldest one past the limit.
+        times
+            .get(times.len() - limit)
+            .map(|t| window.saturating_sub(now.duration_since(*t)))
+            .unwrap_or(Duration::ZERO)
+    }
+
     /// Gives back the newest event of `key` (an attempt that turned out
     /// right).
     pub fn pop(&self, key: &str) {
@@ -519,9 +539,9 @@ pub static REGISTRATION_CODE_FAILURES: LazyLock<RateLimiter> =
 /// may report, without an account; a person reports a few, a script many.
 pub static REPORT: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::registered(Limit::Reports));
-/// Wrong public link passwords: 10 / hour / IP
-/// (`RATE_LIMIT_LINK_PASSWORD_ADDRESS_FAILURES_PER_HOUR`); each link also
-/// keeps its own count in the database (`crate::link_password`).
+/// Wrong public link passwords from one address, over every link: 30 / hour
+/// (`RATE_LIMIT_LINK_PASSWORD_ADDRESS_FAILURES_PER_HOUR`); each link and
+/// address also keeps its own count in the database (`crate::link_password`).
 pub static LINK_PASSWORD_ADDRESS_FAILURES: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::registered(Limit::LinkPasswordAddressFailures));
 /// Feedback: 10 / hour / account (`RATE_LIMIT_FEEDBACK_PER_HOUR`). A person

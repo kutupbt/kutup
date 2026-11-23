@@ -60,6 +60,12 @@ fn a_link_password_gates_the_link_and_survives_a_rekey() {
     let c = client();
     let owner = register(&c, &base);
     let folder = create_folder(&c, &base, &owner);
+    // A file in it, whose content the link serves.
+    let file = seal_file(&folder, &uuid(), b"behind a link password");
+    assert_eq!(
+        upload(&c, &base, &owner.token, &folder, &file).status(),
+        StatusCode::CREATED
+    );
 
     // A link whose key is its URL secret.
     let mut secret = [0u8; 32];
@@ -146,8 +152,16 @@ fn a_link_password_gates_the_link_and_survives_a_rekey() {
         StatusCode::OK
     );
 
-    // Nothing shows without the proof; a wrong one is refused.
-    for route in ["", "/files", "/epochs"] {
+    // Nothing shows without the proof, the files' content neither; a wrong
+    // one is refused.
+    let download = format!("{share_url}/files/{}/download", file.id);
+    for route in [
+        String::new(),
+        "/files".into(),
+        "/epochs".into(),
+        format!("/files/{}/download", file.id),
+        format!("/files/{}/thumbnails/sm", file.id),
+    ] {
         let (status, body) = get(&c, format!("{share_url}{route}"), None);
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{route}");
         assert_eq!(body["code"], "linkPassword", "{route}");
@@ -200,6 +214,19 @@ fn a_link_password_gates_the_link_and_survives_a_rekey() {
         .0,
         StatusCode::OK
     );
+    let content = c
+        .get(&download)
+        .header("Range", "bytes=0-15")
+        .header(
+            "X-Kutup-Link-Proof",
+            STANDARD.encode(right.proof.as_slice()),
+        )
+        .send()
+        .unwrap();
+    assert_eq!(content.status(), StatusCode::PARTIAL_CONTENT);
+    let (status, body) = get(&c, download.clone(), Some(wrong.proof.as_slice()));
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["code"], "linkPasswordWrong");
 
     // The owner's listing carries the revision and the owner's secret.
     let access: Value = bearer(
@@ -301,9 +328,11 @@ fn a_link_password_gates_the_link_and_survives_a_rekey() {
     let past = put_expiry(json!("2001-01-01T00:00:00Z"));
     assert_eq!(past.status(), StatusCode::BAD_REQUEST);
     assert_eq!(past.json::<Value>().unwrap()["code"], "expiryInPast");
-    let far = put_expiry(json!("2999-01-01T00:00:00Z"));
-    assert_eq!(far.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(far.json::<Value>().unwrap()["code"], "expiryTooFar");
+    // No cap (the site's first value): far ahead is fine, and so is never.
+    assert_eq!(
+        put_expiry(json!("2999-01-01T00:00:00Z")).status(),
+        StatusCode::NO_CONTENT
+    );
     let soon = (time::OffsetDateTime::now_utc() + time::Duration::days(7))
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap();
@@ -315,4 +344,149 @@ fn a_link_password_gates_the_link_and_survives_a_rekey() {
     assert!(share["expiresAt"].is_null());
 
     purge_accounts(&c, &base, &[&owner, &stranger]);
+}
+
+/// Too many wrong passwords lock one address out of one link, with
+/// `Retry-After`, as Proton's clients wait; anyone else still opens it.
+/// Needs an administrator to lower the limit (`KUTUP_LIVE_ADMIN`).
+#[test]
+fn wrong_passwords_lock_one_address_not_the_link() {
+    let (Ok(base), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let c = client();
+    let (name, password) = admin.split_once(':').expect("username:password");
+    let admin = admin_token(&c, &base, password, name);
+    let set_limit = |value: Value| {
+        bearer(
+            c.put(format!(
+                "{base}/api/v1/admin/rate-limits/drive.rate.link_password_failures"
+            )),
+            &admin,
+        )
+        .json(&json!({ "value": value }))
+        .send()
+        .unwrap()
+        .status()
+    };
+    assert!(set_limit(json!(2)).is_success());
+    struct Reset<F: Fn()>(F);
+    impl<F: Fn()> Drop for Reset<F> {
+        fn drop(&mut self) {
+            (self.0)()
+        }
+    }
+    let _reset = Reset(|| {
+        let _ = set_limit(Value::Null);
+    });
+
+    let owner = register(&c, &base);
+    let folder = create_folder(&c, &base, &owner);
+    let mut secret = [0u8; 32];
+    kutup_crypto::primitives::random(&mut secret);
+    let mut link_key = [0u8; 32];
+    kutup_crypto::primitives::random(&mut link_key);
+    let link_id = uuid();
+    let created: Value = bearer(c.post(format!("{base}/api/v1/drive/public-links")), &owner.token)
+        .json(&json!({
+            "id": link_id,
+            "shareType": "collection",
+            "targetId": folder.id,
+            "collectionKeyEnvelope": drive_envelope::seal_b64(&folder.key, &secret,
+                ctx_at(DriveEnvelopePurpose::PublicLinkCollectionKey, 1, 1, &folder.id, &owner.id)).unwrap(),
+            "ownerLinkKeyEnvelope": owner_link_key(&secret, &owner, &link_id),
+        }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let token = created["token"].as_str().unwrap().to_owned();
+    let salt = [3u8; 16];
+    let protection = link_password::protect_with(
+        &secret,
+        "right",
+        &link_key,
+        &link_id,
+        &owner.id,
+        2,
+        &fast(),
+        &salt,
+        &[4u8; 24],
+    )
+    .unwrap();
+    let set = bearer(
+        c.put(format!("{base}/api/v1/drive/public-links/{token}/password")),
+        &owner.token,
+    )
+    .json(&json!({
+        "fromKeyRevision": 1,
+        "keyEpoch": 1,
+        "targetKeyEnvelope": drive_envelope::seal_b64(&folder.key, &link_key,
+            ctx_at(DriveEnvelopePurpose::PublicLinkCollectionKey, 1, 1, &folder.id, &owner.id)).unwrap(),
+        "ownerLinkKeyEnvelope": owner_link_key(&link_key, &owner, &link_id),
+        "password": {
+            "salt": STANDARD.encode(protection.salt),
+            "operations": protection.params.operations,
+            "memory": protection.params.memory,
+            "verifier": STANDARD.encode(protection.verifier),
+            "linkKeyEnvelope": protection.link_key_envelope,
+            "ownerSecretEnvelope": link_password::seal_owner_secret(&secret, "right",
+                &owner.roots.drive, &link_id, &owner.id, owner.roots.drive_generation).unwrap(),
+        },
+    }))
+    .send()
+    .unwrap();
+    assert_eq!(set.status(), StatusCode::OK);
+
+    let proof = |password: &str| {
+        STANDARD.encode(
+            link_password::derive(&secret, password, &salt, &fast(), &link_id)
+                .unwrap()
+                .proof
+                .as_slice(),
+        )
+    };
+    let open_from = |address: &str, password: &str| {
+        c.get(format!("{base}/api/v1/drive/public-links/{token}"))
+            .header("X-Real-IP", address)
+            .header("X-Kutup-Link-Proof", proof(password))
+            .send()
+            .unwrap()
+    };
+    let guesser = format!("198.51.100.{}", 1 + rand_octet());
+    for _ in 0..2 {
+        assert_eq!(
+            open_from(&guesser, "wrong").status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    // Locked for that address, the right password too, saying how long.
+    let locked = open_from(&guesser, "right");
+    assert_eq!(locked.status(), StatusCode::TOO_MANY_REQUESTS);
+    let wait: u64 = locked.headers()["retry-after"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((1..=3600).contains(&wait), "{wait}");
+    assert_eq!(
+        locked.json::<Value>().unwrap()["code"],
+        "linkPasswordLocked"
+    );
+    // Anyone else opens the link.
+    let other = format!("203.0.113.{}", 1 + rand_octet());
+    assert_eq!(open_from(&other, "right").status(), StatusCode::OK);
+
+    purge_accounts(&c, &base, &[&owner]);
+}
+
+/// An address part this run picks, so runs don't share counters.
+fn rand_octet() -> u8 {
+    let mut byte = [0u8; 1];
+    kutup_crypto::primitives::random(&mut byte);
+    byte[0] % 250
 }

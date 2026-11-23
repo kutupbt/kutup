@@ -45,7 +45,7 @@ pub enum Scope {
     MediaRecipient,
     /// Chat media: deliveries per federated origin server.
     MediaFederationOrigin,
-    /// Wrong passwords per public link (`crate::link_password`).
+    /// Wrong passwords per public link and address (`crate::link_password`).
     DriveLinkPassword,
 }
 
@@ -90,7 +90,7 @@ impl Scope {
             Self::MediaCapabilityDay => "chat.media.capabilityDay",
             Self::MediaRecipient => "chat.media.recipient",
             Self::MediaFederationOrigin => "chat.media.federationOrigin",
-            Self::DriveLinkPassword => "drive.linkPassword.link",
+            Self::DriveLinkPassword => "drive.linkPassword.linkAndAddress",
         }
     }
 }
@@ -122,6 +122,28 @@ pub async fn add(
     .bind(window_seconds)
     .bind(amount)
     .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// The subject's count in the scope's current window of `window_seconds`
+/// (0 when none), and the seconds until that window ends. A read: nothing
+/// is reserved.
+pub async fn current(
+    pool: &sqlx::PgPool,
+    scope: Scope,
+    subject: &[u8; 32],
+    window_seconds: i64,
+) -> AppResult<(i64, i64)> {
+    Ok(sqlx::query_as(
+        "SELECT COALESCE((SELECT count FROM rate_counters
+                           WHERE scope = $1 AND subject = $2
+                             AND window_start = to_timestamp(floor(extract(epoch FROM now()) / $3) * $3)), 0),
+                GREATEST(1, ceil($3 - (extract(epoch FROM now()) - floor(extract(epoch FROM now()) / $3) * $3)))::bigint",
+    )
+    .bind(scope.as_str())
+    .bind(subject.as_slice())
+    .bind(window_seconds)
+    .fetch_one(pool)
     .await?)
 }
 

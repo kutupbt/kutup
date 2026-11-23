@@ -84,6 +84,7 @@ export class BlockObjectReader {
         const resp = await io.fetch(target.url, {
           headers: {
             Range: `bytes=${at}-${end}`,
+            ...(target.family === 'drive' ? target.headers : undefined),
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
             ...(client ? { 'X-Kutup-Client': client } : {}),
           },

@@ -18,7 +18,7 @@ import { joinLivePhotos, type Photo } from '../library/library'
 import { newestFirst } from '../library/timeline'
 import { parseLinkFragment } from '@kutup/crypto/linkFragment'
 import { goToLinkHome } from '@kutup/session/apps'
-import { forgetLink, linkHeaders, linkKeyOf, linkPasswordFailure, unlockLink } from '@kutup/drive-core/publicLinkPassword'
+import { forgetLink, linkHeaders, linkKeyOf, linkPasswordFailure, linkRetryAfter, unlockLink } from '@kutup/drive-core/publicLinkPassword'
 
 // An album's public link (docs/plans/photos.md): the album key sealed under
 // a link key that lives only in the URL fragment, so the server never holds
@@ -42,7 +42,11 @@ export type PublicFailure =
   | 'other'
 
 export class PublicAlbumError extends Error {
-  constructor(public readonly failure: PublicFailure) {
+  constructor(
+    public readonly failure: PublicFailure,
+    /** A locked link's wait, in seconds (`Retry-After`). */
+    public readonly retryAfter: number | null = null,
+  ) {
     super(failure)
   }
 }
@@ -105,7 +109,7 @@ export async function loadPublicAlbum(token: string, password?: string): Promise
     const refused = linkPasswordFailure(error)
     if (refused) {
       if (refused !== 'passwordLocked') forgetLink(token)
-      throw new PublicAlbumError(refused)
+      throw new PublicAlbumError(refused, linkRetryAfter(error))
     }
     const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
     const status = response?.status
@@ -196,7 +200,7 @@ export async function readPublicOriginal(token: string, photo: PublicPhoto, sign
   const current = await currentContentOf(file)
   const url = `${await resolveApiBase()}${base(token)}/files/${file.id}/download`
   const parts: BlobPart[] = []
-  for await (const { plain } of fetchDecryptedChunks(url, current.fileKey, current.expected, getAccessToken() ?? '', signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, current.fileKey, current.expected, getAccessToken() ?? '', signal, linkHeaders(token))) {
     parts.push(new Blob([plain as BlobPart]))
   }
   return new Blob(parts, { type: file.mimeType })
@@ -222,6 +226,7 @@ export async function openPublicVideo(
       mimeType: photo.file.mimeType,
       content: () => currentContentOf(photo.file),
       accessToken: getAccessToken() ?? '',
+      headers: linkHeaders(token),
       readWhole: (readSignal) => readPublicOriginal(token, photo, readSignal),
     },
     signal,

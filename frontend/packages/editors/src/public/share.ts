@@ -30,7 +30,7 @@ import { getAccessToken } from '@kutup/session/store'
 import { apiErrorCode } from '@kutup/ui/lib/apiError'
 import { parseLinkFragment } from '@kutup/crypto/linkFragment'
 import { goToLinkHome } from '@kutup/session/apps'
-import { forgetLink, linkHeaders, linkKeyOf, linkPasswordFailure, unlockLink } from '@kutup/drive-core/publicLinkPassword'
+import { forgetLink, linkHeaders, linkKeyOf, linkPasswordFailure, linkRetryAfter, unlockLink } from '@kutup/drive-core/publicLinkPassword'
 
 interface ShareInfo {
   id: string
@@ -110,9 +110,18 @@ export type PublicFailure =
   | 'other'
 
 export class PublicLinkError extends Error {
-  constructor(readonly failure: PublicFailure) {
+  constructor(
+    readonly failure: PublicFailure,
+    /** A locked link's wait, in seconds (`Retry-After`). */
+    readonly retryAfter: number | null = null,
+  ) {
     super(failure)
   }
+}
+
+/** How long a locked link asks to wait, in seconds; null when not said. */
+export function publicRetryAfter(error: unknown): number | null {
+  return error instanceof PublicLinkError ? error.retryAfter : null
 }
 
 /** Why a link did not open, for the page to say. */
@@ -171,7 +180,7 @@ export async function loadShare(token: string, password?: string): Promise<Publi
   } catch (error) {
     const failure = linkFailure(error)
     if (failure === 'passwordWrong' || failure === 'passwordRequired') forgetLink(token)
-    throw new PublicLinkError(failure)
+    throw new PublicLinkError(failure, linkRetryAfter(error))
   }
   let key: Uint8Array
   try {
@@ -342,7 +351,7 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
   const url = `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`
   const parts: Uint8Array[] = []
   let length = 0
-  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, currentExpected(file), viewerToken(), signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, currentExpected(file), viewerToken(), signal, linkHeaders(token))) {
     parts.push(plain)
     length += plain.length
   }
@@ -377,6 +386,7 @@ export async function openPublicFilePlayback(
       mimeType: file.mimeType,
       content: () => Promise.resolve({ fileKey, expected: currentExpected(file) }),
       accessToken: viewerToken(),
+      headers: linkHeaders(token),
       readWhole: (readSignal) => readPublicFile(token, file, readSignal),
     },
     signal,
@@ -403,6 +413,7 @@ export async function downloadPublicFile(token: string, file: PublicFile): Promi
     expectedPlainSize: file.size,
     blobFallbackMaxBytes: async () => (await driveStreamLimits({ anonymous: true })).blobFallbackMaxBytes,
     accessToken: viewerToken(),
+    headers: linkHeaders(token),
   })
 }
 

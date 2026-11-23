@@ -97,21 +97,21 @@ they are all set or all null.
   row locked; the envelope must be at the current epoch/generation.
 - `PUT /api/v1/drive/public-links/{id}/expiry` (owner): `expiresAt`
   (RFC 3339) or null. Expiry must be in the future and at most the site
-  setting `drive.public_link_max_expiry_days` (default 3660, the old
-  constant) ahead; `expiresInHours` on create uses the same setting.
+  setting `drive.public_link_max_expiry_days` ahead (see "Expiry cap");
+  `expiresInHours` on create uses the same setting.
 - `GET /api/v1/drive/public-links/{token}/password` (anonymous): the link
   id, salt and parameters, or 404 for a link without one.
-- The anonymous reads that reveal what a link holds — the link itself, its
-  files, its key history, its album — need `X-Kutup-Link-Proof` on a
-  password link: none answers `401 linkPassword`, a wrong one `401
-  linkPasswordWrong`, and too many wrong ones `429 linkPasswordLocked`.
-  The blob routes (download, state, assets, thumbnails) stay as they are:
-  they need a file id, which only those gated reads give, and serve
-  ciphertext under keys only the password opens.
-- Wrong proofs are counted in `rate_counters` per link
-  (`drive.rate.link_password_failures`, default 30 an hour, `Per::Link`) and
-  per address in memory (`drive.rate.link_password_address_failures`,
-  default 10 an hour), both admin-editable like every rate limit.
+- Every anonymous read through a password link needs `X-Kutup-Link-Proof`,
+  as Proton gates every read behind its SRP session: the link itself, its
+  files, its key history, its album, and its files' content (download,
+  ranges, streams), state, whiteboard pictures and thumbnails. None answers
+  `401 linkPassword`, a wrong one `401 linkPasswordWrong`, too many `429
+  linkPasswordLocked` with `Retry-After`. The web sends the proof through
+  an API-client interceptor (every `/drive/public-links/{token}…` call of an
+  unlocked link) and, for content, through the block reader's request
+  headers (`DriveBlockSource.headers`), which downloads, the Office and
+  Photos pages and the service-worker streams all go through.
+- Wrong proofs: see "Wrong passwords" below.
 - The owner's listings (folder access, file access) add `keyRevision`,
   `hasPassword` and `ownerSecretEnvelope`; `GET /api/v1/drive/limits` adds
   `publicLinkMaxExpiryDays` and `publicLinkPasswordMaxChars` (site setting
@@ -136,12 +136,68 @@ The CLI's folder re-key sends each link's `keyRevision`. `kutup share
 --password/--expires` and opening a password link from `kutup pubshare` are
 on the roadmap.
 
+## Wrong passwords: what Proton does, what Kutup does
+
+**Proton** (WebClients, `usePublicAuth.ts`, `usePublicLink.ts`,
+`api/helpers/withApiHandlers.ts`, `retryHandler.ts`): a wrong password is
+the SRP error `2026`, shown as the notification "Incorrect password. Please
+try again." with the form kept. Throttling is the server's (closed source):
+a `429` is handled by the shared API layer, which waits `Retry-After` and
+retries when the wait is short, else fails; abuse can also bring the human
+verification challenge (`9001`). Nothing in the client locks a link for
+everyone.
+
+**Kutup:** no lock on the link itself (anyone with the URL could set one off
+for every viewer). Wrong proofs count per link and address in
+`rate_counters` (`drive.rate.link_password_failures`, `Per::LinkAndAddress`,
+10 an hour) and per address over every link in memory
+(`drive.rate.link_password_address_failures`, 30 an hour), both editable.
+Past either, that address gets `429 linkPasswordLocked` with `Retry-After`
+(and `retryAfterSeconds`) until its window ends; other addresses still open
+the link. A right proof only reads the count (no lock, no write); a wrong one
+adds to it. The page says Proton's "Incorrect password. Please try again."
+and, locked, "Too many attempts. Please try again in N minutes." from
+`Retry-After`; the session client neither refreshes on the link's `401`s nor
+retries its `429`. No human-verification step: Kutup has no CAPTCHA.
+
+## Expiry cap
+
+`drive.public_link_max_expiry_days` is 0 at first: no cap, links may never
+expire, as Proton's. Above 0 it caps the expiry and every link expires: one
+made without an expiry gets the cap, `PUT …/expiry` refuses null
+(`expiryRequired`), and the dialog keeps the expiry on with the cap as its
+last day.
+
+## Reports on password links
+
+As Proton's report form, the reporter may give the link's password with the
+link; it is stored like the link (`drive_public_link_reports.link_password`,
+only with the link, only while the report is open, erased on every
+resolution) and shown to administrators beside it.
+
+## Rolling back
+
+The down migration drops the columns but cannot put a protected link's
+target back under its URL secret: the target stays sealed under the separate
+link key L, and the owner's copy (purpose 9) holds L, so "copy link" after a
+rollback builds `#v1.<L>`, a link that opens without the password. Before
+rolling back, owners remove passwords (or the links); after it, every link
+that had one is unprotected. Not engineered around.
+
+## Not changed: the content key
+
+Setting a password re-seals the target's key under a new link key but does
+not rotate the folder or file key itself, as Proton's password change keeps
+the share's session key. Someone who opened the link before the password
+keeps what they downloaded and the key; with every read gated they get no
+new bytes through the link.
+
 ## Where Kutup differs from Proton
 
 - Argon2id (Kutup's password KDF) instead of bcrypt, and a verifier bound
   to the URL secret instead of SRP: the URL secret already keeps the
   verifier out of the server's reach, which is what SRP's zero-knowledge
   step buys Proton, so Kutup needs no SRP group or second round trip.
-- The blob routes are not gated (see above); Proton gates every read.
-- Expiry keeps the site's maximum (10 years by default) rather than
-  Proton's fixed 90 days; an administrator can lower it.
+- Expiry has no cap by default (Proton's links may also never expire; its
+  date picker stops at 90 days); an administrator can set one.
+- No human-verification challenge after repeated wrong passwords.

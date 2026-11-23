@@ -22,12 +22,20 @@ vi.mock('@kutup/crypto/publicLink', () => ({
   deriveLinkPasswordV1: vi.fn(() => Promise.resolve({ proof: 'proof-b64', wrapKey: new Uint8Array(32) })),
   openLinkPasswordKeyV1: vi.fn(() => Promise.resolve(FRESH)),
 }))
-const http = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }))
+const http = vi.hoisted(() => {
+  const requestInterceptors: Array<(config: { url?: string; headers: Headers }) => unknown> = []
+  return {
+    get: vi.fn(),
+    put: vi.fn(),
+    requestInterceptors,
+    interceptors: { request: { use: (fn: (config: { url?: string; headers: Headers }) => unknown) => requestInterceptors.push(fn) } },
+  }
+})
 vi.mock('@kutup/session/client', () => ({ default: http }))
 vi.mock('./identity', () => ({ useDriveIdentity: vi.fn() }))
 
 const { linkPassword, linkSecret, setLinkExpiry, setLinkPassword, LinkChanged } = await import('./linkSettings')
-const { forgetLink, linkHeaders, linkKeyOf, linkPasswordFailure, unlockLink } = await import('./publicLinkPassword')
+const { forgetLink, linkHeaders, linkKeyOf, linkPasswordFailure, linkRetryAfter, unlockLink } = await import('./publicLinkPassword')
 
 const me = { accountId: 'me', masterKey: new Uint8Array(32), roots: testRoots(0), accountRef: { server: 'kutup.dev', accountId: 'me' }, incarnationId: 'inc-me' }
 const plain = { id: 'link', token: 'tok', ownerLinkKeyEnvelope: 'owner', keyRevision: 1, expiresAt: null }
@@ -95,6 +103,9 @@ describe('a protected link, for its viewer', () => {
     expect(linkPasswordFailure({ response: { data: { code: 'linkPasswordWrong' } } })).toBe('passwordWrong')
     expect(linkPasswordFailure({ response: { data: { code: 'linkPasswordLocked' } } })).toBe('passwordLocked')
     expect(linkPasswordFailure({ response: { data: { code: 'notFound' } } })).toBeNull()
+    expect(linkRetryAfter({ response: { headers: { 'retry-after': '120' }, data: {} } })).toBe(120)
+    expect(linkRetryAfter({ response: { headers: {}, data: { retryAfterSeconds: 30 } } })).toBe(30)
+    expect(linkRetryAfter({ response: { headers: {}, data: {} } })).toBeNull()
   })
 
   it('sends the proof once unlocked, and opens the link key with the password', async () => {
@@ -103,6 +114,14 @@ describe('a protected link, for its viewer', () => {
     await unlockLink('tok', SECRET, 'hunter2')
     expect(http.get).toHaveBeenCalledWith('/drive/public-links/tok/password')
     expect(linkHeaders('tok')).toEqual({ 'X-Kutup-Link-Proof': 'proof-b64' })
+    // Every API read of that link carries the proof; another link's doesn't.
+    const config = (url: string) => ({ url, headers: new Headers() })
+    const state = config('/drive/public-links/tok/files/f1/state')
+    http.requestInterceptors.forEach((use) => use(state))
+    expect(state.headers.get('X-Kutup-Link-Proof')).toBe('proof-b64')
+    const other = config('/drive/public-links/other/files')
+    http.requestInterceptors.forEach((use) => use(other))
+    expect(other.headers.get('X-Kutup-Link-Proof')).toBeNull()
     const share = { id: 'link', ownerAccountId: 'owner', keyRevision: 2, passwordLinkKeyEnvelope: 'pw' }
     expect(await linkKeyOf('tok', share, SECRET)).toBe(FRESH)
     // An unprotected link's key is the secret itself.

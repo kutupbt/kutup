@@ -77,6 +77,8 @@ export interface PublicPlaybackTarget {
    * A11); empty for anyone else.
    */
   accessToken?: string
+  /** Headers each range request adds: a protected link's proof (docs/plans/drive-link-password.md). */
+  headers?: Record<string, string>
 }
 
 /** A file reached through a public link: the viewer's token if any, and the default limits. */
@@ -95,7 +97,7 @@ export async function openPublicPlayback(
       stream: async (limits, streamSignal) => {
         const { fileKey, expected } = await target.content()
         return openPlayerStream({
-          source: { family: 'drive', url: target.url, fileKey, expected },
+          source: { family: 'drive', url: target.url, fileKey, expected, headers: target.headers },
           accessToken: target.accessToken ?? '',
           mimeType,
           limits,

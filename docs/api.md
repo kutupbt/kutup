@@ -267,10 +267,11 @@ Specific codes, where an app does something particular (a test in
 | `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
 | `signInRequired` | 403 | Public links on this server open only for someone signed in to it |
 | `linkPassword` | 401 | A password-protected public link read without `X-Kutup-Link-Proof`: the page asks for the password |
-| `linkPasswordWrong` | 401 | The link's proof does not match its password (counted against the link and the address) |
-| `linkPasswordLocked` | 429 | Too many wrong passwords for this link (per link, or from this address) in the window: every try is refused until it ends |
+| `linkPasswordWrong` | 401 | The link's proof does not match its password (counted against this link from this address, and this address over every link) |
+| `linkPasswordLocked` | 429 | Too many wrong passwords for this link from this address, or from this address over every link: every try from it is refused until `Retry-After` (seconds, also `retryAfterSeconds`); other addresses still open the link |
 | `expiryInPast` | 400 | A public link's expiry that is not in the future |
 | `expiryTooFar` | 400 | A public link's expiry further ahead than the site's `drive.public_link_max_expiry_days` (`maxDays`) |
+| `expiryRequired` | 400 | Taking a public link's expiry off while the site caps expiry (`drive.public_link_max_expiry_days` above 0): every link expires |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `keysPendingUpgrade` | 409 | The person can't be shared with yet: an account here with no keys (one an administrator made or reset, before its first sign-in), or one on another server still on an X25519 Drive key (docs/plans/pq-shares.md); share with them once they have signed in again |
 | `versionRetentionNotOffered` | 400 | `PATCH /api/v1/account`: the version retention period is not one the administrators offer; `choices` lists those that are |
@@ -3377,7 +3378,7 @@ account: its own where administrators set them, else the site's.
   "streamMaxConcurrent": 3,
   "streamResponseMaxBytes": 5242880,
   "streamBlobFallbackMaxBytes": 1073741824,
-  "publicLinkMaxExpiryDays": 3660,
+  "publicLinkMaxExpiryDays": 0,
   "publicLinkPasswordMaxChars": 50
 }
 ```
@@ -4019,10 +4020,12 @@ sees it.
 }
 ```
 
-`expiresInHours` is optional; omit or send `null` for no expiry; otherwise
-at least 1 and at most the site setting `drive.public_link_max_expiry_days`
-(`drivePublicLinkMaxExpiryDays`, 3660 days at first) ahead, else `400`
-(`expiryTooFar`).
+`expiresInHours` is optional; otherwise at least 1. The site setting
+`drive.public_link_max_expiry_days` (`drivePublicLinkMaxExpiryDays`) is 0 at
+first: no cap, and a link without `expiresInHours` never expires, as
+Proton's. Above 0 it caps the expiry (`400 expiryTooFar` beyond it) and every
+link expires: one made without `expiresInHours` expires that many days
+ahead.
 A link's folder in the trash makes the link answer `404` until it is
 restored. `collectionKeyEnvelope` uses the public-link
 purpose and binds the target collection, owner and current collection epoch.
@@ -4059,15 +4062,17 @@ A block belongs to what a link reaches: no new link to it is made
 or file's access change) only hides it from themselves; the block stays
 until an operator lifts it. Owners' link lists carry `blockedReason`.
 
-**Password-protected links** (docs/plans/drive-link-password.md): the
-reads that show what a link holds (`GET …/:token`, `…/files`, `…/epochs`,
-`…/album`) need the header `X-Kutup-Link-Proof` (base64 of the 32-byte
-proof the URL secret and the password derive, `kutup_crypto::link_password`):
-none answers `401 linkPassword`, a wrong one `401 linkPasswordWrong`, and
-past the limits (`drive.rate.link_password_failures` per link,
-`drive.rate.link_password_address_failures` per address, both an hour)
-`429 linkPasswordLocked`. The blob routes (download, state, assets,
-thumbnails) take no proof: they need a file id, which only those reads give.
+**Password-protected links** (docs/plans/drive-link-password.md): every
+read through the link — `GET …/:token`, `…/files`, `…/epochs`, `…/album`,
+and its files' `…/download` (streams and ranges), `…/state`, `…/assets`,
+`…/thumbnails` — needs the header `X-Kutup-Link-Proof` (base64 of the
+32-byte proof the URL secret and the password derive,
+`kutup_crypto::link_password`): none answers `401 linkPassword`, a wrong one
+`401 linkPasswordWrong`, and past the limits
+(`drive.rate.link_password_failures` per link and address,
+`drive.rate.link_password_address_failures` per address over every link,
+both an hour) `429 linkPasswordLocked` with `Retry-After`. Nothing locks the
+link itself.
 
 ### GET /api/v1/drive/public-links/:token/password
 
@@ -4103,7 +4108,8 @@ and re-seals the target's key under it at its current epoch or generation.
 }
 ```
 
-`password: null` removes it. Answers `{ "keyRevision": 2 }`; `409` when the
+`password: null` removes it. The target's row is locked before the link's,
+as the re-keys lock them. Answers `{ "keyRevision": 2 }`; `409` when the
 link's key revision or the target's key moved on since (reload and retry),
 `404` for a link that isn't the caller's. Each change raises `keyRevision`:
 the folder and file re-key routes (`publicLinks[].keyRevision`, absent = 1)
@@ -4112,8 +4118,8 @@ are refused with `409` for an older one.
 ### PUT /api/v1/drive/public-links/:token/expiry
 
 Sets (`{"expiresAt": "<RFC 3339>"}`) or clears (`{"expiresAt": null}`) when a
-link stops opening (the link's owner). `204`; `400 expiryInPast` or
-`expiryTooFar`.
+link stops opening (the link's owner). `204`; `400 expiryInPast`,
+`expiryTooFar`, or `expiryRequired` (clearing it under a cap).
 
 ---
 
@@ -4278,6 +4284,10 @@ which is not stored.
 key included, so an administrator can see what it shows: it must be one of this
 server's Drive, Office or Photos public pages for this token, else `400`. It is
 erased when the report is resolved. A link with 50 open reports takes no more.
+`linkPassword` (optional, with `link` only, at most 1,024 characters) is a
+password-protected link's password, as Proton's report form takes it; it is
+kept and erased with the link, and `GET /api/v1/admin/reports` shows it beside
+the link.
 
 **Response:** `204 No Content` · `404` unknown link · `410` removed.
 
@@ -6026,7 +6036,7 @@ Return current global server settings.
   "passVaultMaxBytes": 67108864,
   "driveVersionRetentionChoices": [7, 30, 90, 180, 365, 3650],
   "driveTrashRetentionDays": 30,
-  "drivePublicLinkMaxExpiryDays": 3660,
+  "drivePublicLinkMaxExpiryDays": 0,
   "drivePublicLinkPasswordMaxChars": 50,
   "federationConsentRequired": false,
   "chatSendRetentionDays": 30,

@@ -2,20 +2,24 @@
 //!
 //! The server never sees the password or the link's URL secret: it keeps a
 //! verifier of the proof both derive (`kutup_crypto::link_password`) and,
-//! for a protected link, answers the reads that reveal what the link holds
-//! (the link, its files, its key history, its album) only to a request whose
-//! `X-Kutup-Link-Proof` matches:
+//! for a protected link, answers every read through it (the link, its
+//! files, its key history, its album, and the content, state, pictures and
+//! thumbnails of its files) only to a request whose `X-Kutup-Link-Proof`
+//! matches, as Proton gates every read of a protected link:
 //!
 //! - none: `401 linkPassword` (the page asks for the password);
-//! - a wrong one: `401 linkPasswordWrong`, counted against the link (in the
-//!   database, every server process together) and against the address;
-//! - past either limit: `429 linkPasswordLocked`, whatever is sent, until
-//!   the window is over (`drive.rate.link_password_failures`,
-//!   `drive.rate.link_password_address_failures`).
+//! - a wrong one: `401 linkPasswordWrong`, counted;
+//! - past either limit: `429 linkPasswordLocked` with `Retry-After`, until
+//!   the window is over.
 //!
-//! Each try is reserved before the check, in the transaction that holds the
-//! link's counter row, so parallel guesses get no more; a right proof gives
-//! its reservation back.
+//! As Proton Drive: a wrong password is "Incorrect password. Please try
+//! again."; too many make the client wait as `Retry-After` says. There is no
+//! lock of the link itself, which anyone with the URL could set off for
+//! everyone: wrong guesses count per link and address
+//! (`drive.rate.link_password_failures`, in the database, every server
+//! process together) and per address over every link
+//! (`drive.rate.link_password_address_failures`). A right proof only reads
+//! the count; a wrong one adds to it.
 
 use std::net::SocketAddr;
 
@@ -75,18 +79,21 @@ fn wrong() -> AppError {
         .with_details(json!({ "code": "linkPasswordWrong" }))
 }
 
-fn locked() -> AppError {
+fn locked(retry_after: u64) -> AppError {
     AppError::too_many_requests("too many wrong passwords for this link")
         .with_details(json!({ "code": "linkPasswordLocked" }))
+        .with_retry_after(retry_after.max(1))
 }
 
-/// The counter subject of one link: a digest under its own label.
-fn subject(link_id: Uuid) -> [u8; 32] {
+/// The counter subject of one link from one address: a digest under its
+/// own label.
+fn subject(link_id: Uuid, client: &str) -> [u8; 32] {
     hash(
         Suite::V1,
         [
             kutup_crypto::labels::DRIVE_LINK_PASSWORD_RATE_V1,
             link_id.as_bytes().as_slice(),
+            client.as_bytes(),
         ]
         .concat(),
     )
@@ -115,31 +122,24 @@ pub async fn unlock(pool: &PgPool, token: &str, proof: &LinkProof) -> AppResult<
     let Some(sent) = proof.proof.as_deref() else {
         return Err(required());
     };
-    if !LINK_PASSWORD_ADDRESS_FAILURES.has_room(&proof.client) {
-        return Err(locked());
+    let wait = LINK_PASSWORD_ADDRESS_FAILURES.wait(&proof.client);
+    if !wait.is_zero() {
+        return Err(locked(wait.as_secs()));
     }
     let (limit, window) = crate::ratelimit::budget(Limit::LinkPasswordFailures);
-    let mut tx = pool.begin().await?;
-    let count = counters::add(
-        &mut tx,
-        Scope::DriveLinkPassword,
-        &subject(link_id),
-        1,
-        window,
-    )
-    .await?;
-    if count > limit {
-        tx.rollback().await?;
-        return Err(locked());
+    let counted = subject(link_id, &proof.client);
+    let (count, left) = counters::current(pool, Scope::DriveLinkPassword, &counted, window).await?;
+    if count >= limit {
+        return Err(locked(u64::try_from(left).unwrap_or(1)));
     }
     let right = STANDARD
         .decode(sent)
         .is_ok_and(|bytes| kutup_crypto::link_password::verify(&bytes, &verifier));
     if right {
-        // The reservation goes back with the transaction.
-        tx.rollback().await?;
         return Ok(Some(Unlocked { link_key_envelope }));
     }
+    let mut tx = pool.begin().await?;
+    counters::add(&mut tx, Scope::DriveLinkPassword, &counted, 1, window).await?;
     tx.commit().await?;
     LINK_PASSWORD_ADDRESS_FAILURES.allow(&proof.client);
     Err(wrong())

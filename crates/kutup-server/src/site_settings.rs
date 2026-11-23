@@ -1271,13 +1271,15 @@ pub const DRIVE_TRASH_RETENTION_DAYS: NumericSetting = NumericSetting {
     per_account: false,
 };
 /// The furthest ahead a public link's expiry may be set, in days
-/// (docs/plans/drive-link-password.md). The first value is the ten years
-/// links always allowed; Proton allows 90 days.
+/// (docs/plans/drive-link-password.md). 0, the first value, sets no cap and
+/// allows links that never expire, as Proton does; any other value also
+/// makes every link expire: one made without an expiry gets the furthest,
+/// and an expiry can't be taken off.
 pub const DRIVE_PUBLIC_LINK_MAX_EXPIRY_DAYS: NumericSetting = NumericSetting {
     key: "drive.public_link_max_expiry_days",
     field: "drivePublicLinkMaxExpiryDays",
-    default: 3660,
-    min: 1,
+    default: 0,
+    min: 0,
     max: 36_600,
     unit: SettingUnit::Days,
     per_account: false,

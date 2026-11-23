@@ -40,6 +40,26 @@ export async function unlockLink(token: string, secret: Uint8Array, password: st
   unlocked.set(token, await deriveLinkPasswordV1(secret, password, data))
 }
 
+// Every read of an unlocked link through the API client carries its proof:
+// the listings, a note's state, a whiteboard's pictures, thumbnails. The
+// content itself is read by the block reader, which takes `linkHeaders`.
+const LINK_PATH = /\/drive\/public-links\/([^/?#]+)(?:[/?#]|$)/
+api.interceptors.request.use((config) => {
+  const token = LINK_PATH.exec(config.url ?? '')?.[1]
+  const entry = token ? unlocked.get(decodeURIComponent(token)) : undefined
+  if (entry && !config.headers.has(LINK_PROOF_HEADER)) config.headers.set(LINK_PROOF_HEADER, entry.proof)
+  return config
+})
+
+/** How long until a locked link takes passwords again, in seconds (`Retry-After`); null when not said. */
+export function linkRetryAfter(error: unknown): number | null {
+  const response = (error as { response?: { headers?: Record<string, unknown>; data?: { retryAfterSeconds?: unknown } } }).response
+  const header = Number(response?.headers?.['retry-after'])
+  if (Number.isFinite(header) && header > 0) return header
+  const body = Number(response?.data?.retryAfterSeconds)
+  return Number.isFinite(body) && body > 0 ? body : null
+}
+
 /** Forgets a link's password (it was wrong, or changed). */
 export function forgetLink(token: string): void {
   unlocked.delete(token)

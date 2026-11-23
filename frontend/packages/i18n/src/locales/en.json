@@ -317,6 +317,8 @@
     "detailsHint": "Optional. What should the administrators look for?",
     "shareLink": "Let the administrators open this link",
     "shareLinkHint": "Files shared by link are end-to-end encrypted: the server can't see them. This sends the whole link, its key included, so the administrators can look. It is deleted once they have dealt with your report.",
+    "linkPassword": "Link password (optional)",
+    "linkPasswordHint": "Only if the link asks for a password: without it the administrators can't open what it shares. Deleted with the link once they have dealt with your report.",
     "send": "Send report",
     "sentTitle": "Report sent",
     "sent": "Thank you. The administrators will look at it.",
@@ -329,6 +331,9 @@
     "description": "Who opens the link, and until when.",
     "expiry": "Expiry",
     "expiryHint": "Turn this link off at the end of a chosen day",
+    "expiryRequired_one": "Links on this server expire within {{count}} day",
+    "expiryRequired_other": "Links on this server expire within {{count}} days",
+    "expiryFuture": "Choose a day from tomorrow on.",
     "expiryDate": "Expiry date",
     "expiryRange_one": "Choose a day from tomorrow to {{count}} day ahead.",
     "expiryRange_other": "Choose a day from tomorrow to {{count}} days ahead.",
@@ -338,6 +343,8 @@
     "passwordPlaceholder": "Choose password",
     "passwordTooLong_one": "At most {{count}} character",
     "passwordTooLong_other": "At most {{count}} characters",
+    "passwordMissing": "Type a password, or turn the password off to remove it.",
+    "unreadable": "The link's password could not be opened on this device, so it can't be shown or changed here. The expiry can still be changed.",
     "save": "Save changes",
     "saved": "Link settings saved",
     "failed": "The settings could not be saved. Try again.",
@@ -356,8 +363,10 @@
     "placeholder": "Enter password",
     "hint": "The link's owner has the password",
     "continue": "Continue",
-    "wrong": "That password is not right.",
-    "locked": "Too many wrong passwords for this link. Try again in an hour."
+    "wrong": "Incorrect password. Please try again.",
+    "locked": "Too many attempts. Please try again later.",
+    "lockedFor_one": "Too many attempts. Please try again in {{count}} minute.",
+    "lockedFor_other": "Too many attempts. Please try again in {{count}} minutes."
   },
   "identityCheck": {
     "changed": {

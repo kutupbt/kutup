@@ -104,21 +104,20 @@ pub async fn set_password(
     let owner =
         Uuid::parse_str(&user.account_id).map_err(|_| AppError::internal("invalid user id"))?;
     let mut tx = state.pool.begin().await?;
-    let row: Option<(Uuid, String, Uuid, i32)> = sqlx::query_as(
-        "SELECT id, share_type, target_id, key_revision FROM drive_public_shares
-          WHERE token = $1 AND owner_account_id = $2 AND owner_removed_at IS NULL
-          FOR UPDATE",
+    // What the link reaches, unlocked: the target's row is locked first, as
+    // the folder and file re-keys lock it before the link rows (one order,
+    // no deadlock).
+    let row: Option<(Uuid, String, Uuid)> = sqlx::query_as(
+        "SELECT id, share_type, target_id FROM drive_public_shares
+          WHERE token = $1 AND owner_account_id = $2 AND owner_removed_at IS NULL",
     )
     .bind(&token)
     .bind(owner)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((id, share_type, target, revision)) = row else {
+    let Some((id, share_type, target)) = row else {
         return Err(AppError::not_found("not found"));
     };
-    if revision != req.from_key_revision {
-        return Err(changed());
-    }
     // The target's key now, locked against a re-key until this commits.
     let current: Option<i32> = match share_type.as_str() {
         "collection" => {
@@ -149,7 +148,18 @@ pub async fn set_password(
     let Some(current) = current else {
         return Err(AppError::not_found("not found"));
     };
-    if current != req.key_epoch {
+    // Then the link's row.
+    let revision: Option<i32> = sqlx::query_scalar(
+        "SELECT key_revision FROM drive_public_shares
+          WHERE id = $1 AND owner_removed_at IS NULL FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(revision) = revision else {
+        return Err(AppError::not_found("not found"));
+    };
+    if revision != req.from_key_revision || current != req.key_epoch {
         return Err(changed());
     }
     let epoch = u32::try_from(current).map_err(|_| AppError::conflict("invalid key epoch"))?;
@@ -282,8 +292,14 @@ pub async fn set_expiry(
 ) -> AppResult<Response> {
     let owner =
         Uuid::parse_str(&user.account_id).map_err(|_| AppError::internal("invalid user id"))?;
-    if let Some(at) = req.expires_at {
-        check_expiry(&state, at).await?;
+    match req.expires_at {
+        Some(at) => check_expiry(&state, at).await?,
+        // Under a cap every link expires.
+        None if max_expiry_days(&state).await? > 0 => {
+            return Err(AppError::bad_request("this server's links must expire")
+                .with_details(serde_json::json!({ "code": "expiryRequired" })))
+        }
+        None => {}
     }
     let updated = sqlx::query(
         "UPDATE drive_public_shares SET expires_at = $3
@@ -300,17 +316,22 @@ pub async fn set_expiry(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// An expiry is in the future and at most the site's maximum ahead.
-pub(crate) async fn check_expiry(state: &AppState, at: OffsetDateTime) -> AppResult<()> {
-    let days = crate::site_settings::DRIVE_PUBLIC_LINK_MAX_EXPIRY_DAYS
+/// The site's cap on how far ahead a link's expiry may be, in days; 0: none.
+pub(crate) async fn max_expiry_days(state: &AppState) -> AppResult<i64> {
+    Ok(crate::site_settings::DRIVE_PUBLIC_LINK_MAX_EXPIRY_DAYS
         .load(&state.pool)
-        .await?;
+        .await?)
+}
+
+/// An expiry is in the future and, under a cap, at most that far ahead.
+pub(crate) async fn check_expiry(state: &AppState, at: OffsetDateTime) -> AppResult<()> {
+    let days = max_expiry_days(state).await?;
     let now = OffsetDateTime::now_utc();
     if at <= now {
         return Err(AppError::bad_request("expiresAt is in the past")
             .with_details(serde_json::json!({ "code": "expiryInPast" })));
     }
-    if at > now + time::Duration::days(days) {
+    if days > 0 && at > now + time::Duration::days(days) {
         return Err(AppError::bad_request("expiresAt is too far ahead")
             .with_details(serde_json::json!({ "code": "expiryTooFar", "maxDays": days })));
     }

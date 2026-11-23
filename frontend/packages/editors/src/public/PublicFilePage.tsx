@@ -23,6 +23,7 @@ import {
   downloadPublicFile,
   loadShare,
   publicFailure,
+  publicRetryAfter,
   publicFileBase,
   publicFileKeyAt,
   readPublicFile,
@@ -73,6 +74,7 @@ export function PublicFilePage() {
       <Chrome>
         <PublicLinkPassword
           refusal={failure === 'passwordWrong' ? 'wrong' : failure === 'passwordLocked' ? 'locked' : null}
+          retryAfter={publicRetryAfter(share.error)}
           onSubmit={(value) => setPassword((last) => ({ value, attempt: (last?.attempt ?? 0) + 1 }))}
         />
       </Chrome>

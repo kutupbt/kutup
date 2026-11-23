@@ -128,7 +128,10 @@ pub async fn create_public_share(
     )?;
 
     let token = random_token(32);
+    let max_days = crate::handlers::link_settings::max_expiry_days(&state).await?;
     let expires_at: Option<OffsetDateTime> = match req.expires_in_hours {
+        // No expiry asked for: never, or under the site's cap, the furthest.
+        None if max_days > 0 => Some(OffsetDateTime::now_utc() + time::Duration::days(max_days)),
         None => None,
         // Positive and at most the site's maximum (a large value would
         // overflow the date arithmetic before it).
@@ -522,6 +525,7 @@ async fn link_reaches(
     token: &str,
     file_id: &str,
     signed_in: bool,
+    proof: &crate::link_password::LinkProof,
 ) -> AppResult<Uuid> {
     crate::handlers::link_reports::ensure_link_up(&state.pool, token, signed_in).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
@@ -538,6 +542,8 @@ async fn link_reaches(
             return Err(AppError::new(StatusCode::GONE, "link expired"));
         }
     }
+    // A password-protected link serves no byte without its proof.
+    crate::link_password::unlock(&state.pool, token, proof).await?;
 
     let fid = Uuid::parse_str(file_id).map_err(|_| AppError::not_found("not found"))?;
     let coll_id: Option<Uuid> = sqlx::query_scalar(
@@ -605,10 +611,11 @@ pub struct StateQuery {
 pub async fn public_share_state(
     State(state): State<AppState>,
     viewer: crate::middleware::Viewer,
+    proof: crate::link_password::LinkProof,
     Path((token, file_id)): Path<(String, String)>,
     Query(query): Query<StateQuery>,
 ) -> AppResult<Response> {
-    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in, &proof).await?;
     let revision = query
         .revision
         .as_deref()
@@ -660,9 +667,10 @@ pub async fn public_share_state(
 pub async fn public_share_asset(
     State(state): State<AppState>,
     viewer: crate::middleware::Viewer,
+    proof: crate::link_password::LinkProof,
     Path((token, file_id, asset_id)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
-    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in, &proof).await?;
     crate::handlers::file_assets::asset_response(&state, fid, &asset_id).await
 }
 
@@ -691,10 +699,11 @@ pub async fn public_share_asset(
 pub async fn download_public_share_file(
     State(state): State<AppState>,
     viewer: crate::middleware::Viewer,
+    proof: crate::link_password::LinkProof,
     Path((token, file_id)): Path<(String, String)>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in, &proof).await?;
     // A public link shows the file as it is now, edits included.
     let content = crate::file_content::current_content(&state.pool, fid)
         .await?
@@ -825,10 +834,11 @@ pub async fn public_album_items(
 pub async fn public_thumbnail(
     State(state): State<AppState>,
     viewer: crate::middleware::Viewer,
+    proof: crate::link_password::LinkProof,
     Path((token, file_id, variant)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
     crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
-    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in, &proof).await?;
     crate::handlers::file_thumbnails::serve_thumbnail(&state, fid, &variant).await
 }

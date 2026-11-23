@@ -81,17 +81,25 @@ test('a file link with a password asks for it; the URL stays the same and removi
   // A wrong password is refused and counted; nothing shows.
   await page.getByTestId('link-password-entry').fill('not the password')
   await page.getByTestId('link-password-continue').click()
-  await expect(page.getByText('That password is not right.')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText('Incorrect password. Please try again.')).toBeVisible({ timeout: 60_000 })
 
+  // The note's content is read with the proof: its URL, to ask again without.
+  const contentRead = page.waitForRequest((r) => /\/api\/v1\/drive\/public-links\/[^/]+\/files\/[^/]+\/(state|download)/.test(r.url()))
   await page.getByTestId('link-password-entry').fill(LINK_PASSWORD)
   await page.getByTestId('link-password-continue').click()
   await expect(page.locator('.prose')).toContainText('Behind a link password', { timeout: 60_000 })
+  const read = await contentRead
+  expect(read.headers()['x-kutup-link-proof']).toBeTruthy()
 
   // The server shows nothing of a protected link without its proof.
   const token = new URL(link).pathname.split('/')[2]
   const bare = await page.request.get(apiUrl(`/drive/public-links/${token}`))
   expect(bare.status()).toBe(401)
   expect((await bare.json()).code).toBe('linkPassword')
+  // Nor any byte of its files: every read through the link needs the proof.
+  const bareContent = await page.request.get(read.url(), { headers: { Range: 'bytes=0-15' } })
+  expect(bareContent.status()).toBe(401)
+  expect((await bareContent.json()).code).toBe('linkPassword')
 
   // The owner removes the password: the same link opens without one.
   await drive.getByRole('button', { name: 'Share', exact: true }).click()

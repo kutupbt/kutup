@@ -217,6 +217,7 @@ export function PublicAlbumPage() {
         {asksPassword ? (
           <PublicLinkPassword
             refusal={failure === 'passwordWrong' ? 'wrong' : failure === 'passwordLocked' ? 'locked' : null}
+            retryAfter={album.error instanceof PublicAlbumError ? album.error.retryAfter : null}
             onSubmit={(value) => setPassword((last) => ({ value, attempt: (last?.attempt ?? 0) + 1 }))}
           />
         ) : failure ? (

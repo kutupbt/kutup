@@ -9,7 +9,7 @@ import { PublicLinkPassword } from '@kutup/drive-ui/PublicLinkPassword'
 import { PublicNotice } from '@kutup/drive-ui/PublicNotice'
 import { publicDocumentUrl } from '@kutup/editors/paths'
 import { loadAppDirectory } from '@kutup/session/apps'
-import { downloadPublicFile, loadShare, publicFailure, type PublicFile } from '@kutup/editors/public/share'
+import { downloadPublicFile, loadShare, publicFailure, publicRetryAfter, type PublicFile } from '@kutup/editors/public/share'
 import { Alert } from '@kutup/ui/components/alert'
 import { KutupLogo } from '@kutup/ui/components/brand'
 import { LocaleToggle } from '@kutup/ui/components/locale-toggle'
@@ -92,6 +92,7 @@ export function PublicSharePage() {
       {asksPassword ? (
         <PublicLinkPassword
           refusal={failure === 'passwordWrong' ? 'wrong' : failure === 'passwordLocked' ? 'locked' : null}
+          retryAfter={publicRetryAfter(share.error)}
           onSubmit={(value) => setPassword((last) => ({ value, attempt: (last?.attempt ?? 0) + 1 }))}
         />
       ) : failure ? (

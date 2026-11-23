@@ -872,6 +872,7 @@
       "linkRemoved": "taken down",
       "openLink": "Open the link",
       "noLink": "The reporter did not include the link.",
+      "linkPassword": "The link's password, as the reporter gave it:",
       "dismiss": "Dismiss",
       "dismissed": "Report dismissed",
       "remove": "Take link down",
@@ -1124,7 +1125,7 @@
         "driveTrashRetentionDays": "Keep trashed items (days)",
         "driveTrashRetentionDaysHint": "How long a deleted file or folder can be restored before it is deleted for good. 0 keeps the trash until its owner empties it.",
         "drivePublicLinkMaxExpiryDays": "Furthest public link expiry (days)",
-        "drivePublicLinkMaxExpiryDaysHint": "How far ahead an owner may set a public link to expire.",
+        "drivePublicLinkMaxExpiryDaysHint": "How far ahead an owner may set a public link to expire. 0: no limit, and links may never expire; any other value makes every link expire.",
         "drivePublicLinkPasswordMaxChars": "Longest public link password (characters)",
         "drivePublicLinkPasswordMaxCharsHint": "The longest password an owner may set on a public link.",
         "driveUploadMaxBytes": "Largest upload (bytes)",
@@ -1629,7 +1630,7 @@
         "capability": "capability",
         "recipient": "recipient",
         "forwarding": "forwarding",
-        "link": "link",
+        "linkAndAddress": "link and address",
         "connection": "connection",
         "server": "server"
       },
@@ -1690,8 +1691,8 @@
             "collab_bytes_per_second": "Collaboration bytes per socket",
             "collab_byte_burst": "Collaboration byte burst",
             "reports": "Reports on public links",
-            "link_password_failures": "Wrong passwords for one public link",
-            "link_password_address_failures": "Wrong public link passwords from one address"
+            "link_password_failures": "Wrong passwords for one public link from one address",
+            "link_password_address_failures": "Wrong public link passwords from one address, over every link"
           }
         },
         "chat": {
@@ -1810,8 +1811,8 @@
             "collab_bytes_per_second": "Collaboration bytes one socket sends a second, on average.",
             "collab_byte_burst": "Collaboration bytes one socket may send in a burst.",
             "reports": "Reports on public links, which need no account.",
-            "link_password_failures": "Wrong passwords for one public link, from anywhere: guessing a link's password. Past it the link refuses every password until the hour is over.",
-            "link_password_address_failures": "Wrong public link passwords from one address."
+            "link_password_failures": "Wrong passwords for one public link from one address: guessing a link's password. Past it that address waits out the hour; others still open the link.",
+            "link_password_address_failures": "Wrong public link passwords from one address, over every link."
           }
         },
         "chat": {

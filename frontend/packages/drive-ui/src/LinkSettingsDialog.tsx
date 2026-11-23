@@ -57,6 +57,8 @@ export function LinkSettingsDialog({
   const [password, setPassword] = useState('')
   // The current password, opened from the owner's copy; null while it opens.
   const [current, setCurrent] = useState<string | null>(null)
+  // The owner's copy did not open: the password can't be shown or changed.
+  const [unreadable, setUnreadable] = useState(false)
   const [discarding, setDiscarding] = useState(false)
 
   const linkId = link?.id
@@ -65,6 +67,7 @@ export function LinkSettingsDialog({
     setExpiryOn(Boolean(link.expiresAt))
     setExpiry(link.expiresAt ? dateValue(new Date(link.expiresAt)) : '')
     setCurrent(null)
+    setUnreadable(false)
     setDiscarding(false)
     save.reset()
     let live = true
@@ -75,7 +78,9 @@ export function LinkSettingsDialog({
         setPassword(value)
         setPasswordOn(value !== '')
       },
-      () => live && setCurrent(''),
+      () => {
+        if (live) setUnreadable(true)
+      },
     )
     return () => {
       live = false
@@ -87,19 +92,25 @@ export function LinkSettingsDialog({
   if (!link || !target) return null
 
   const maxChars = limits.data?.passwordMaxChars ?? 50
-  const maxDays = limits.data?.maxExpiryDays ?? 3660
+  // 0: no cap, and links may never expire; otherwise every link expires.
+  const maxDays = limits.data?.maxExpiryDays ?? 0
+  const expiryRequired = maxDays > 0
   const today = new Date()
   const min = dateValue(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1))
   // A day less than the maximum: the end of that day stays inside it.
-  const max = dateValue(new Date(today.getFullYear(), today.getMonth(), today.getDate() + maxDays - 1))
+  const max = expiryRequired ? dateValue(new Date(today.getFullYear(), today.getMonth(), today.getDate() + maxDays - 1)) : undefined
+  const expiryShown = expiryOn || expiryRequired
 
+  // A password is removed only by turning it off: on with an empty field is not a choice.
   const newPassword = passwordOn ? password : ''
-  const newExpiry = expiryOn && expiry ? expiry : ''
-  const passwordChanged = current !== null && newPassword !== current
+  const passwordMissing = passwordOn && password === ''
+  const newExpiry = expiryShown && expiry ? expiry : ''
+  const passwordChanged = current !== null && !unreadable && newPassword !== current
   const expiryChanged = newExpiry !== initialExpiry
   const dirty = passwordChanged || expiryChanged
   const tooLong = [...password].length > maxChars
-  const expiryInvalid = expiryOn && expiry !== '' && (expiry < min || expiry > max)
+  const expiryInvalid = expiryShown && (expiry === '' ? expiryRequired : expiry < min || (max !== undefined && expiry > max))
+  const invalid = tooLong || expiryInvalid || passwordMissing
 
   function close() {
     if (dirty && !save.isPending && !discarding) {
@@ -111,7 +122,7 @@ export function LinkSettingsDialog({
 
   function submit(e: FormEvent) {
     e.preventDefault()
-    if (!link || !target || !dirty || tooLong || expiryInvalid) return
+    if (!link || !target || !dirty || invalid) return
     save.mutate(
       {
         link,
@@ -146,17 +157,19 @@ export function LinkSettingsDialog({
             <div className="flex items-start gap-3">
               <Checkbox
                 id="link-expiry-on"
-                checked={expiryOn}
-                disabled={save.isPending}
+                checked={expiryShown}
+                disabled={save.isPending || expiryRequired}
                 onCheckedChange={(value) => setExpiryOn(value === true)}
                 data-testid="link-expiry-toggle"
               />
               <div className="space-y-0.5">
                 <Label htmlFor="link-expiry-on">{t('linkSettings.expiry')}</Label>
-                <p className="text-xs text-muted-foreground">{t('linkSettings.expiryHint')}</p>
+                <p className="text-xs text-muted-foreground">
+                  {expiryRequired ? t('linkSettings.expiryRequired', { count: maxDays }) : t('linkSettings.expiryHint')}
+                </p>
               </div>
             </div>
-            {expiryOn ? (
+            {expiryShown ? (
               <Input
                 type="date"
                 aria-label={t('linkSettings.expiryDate')}
@@ -170,7 +183,11 @@ export function LinkSettingsDialog({
                 data-testid="link-expiry-date"
               />
             ) : null}
-            {expiryInvalid ? <p className="text-xs text-destructive">{t('linkSettings.expiryRange', { count: maxDays })}</p> : null}
+            {expiryInvalid ? (
+              <p className="text-xs text-destructive">
+                {expiryRequired ? t('linkSettings.expiryRange', { count: maxDays }) : t('linkSettings.expiryFuture')}
+              </p>
+            ) : null}
           </section>
 
           <section className="space-y-2">
@@ -178,7 +195,7 @@ export function LinkSettingsDialog({
               <Checkbox
                 id="link-password-on"
                 checked={passwordOn}
-                disabled={save.isPending || current === null}
+                disabled={save.isPending || current === null || unreadable}
                 onCheckedChange={(value) => setPasswordOn(value === true)}
                 data-testid="link-password-toggle"
               />
@@ -202,6 +219,8 @@ export function LinkSettingsDialog({
               />
             ) : null}
             {tooLong ? <p className="text-xs text-destructive">{t('linkSettings.passwordTooLong', { count: maxChars })}</p> : null}
+            {passwordMissing ? <p className="text-xs text-destructive">{t('linkSettings.passwordMissing')}</p> : null}
+            {unreadable ? <Alert variant="error">{t('linkSettings.unreadable')}</Alert> : null}
           </section>
 
           {discarding ? (
@@ -224,7 +243,7 @@ export function LinkSettingsDialog({
             <Button type="button" variant="outline" onClick={close} disabled={save.isPending}>
               {t('common.cancel')}
             </Button>
-            <Button type="submit" loading={save.isPending} disabled={!dirty || tooLong || expiryInvalid} data-testid="link-settings-save">
+            <Button type="submit" loading={save.isPending} disabled={!dirty || invalid} data-testid="link-settings-save">
               {t('linkSettings.save')}
             </Button>
           </DialogFooter>

@@ -31,8 +31,8 @@ pub enum Per {
     Recipient,
     /// One mail forwarding.
     Forwarding,
-    /// One public link (its password's wrong guesses).
-    Link,
+    /// One public link from one address (its password's wrong guesses).
+    LinkAndAddress,
     /// One open connection (a collaboration socket).
     Connection,
     /// The whole server.
@@ -549,21 +549,21 @@ pub static SPECS: &[Spec] = &[
         LinkPasswordFailures,
         "drive.rate.link_password_failures",
         Some("RATE_LIMIT_LINK_PASSWORD_FAILURES_PER_HOUR"),
-        30,
+        10,
         Events(HOUR),
-        Link,
+        LinkAndAddress,
         Drive,
-        "Wrong passwords for one public link, from anywhere: guessing a link's password. Past it the link refuses every password until the hour is over."
+        "Wrong passwords for one public link from one address: guessing a link's password. Past it that address waits out the hour; others still open the link."
     ),
     spec!(
         LinkPasswordAddressFailures,
         "drive.rate.link_password_address_failures",
         Some("RATE_LIMIT_LINK_PASSWORD_ADDRESS_FAILURES_PER_HOUR"),
-        10,
+        30,
         Events(HOUR),
         Address,
         Drive,
-        "Wrong public link passwords from one address."
+        "Wrong public link passwords from one address, over every link."
     ),
     spec!(
         ChatKeysAccount,

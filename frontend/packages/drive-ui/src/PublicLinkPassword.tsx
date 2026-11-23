@@ -16,9 +16,12 @@ export type PasswordRefusal = 'wrong' | 'locked' | null
  */
 export function PublicLinkPassword({
   refusal,
+  retryAfter = null,
   onSubmit,
 }: {
   refusal: PasswordRefusal
+  /** A locked link's wait in seconds (`Retry-After`), as Proton's pages say it. */
+  retryAfter?: number | null
   onSubmit: (password: string) => void | Promise<void>
 }) {
   const { t } = useTranslation()
@@ -63,7 +66,11 @@ export function PublicLinkPassword({
               />
             )}
           </Field>
-          {refusal === 'locked' ? <Alert variant="error">{t('linkPassword.locked')}</Alert> : null}
+          {refusal === 'locked' ? (
+            <Alert variant="error">
+              {retryAfter ? t('linkPassword.lockedFor', { count: Math.max(1, Math.ceil(retryAfter / 60)) }) : t('linkPassword.locked')}
+            </Alert>
+          ) : null}
           <Button type="submit" className="w-full" loading={busy} disabled={!password} data-testid="link-password-continue">
             {t('linkPassword.continue')}
           </Button>
