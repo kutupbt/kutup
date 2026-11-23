@@ -30,6 +30,60 @@ esac
 
 mkdir -p "$output_dir"
 
+# The class of an error text (stdin, one per line) as a fixed label, with a
+# constraint's name when it names one; counted. Nothing else of the text.
+error_classes() {
+  local line class constraint
+  while IFS= read -r line; do
+    constraint=""
+    case "$line" in
+      *"pool timed out"*) class=pool_timed_out ;;
+      *"pool closed"*) class=pool_closed ;;
+      *"deadlock detected"*) class=deadlock ;;
+      *"could not serialize"*) class=serialization_failure ;;
+      *"canceling statement due to lock timeout"*) class=lock_timeout ;;
+      *"canceling statement due to statement timeout"*) class=statement_timeout ;;
+      *"canceling statement"*) class=statement_canceled ;;
+      *"violates unique constraint"*) class=unique_violation ;;
+      *"violates check constraint"*) class=check_violation ;;
+      *"violates foreign key constraint"*) class=foreign_key_violation ;;
+      *"violates not-null constraint"*) class=not_null_violation ;;
+      *"violates exclusion constraint"*) class=exclusion_violation ;;
+      *"too many connections"* | *"remaining connection slots"*) class=too_many_connections ;;
+      *"connection"*"closed"* | *"connection"*"lost"* | *"connection reset"* | *"broken pipe"* | *"Connection refused"*) class=connection_lost ;;
+      *"invalid input syntax"* | *"invalid byte sequence"*) class=invalid_input ;;
+      *"value too long"* | *"out of range"*) class=value_out_of_range ;;
+      *"does not exist"*) class=missing_object ;;
+      *"database error"*) class=database_other ;;
+      *) class=other ;;
+    esac
+    if [[ "$line" =~ constraint\ \\?\"([a-z0-9_]{1,63})\\?\" ]]; then
+      constraint=" constraint=${BASH_REMATCH[1]}"
+    fi
+    printf '%s%s\n' "$class" "$constraint"
+  done | sort | uniq -c | awk '{ $1 = $1; n = $1; $1 = ""; sub(/^ /, ""); print $0 " count=" n }'
+}
+
+# A server request-failure line: its status (a number) and its class.
+classify_request_failures() {
+  local line status
+  while IFS= read -r line; do
+    status=""
+    [[ "$line" =~ status=([0-9]{3}) ]] && status="${BASH_REMATCH[1]}"
+    printf 'status=%s %s\n' "${status:-unknown}" "$(error_classes <<<"$line" | sed 's/ count=1$//')"
+  done | sort | uniq -c | awk '{ n = $1; $1 = ""; sub(/^ /, ""); print $0 " count=" n }'
+}
+
+# A database log line: its severity and class.
+classify_database_errors() {
+  local line severity
+  while IFS= read -r line; do
+    severity=ERROR
+    [[ "$line" =~ (FATAL|PANIC): ]] && severity="${BASH_REMATCH[1]}"
+    printf 'severity=%s %s\n' "$severity" "$(error_classes <<<"$line" | sed 's/ count=1$//')"
+  done | sort | uniq -c | awk '{ n = $1; $1 = ""; sub(/^ /, ""); print $0 " count=" n }'
+}
+
 compose=(docker compose)
 if [[ -n "$project" ]]; then
   compose+=(--project-name "$project")
@@ -80,5 +134,35 @@ for service in "${backends[@]}"; do
     printf 'quota_lines=%s\n' "$(grep -Eic 'quota|storage[_ -]?full' <<<"$logs" || true)"
     printf 'timeout_lines=%s\n' "$(grep -Eic 'timeout|timed out' <<<"$logs" || true)"
   } >"$output_dir/$service-log-counts.txt"
+  # What each failed request (a 5xx the server logged) failed on, as fixed
+  # classes and the HTTP status only: never the message, a path or a value.
+  # A constraint's name is schema, not data, so it is kept.
+  grep -E 'request failed' <<<"$logs" | classify_request_failures >"$output_dir/$service-request-failures.txt" || true
+  [[ -s "$output_dir/$service-request-failures.txt" ]] || echo 'request_failures=0' >"$output_dir/$service-request-failures.txt"
   unset logs
+done
+
+for service in "${services[@]}"; do
+  # The database's own errors, by class (its log can quote statements and
+  # values, so only the class and a constraint's name are kept).
+  logs="$("${compose[@]}" logs --no-color "$service" 2>/dev/null || true)"
+  grep -E '(ERROR|FATAL|PANIC):' <<<"$logs" | classify_database_errors >"$output_dir/$service-database-errors.txt" || true
+  [[ -s "$output_dir/$service-database-errors.txt" ]] || echo 'database_errors=0' >"$output_dir/$service-database-errors.txt"
+  unset logs
+  # Who is waiting on what when the run failed: counts by state, wait event
+  # and lock mode (fixed labels from the server's catalogs, no query text).
+  "${compose[@]}" exec -T "$service" psql -U kutup -d kutup -Atc "
+    SELECT 'activity ' || COALESCE(state, 'none') || ' ' || COALESCE(wait_event_type, '-') || '/' || COALESCE(wait_event, '-')
+           || ' oldest_s=' || COALESCE(round(max(extract(epoch FROM now() - query_start)))::text, '-')
+           || ' count=' || COUNT(*)
+      FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+     GROUP BY state, wait_event_type, wait_event
+    UNION ALL
+    SELECT 'locks ' || locktype || ' ' || mode || ' granted=' || granted || ' count=' || COUNT(*)
+      FROM pg_locks GROUP BY locktype, mode, granted
+    UNION ALL
+    SELECT 'deadlocks=' || deadlocks || ' conflicts=' || conflicts || ' rollbacks=' || xact_rollback
+      FROM pg_stat_database WHERE datname = current_database();
+  " >"$output_dir/$service-database-activity.txt" 2>/dev/null ||
+    printf '%s\n' 'database_activity_unavailable=1' >"$output_dir/$service-database-activity.txt"
 done

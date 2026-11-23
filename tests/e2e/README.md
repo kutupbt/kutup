@@ -248,7 +248,10 @@ This selects `safe-reporter.ts`, disables traces, screenshots, videos, and raw
 page/network captures, and uses only static spec locations plus allow-listed
 durable phase names. On stack failure,
 `scripts/collect-chat-e2e-diagnostics.sh` writes sanitized aggregate service,
-checkpoint, and error-category counts. It must never retain keys, phrases,
+checkpoint, and error-category counts: per backend, the HTTP status and a
+fixed error class of each failed request (`pool_timed_out`, `deadlock`,
+`unique_violation constraint=<name>`, ...); per database, its logged errors by
+class and a snapshot of waits and locks by state and mode. It must never retain keys, phrases,
 tokens, ciphertext, capabilities, digests, or stable user identifiers.
 
 CI uploads only `tests/e2e/sanitized-results/**` for these jobs. If a failure is
