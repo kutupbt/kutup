@@ -121,7 +121,7 @@ reference only where Proton has nothing.
 |---|---|---|
 | Import from Gmail, Outlook, IMAP (Easy Switch) | `activation/` | ❌ |
 | Export, backup | `ImportExportAppSection.tsx` | ✅ a message's More actions → Export (.eml); Settings → General → Export mail: all mail, a folder or a label as a zip of .eml files, opened in the browser, streamed, with progress and Stop (spec 175). Proton's is a desktop app |
-| IMAP and SMTP for desktop clients (Bridge), SMTP tokens | `ProtonMailBridgeSection.tsx`, `SMTPSubmissionSection.tsx` | ❌ (a local bridge, as Proton's, keeps E2EE) |
+| IMAP and SMTP for desktop clients (Bridge), SMTP tokens | `ProtonMailBridgeSection.tsx`, `SMTPSubmissionSection.tsx` | ❌ a local bridge, as Proton's, keeps E2EE: plan [`mail-bridge.md`](mail-bridge.md) (`kutup mail-bridge`); SMTP tokens are out of scope |
 | Mobile apps | | ➖ native apps' plans |
 | Offline cache | (none; local search index only) | ❌ ([`browser-storage`](../research/16-browser-storage-architecture.md)) |
 | Calendar invitations in mail (Accept, Decline) | `ExtraEvent.tsx` | ➖ with Calendar |

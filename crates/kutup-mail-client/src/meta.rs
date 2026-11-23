@@ -33,7 +33,7 @@ pub struct AttachmentMeta {
     pub size: i64,
 }
 
-/// What `POST /api/mail/send`'s `meta` carries of the message itself.
+/// What `POST /api/v1/mail/send`'s `meta` carries of the message itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendFields {

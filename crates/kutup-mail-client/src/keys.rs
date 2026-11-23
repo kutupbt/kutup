@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 /// recipients'.
 pub const KEY_LIST_GUARD_SCOPE: &str = "mail-key-list";
 
-/// One of an address's keys as `GET /api/mail/keys` lists it (the server's
+/// One of an address's keys as `GET /api/v1/mail/keys` lists it (the server's
 /// word: its flags count for nothing).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,7 +75,7 @@ pub struct GroupKeyLookup {
     pub signer_handovers: Vec<String>,
 }
 
-/// What `GET /api/mail/keys` answers.
+/// What `GET /api/v1/mail/keys` answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum KeyLookup {

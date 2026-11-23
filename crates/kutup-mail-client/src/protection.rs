@@ -62,7 +62,7 @@ pub enum KeySource {
     KeysOpenpgp,
 }
 
-/// An outside key the server found (`GET /api/mail/keys/outside`), not yet
+/// An outside key the server found (`GET /api/v1/mail/keys/outside`), not yet
 /// checked here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoundKey {
