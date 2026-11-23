@@ -15,10 +15,16 @@ vi.mock('./rustWasm', async () => {
 })
 
 import vectors from '../../../../crates/kutup-crypto/tests/vectors/crypto.json'
+import passwordVectors from '../../../../crates/kutup-crypto/tests/vectors/drive-link-password-v1.json'
 import type { DriveRoot } from './accountRoots'
 import { fromBase64 } from './base64'
 import { openOwnerCollectionKey, sealOwnerCollectionKey } from './ownedCollection'
 import {
+  deriveLinkPasswordV1,
+  openLinkPasswordKeyV1,
+  openOwnerLinkSecretV1,
+  protectLinkPasswordV1,
+  sealOwnerLinkSecretV1,
   openOwnerLinkKeyV1,
   openPublicLinkCollectionKeyV1,
   sealOwnerLinkKeyV1,
@@ -92,4 +98,41 @@ describe('owner copies under the Drive root (vectors shared with Rust)', () => {
     await expect(openOwnerCollectionKey(v.collectionKeyEnvelope, roots, { ...folder, epoch: folder.epoch + 1 })).rejects.toThrow()
     await expect(openOwnerLinkKeyV1(v.collectionKeyEnvelope, roots, { ...link, linkId: v.collectionId })).rejects.toThrow()
   })
+})
+
+describe('link passwords (vectors shared with Rust)', () => {
+  it('derives the checked-in proof and wrap key and opens the link key', async () => {
+    for (const c of passwordVectors.cases) {
+      const keys = await deriveLinkPasswordV1(fromBase64(c.secret), c.password, {
+        linkId: c.linkId,
+        salt: c.salt,
+        operations: c.operations,
+        memory: c.memory,
+      })
+      expect(keys.proof).toBe(c.proof)
+      expect(keys.wrapKey).toEqual(fromBase64(c.wrapKey))
+      const context = { linkId: c.linkId, ownerAccountId: c.ownerAccountId, keyRevision: c.keyRevision }
+      expect(await openLinkPasswordKeyV1(c.linkKeyEnvelope, keys.wrapKey, context)).toEqual(fromBase64(c.linkKey))
+      await expect(openLinkPasswordKeyV1(c.linkKeyEnvelope, keys.wrapKey, { ...context, keyRevision: c.keyRevision + 1 })).rejects.toThrow()
+      const roots = { driveRoot: c.driveRoot as DriveRoot, driveGeneration: c.driveRootGeneration }
+      const owner = { linkId: c.linkId, ownerAccountId: c.ownerAccountId }
+      const opened = await openOwnerLinkSecretV1(c.ownerSecretEnvelope, roots, owner)
+      expect(opened.secret).toEqual(fromBase64(c.secret))
+      expect(opened.password).toBe(c.password.normalize('NFC'))
+      const sealed = await sealOwnerLinkSecretV1(fromBase64(c.secret), c.password, roots, owner)
+      expect((await openOwnerLinkSecretV1(sealed, roots, owner)).password).toBe(c.password.normalize('NFC'))
+    }
+  })
+
+  it('protects a new link key that only the right password opens', async () => {
+    const secret = new Uint8Array(32).fill(0x11)
+    const linkKey = new Uint8Array(32).fill(0x22)
+    const context = { linkId: '33333333-3333-4333-8333-333333333333', ownerAccountId: '22222222-2222-4222-8222-222222222222', keyRevision: 2 }
+    const protection = await protectLinkPasswordV1(secret, 'hunter2', linkKey, context)
+    const params = { linkId: context.linkId, salt: protection.salt, operations: protection.operations, memory: protection.memory }
+    const right = await deriveLinkPasswordV1(secret, 'hunter2', params)
+    expect(await openLinkPasswordKeyV1(protection.linkKeyEnvelope, right.wrapKey, context)).toEqual(linkKey)
+    const wrong = await deriveLinkPasswordV1(secret, 'hunter3', params)
+    await expect(openLinkPasswordKeyV1(protection.linkKeyEnvelope, wrong.wrapKey, context)).rejects.toThrow()
+  }, 60_000)
 })

@@ -1,0 +1,651 @@
+{
+  "cases": [
+    {
+      "name": "asked in any spelling: ada_l@kutup.dev",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "5e7d0d7655a2a9a34433342ca2fc97584d05873d",
+            "sha256Fingerprint": "19452cb27802884805d448a26570e80bc53cc0cabd7cfe5ba124948fd0990a1a",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAXdc6y4XIJu/2U3ck8QjoTpX3MZ1BQ1gXPUcsKX87JHPNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRefQ12VaKpo0QzNCyi/JdYTQWHPQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEKL8l1hNBYc9uIgBALUoR0qzK30exeLPXQIAqm3p+cK8o81qp7YpANPZlKOXAQDDXCBKzXPrn+x2vtSfj+ED9d3DyOL1H3pi/AW9UAPbCc44BGjneAASCisGAQQBl1UBBQEBB0C+23vk0SbZWUU0IaseudnZD44+B+fY2yzFikQ5XtbSYgMBCAfCeAQYFggAIAUCav6euwIbDBYhBF59DXZVoqmjRDM0LKL8l1hNBYc9AAoJEKL8l1hNBYc91T0BAJY9HJw7eQTHnq8p2UHp+xLH76YCRRTc0jPkIeyPYdzJAP9OPQyHiFQlOQ+2rW9QufZttUw37pbsgoeMwqaDwz6aAw==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBRefQ12VaKpo0QzNCyi/JdYTQWHPRlFLLJ4AohIBdRIomVw6AvFPMDKvXz+W6EklI/QmQoaAQAAAAM=",
+            "signature": "RJUDGk/qdLSD4YAxzKVc+sw3cglrTbCMlEzuXXL4IyWQs1JafX+TNyoUuep18QtJ3Eeskp/9u7FZKYCeDczXAg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "address": "ada_l@kutup.dev",
+        "sequence": 1,
+        "primary": 0,
+        "all": [
+          0
+        ],
+        "encryptionDisabled": false,
+        "disabled": false
+      }
+    },
+    {
+      "name": "asked in any spelling: ada.l@kutup.dev",
+      "asked": "ada.l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "5e7d0d7655a2a9a34433342ca2fc97584d05873d",
+            "sha256Fingerprint": "19452cb27802884805d448a26570e80bc53cc0cabd7cfe5ba124948fd0990a1a",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAXdc6y4XIJu/2U3ck8QjoTpX3MZ1BQ1gXPUcsKX87JHPNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRefQ12VaKpo0QzNCyi/JdYTQWHPQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEKL8l1hNBYc9uIgBALUoR0qzK30exeLPXQIAqm3p+cK8o81qp7YpANPZlKOXAQDDXCBKzXPrn+x2vtSfj+ED9d3DyOL1H3pi/AW9UAPbCc44BGjneAASCisGAQQBl1UBBQEBB0C+23vk0SbZWUU0IaseudnZD44+B+fY2yzFikQ5XtbSYgMBCAfCeAQYFggAIAUCav6euwIbDBYhBF59DXZVoqmjRDM0LKL8l1hNBYc9AAoJEKL8l1hNBYc91T0BAJY9HJw7eQTHnq8p2UHp+xLH76YCRRTc0jPkIeyPYdzJAP9OPQyHiFQlOQ+2rW9QufZttUw37pbsgoeMwqaDwz6aAw==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBRefQ12VaKpo0QzNCyi/JdYTQWHPRlFLLJ4AohIBdRIomVw6AvFPMDKvXz+W6EklI/QmQoaAQAAAAM=",
+            "signature": "RJUDGk/qdLSD4YAxzKVc+sw3cglrTbCMlEzuXXL4IyWQs1JafX+TNyoUuep18QtJ3Eeskp/9u7FZKYCeDczXAg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "address": "ada_l@kutup.dev",
+        "sequence": 1,
+        "primary": 0,
+        "all": [
+          0
+        ],
+        "encryptionDisabled": false,
+        "disabled": false
+      }
+    },
+    {
+      "name": "asked in any spelling: Ada-L@Kutup.dev",
+      "asked": "Ada-L@Kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "5e7d0d7655a2a9a34433342ca2fc97584d05873d",
+            "sha256Fingerprint": "19452cb27802884805d448a26570e80bc53cc0cabd7cfe5ba124948fd0990a1a",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAXdc6y4XIJu/2U3ck8QjoTpX3MZ1BQ1gXPUcsKX87JHPNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRefQ12VaKpo0QzNCyi/JdYTQWHPQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEKL8l1hNBYc9uIgBALUoR0qzK30exeLPXQIAqm3p+cK8o81qp7YpANPZlKOXAQDDXCBKzXPrn+x2vtSfj+ED9d3DyOL1H3pi/AW9UAPbCc44BGjneAASCisGAQQBl1UBBQEBB0C+23vk0SbZWUU0IaseudnZD44+B+fY2yzFikQ5XtbSYgMBCAfCeAQYFggAIAUCav6euwIbDBYhBF59DXZVoqmjRDM0LKL8l1hNBYc9AAoJEKL8l1hNBYc91T0BAJY9HJw7eQTHnq8p2UHp+xLH76YCRRTc0jPkIeyPYdzJAP9OPQyHiFQlOQ+2rW9QufZttUw37pbsgoeMwqaDwz6aAw==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBRefQ12VaKpo0QzNCyi/JdYTQWHPRlFLLJ4AohIBdRIomVw6AvFPMDKvXz+W6EklI/QmQoaAQAAAAM=",
+            "signature": "RJUDGk/qdLSD4YAxzKVc+sw3cglrTbCMlEzuXXL4IyWQs1JafX+TNyoUuep18QtJ3Eeskp/9u7FZKYCeDczXAg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "address": "ada_l@kutup.dev",
+        "sequence": 1,
+        "primary": 0,
+        "all": [
+          0
+        ],
+        "encryptionDisabled": false,
+        "disabled": false
+      }
+    },
+    {
+      "name": "asked in any spelling: adal@kutup.dev",
+      "asked": "adal@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "5e7d0d7655a2a9a34433342ca2fc97584d05873d",
+            "sha256Fingerprint": "19452cb27802884805d448a26570e80bc53cc0cabd7cfe5ba124948fd0990a1a",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAXdc6y4XIJu/2U3ck8QjoTpX3MZ1BQ1gXPUcsKX87JHPNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRefQ12VaKpo0QzNCyi/JdYTQWHPQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEKL8l1hNBYc9uIgBALUoR0qzK30exeLPXQIAqm3p+cK8o81qp7YpANPZlKOXAQDDXCBKzXPrn+x2vtSfj+ED9d3DyOL1H3pi/AW9UAPbCc44BGjneAASCisGAQQBl1UBBQEBB0C+23vk0SbZWUU0IaseudnZD44+B+fY2yzFikQ5XtbSYgMBCAfCeAQYFggAIAUCav6euwIbDBYhBF59DXZVoqmjRDM0LKL8l1hNBYc9AAoJEKL8l1hNBYc91T0BAJY9HJw7eQTHnq8p2UHp+xLH76YCRRTc0jPkIeyPYdzJAP9OPQyHiFQlOQ+2rW9QufZttUw37pbsgoeMwqaDwz6aAw==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBRefQ12VaKpo0QzNCyi/JdYTQWHPRlFLLJ4AohIBdRIomVw6AvFPMDKvXz+W6EklI/QmQoaAQAAAAM=",
+            "signature": "RJUDGk/qdLSD4YAxzKVc+sw3cglrTbCMlEzuXXL4IyWQs1JafX+TNyoUuep18QtJ3Eeskp/9u7FZKYCeDczXAg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "address": "ada_l@kutup.dev",
+        "sequence": 1,
+        "primary": 0,
+        "all": [
+          0
+        ],
+        "encryptionDisabled": false,
+        "disabled": false
+      }
+    },
+    {
+      "name": "another address asked",
+      "asked": "bob@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "5e7d0d7655a2a9a34433342ca2fc97584d05873d",
+            "sha256Fingerprint": "19452cb27802884805d448a26570e80bc53cc0cabd7cfe5ba124948fd0990a1a",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAXdc6y4XIJu/2U3ck8QjoTpX3MZ1BQ1gXPUcsKX87JHPNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRefQ12VaKpo0QzNCyi/JdYTQWHPQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEKL8l1hNBYc9uIgBALUoR0qzK30exeLPXQIAqm3p+cK8o81qp7YpANPZlKOXAQDDXCBKzXPrn+x2vtSfj+ED9d3DyOL1H3pi/AW9UAPbCc44BGjneAASCisGAQQBl1UBBQEBB0C+23vk0SbZWUU0IaseudnZD44+B+fY2yzFikQ5XtbSYgMBCAfCeAQYFggAIAUCav6euwIbDBYhBF59DXZVoqmjRDM0LKL8l1hNBYc9AAoJEKL8l1hNBYc91T0BAJY9HJw7eQTHnq8p2UHp+xLH76YCRRTc0jPkIeyPYdzJAP9OPQyHiFQlOQ+2rW9QufZttUw37pbsgoeMwqaDwz6aAw==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBRefQ12VaKpo0QzNCyi/JdYTQWHPRlFLLJ4AohIBdRIomVw6AvFPMDKvXz+W6EklI/QmQoaAQAAAAM=",
+            "signature": "RJUDGk/qdLSD4YAxzKVc+sw3cglrTbCMlEzuXXL4IyWQs1JafX+TNyoUuep18QtJ3Eeskp/9u7FZKYCeDczXAg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "the same name on another domain",
+      "asked": "ada_l@other.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "5e7d0d7655a2a9a34433342ca2fc97584d05873d",
+            "sha256Fingerprint": "19452cb27802884805d448a26570e80bc53cc0cabd7cfe5ba124948fd0990a1a",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAXdc6y4XIJu/2U3ck8QjoTpX3MZ1BQ1gXPUcsKX87JHPNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRefQ12VaKpo0QzNCyi/JdYTQWHPQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEKL8l1hNBYc9uIgBALUoR0qzK30exeLPXQIAqm3p+cK8o81qp7YpANPZlKOXAQDDXCBKzXPrn+x2vtSfj+ED9d3DyOL1H3pi/AW9UAPbCc44BGjneAASCisGAQQBl1UBBQEBB0C+23vk0SbZWUU0IaseudnZD44+B+fY2yzFikQ5XtbSYgMBCAfCeAQYFggAIAUCav6euwIbDBYhBF59DXZVoqmjRDM0LKL8l1hNBYc9AAoJEKL8l1hNBYc91T0BAJY9HJw7eQTHnq8p2UHp+xLH76YCRRTc0jPkIeyPYdzJAP9OPQyHiFQlOQ+2rW9QufZttUw37pbsgoeMwqaDwz6aAw==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBRefQ12VaKpo0QzNCyi/JdYTQWHPRlFLLJ4AohIBdRIomVw6AvFPMDKvXz+W6EklI/QmQoaAQAAAAM=",
+            "signature": "RJUDGk/qdLSD4YAxzKVc+sw3cglrTbCMlEzuXXL4IyWQs1JafX+TNyoUuep18QtJ3Eeskp/9u7FZKYCeDczXAg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "another server answering for this domain",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "other.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "5e7d0d7655a2a9a34433342ca2fc97584d05873d",
+            "sha256Fingerprint": "19452cb27802884805d448a26570e80bc53cc0cabd7cfe5ba124948fd0990a1a",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAXdc6y4XIJu/2U3ck8QjoTpX3MZ1BQ1gXPUcsKX87JHPNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRefQ12VaKpo0QzNCyi/JdYTQWHPQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEKL8l1hNBYc9uIgBALUoR0qzK30exeLPXQIAqm3p+cK8o81qp7YpANPZlKOXAQDDXCBKzXPrn+x2vtSfj+ED9d3DyOL1H3pi/AW9UAPbCc44BGjneAASCisGAQQBl1UBBQEBB0C+23vk0SbZWUU0IaseudnZD44+B+fY2yzFikQ5XtbSYgMBCAfCeAQYFggAIAUCav6euwIbDBYhBF59DXZVoqmjRDM0LKL8l1hNBYc9AAoJEKL8l1hNBYc91T0BAJY9HJw7eQTHnq8p2UHp+xLH76YCRRTc0jPkIeyPYdzJAP9OPQyHiFQlOQ+2rW9QufZttUw37pbsgoeMwqaDwz6aAw==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBRefQ12VaKpo0QzNCyi/JdYTQWHPRlFLLJ4AohIBdRIomVw6AvFPMDKvXz+W6EklI/QmQoaAQAAAAM=",
+            "signature": "RJUDGk/qdLSD4YAxzKVc+sw3cglrTbCMlEzuXXL4IyWQs1JafX+TNyoUuep18QtJ3Eeskp/9u7FZKYCeDczXAg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "the newest list names another address",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "5e7d0d7655a2a9a34433342ca2fc97584d05873d",
+            "sha256Fingerprint": "19452cb27802884805d448a26570e80bc53cc0cabd7cfe5ba124948fd0990a1a",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAXdc6y4XIJu/2U3ck8QjoTpX3MZ1BQ1gXPUcsKX87JHPNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRefQ12VaKpo0QzNCyi/JdYTQWHPQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEKL8l1hNBYc9uIgBALUoR0qzK30exeLPXQIAqm3p+cK8o81qp7YpANPZlKOXAQDDXCBKzXPrn+x2vtSfj+ED9d3DyOL1H3pi/AW9UAPbCc44BGjneAASCisGAQQBl1UBBQEBB0C+23vk0SbZWUU0IaseudnZD44+B+fY2yzFikQ5XtbSYgMBCAfCeAQYFggAIAUCav6euwIbDBYhBF59DXZVoqmjRDM0LKL8l1hNBYc9AAoJEKL8l1hNBYc91T0BAJY9HJw7eQTHnq8p2UHp+xLH76YCRRTc0jPkIeyPYdzJAP9OPQyHiFQlOQ+2rW9QufZttUw37pbsgoeMwqaDwz6aAw==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AFmFkYV9sb3ZlbGFjZUBrdXR1cC5kZXYAAAAAAAAAAQAAFDIwMjYtMTAtMTBUMTI6MDA6MDBaAAAAAQQUXn0NdlWiqaNEMzQsovyXWE0Fhz0ZRSyyeAKISAXUSKJlcOgLxTzAyr18/luhJJSP0JkKGgEAAAAD",
+            "signature": "eNYN8aXD4QMVzKpedIM6B7XIjU7tzMBSdafnng1BiK36aTVNnHJLs6Mg+UjzNr1H2cb0tMlf/8zpX4BLa9LQBQ=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "lists signed by another authority",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "5MJokAjcd/4EmGYG1ukq97SVrQ48JwH96c99FVEldhY=",
+        "keys": [
+          {
+            "fingerprint": "5e7d0d7655a2a9a34433342ca2fc97584d05873d",
+            "sha256Fingerprint": "19452cb27802884805d448a26570e80bc53cc0cabd7cfe5ba124948fd0990a1a",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAXdc6y4XIJu/2U3ck8QjoTpX3MZ1BQ1gXPUcsKX87JHPNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRefQ12VaKpo0QzNCyi/JdYTQWHPQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEKL8l1hNBYc9uIgBALUoR0qzK30exeLPXQIAqm3p+cK8o81qp7YpANPZlKOXAQDDXCBKzXPrn+x2vtSfj+ED9d3DyOL1H3pi/AW9UAPbCc44BGjneAASCisGAQQBl1UBBQEBB0C+23vk0SbZWUU0IaseudnZD44+B+fY2yzFikQ5XtbSYgMBCAfCeAQYFggAIAUCav6euwIbDBYhBF59DXZVoqmjRDM0LKL8l1hNBYc9AAoJEKL8l1hNBYc91T0BAJY9HJw7eQTHnq8p2UHp+xLH76YCRRTc0jPkIeyPYdzJAP9OPQyHiFQlOQ+2rW9QufZttUw37pbsgoeMwqaDwz6aAw==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBRefQ12VaKpo0QzNCyi/JdYTQWHPRlFLLJ4AohIBdRIomVw6AvFPMDKvXz+W6EklI/QmQoaAQAAAAM=",
+            "signature": "RJUDGk/qdLSD4YAxzKVc+sw3cglrTbCMlEzuXXL4IyWQs1JafX+TNyoUuep18QtJ3Eeskp/9u7FZKYCeDczXAg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "a custom domain this server holds",
+      "asked": "ada@work.example",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada@work.example",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "025d54f3b4da052df38c5f8e311451bad027c124",
+            "sha256Fingerprint": "69902fd3a86119d1b0d4eacd880b2d91e8e09f40461c946bd929128a41302598",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdANmo4U8OC1+yujasQhWcKPPrkRTx/2KfHDWLn7lS9lv3NFmFkYSA8YWRhQHdvcmsuZXhhbXBsZT7CjAQTFggANAUCav6euxYhBAJdVPO02gUt84xfjjEUUbrQJ8EkAhsDAh4BAwsJBwMVCggDFgACAScCGQEACgkQMRRRutAnwSSYngEArHgGBLzq513JqJa0qLRd81X3VFMcvJx3At0CK+UEuCMBAJbgIVk9fi6ZiyIgbnnw3Z36/jsP202G3CSekIZ4uXIPzjgEaOd4ABIKKwYBBAGXVQEFAQEHQMgBWcKgGfqoFBCwiHeiAdd6xvv6oVV2aDhoZDyGcM8EAwEIB8J4BBgWCAAgBQJq/p67AhsMFiEEAl1U87TaBS3zjF+OMRRRutAnwSQACgkQMRRRutAnwSTzpgD9HdEMMQDUAa8TTD0wWMRcHdRwP++dviOPHZoAdz9/hEoBAKOTXJZbRDLEAM5i5T8fifY7H1QL7Fwsrv3D3ZT5+UMO",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AEGFkYUB3b3JrLmV4YW1wbGUAAAAAAAAAAQAAFDIwMjYtMTAtMTBUMTI6MDA6MDBaAAAAAQQUAl1U87TaBS3zjF+OMRRRutAnwSRpkC/TqGEZ0bDU6s2ICy2R6OCfQEYclGvZKRKKQTAlmAEAAAAD",
+            "signature": "ni/c0gd1HwREFMMZ5Xq/yt+3nQOWNYx4VWdUH6QAGsVJernWxeamuMKwFmwy0HwfXB5xPThOt88CGNtPzC1GAA=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "address": "ada@work.example",
+        "sequence": 1,
+        "primary": 0,
+        "all": [
+          0
+        ],
+        "encryptionDisabled": false,
+        "disabled": false
+      }
+    },
+    {
+      "name": "a custom domain answered by another server",
+      "asked": "ada@work.example",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada@work.example",
+        "server": "other.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "025d54f3b4da052df38c5f8e311451bad027c124",
+            "sha256Fingerprint": "69902fd3a86119d1b0d4eacd880b2d91e8e09f40461c946bd929128a41302598",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdANmo4U8OC1+yujasQhWcKPPrkRTx/2KfHDWLn7lS9lv3NFmFkYSA8YWRhQHdvcmsuZXhhbXBsZT7CjAQTFggANAUCav6euxYhBAJdVPO02gUt84xfjjEUUbrQJ8EkAhsDAh4BAwsJBwMVCggDFgACAScCGQEACgkQMRRRutAnwSSYngEArHgGBLzq513JqJa0qLRd81X3VFMcvJx3At0CK+UEuCMBAJbgIVk9fi6ZiyIgbnnw3Z36/jsP202G3CSekIZ4uXIPzjgEaOd4ABIKKwYBBAGXVQEFAQEHQMgBWcKgGfqoFBCwiHeiAdd6xvv6oVV2aDhoZDyGcM8EAwEIB8J4BBgWCAAgBQJq/p67AhsMFiEEAl1U87TaBS3zjF+OMRRRutAnwSQACgkQMRRRutAnwSTzpgD9HdEMMQDUAa8TTD0wWMRcHdRwP++dviOPHZoAdz9/hEoBAKOTXJZbRDLEAM5i5T8fifY7H1QL7Fwsrv3D3ZT5+UMO",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AEGFkYUB3b3JrLmV4YW1wbGUAAAAAAAAAAQAAFDIwMjYtMTAtMTBUMTI6MDA6MDBaAAAAAQQUAl1U87TaBS3zjF+OMRRRutAnwSRpkC/TqGEZ0bDU6s2ICy2R6OCfQEYclGvZKRKKQTAlmAEAAAAD",
+            "signature": "ni/c0gd1HwREFMMZ5Xq/yt+3nQOWNYx4VWdUH6QAGsVJernWxeamuMKwFmwy0HwfXB5xPThOt88CGNtPzC1GAA=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "encryption off in the signed list",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "7c484bfff4d2c9df001e95206694366f3ba7244a",
+            "sha256Fingerprint": "64e5c74fc1e53109edd27f496a7d00bbc12bd0ee2302355e13914b1a035c2bde",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAnE5+FqulvBLCDPhhhmiSumJQcFR6t36giNxWVfmF2yvNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQR8SEv/9NLJ3wAelSBmlDZvO6ckSgIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEGaUNm87pyRKyp8BAO/l45QZKlqb6wo735ASD2RwzD0OcBxn6lwngiW4TDdxAQD1CmmrJ1x0c0haIKl2fkxAlkB7XnV0vLhFyqfy/WiZC844BGjneAASCisGAQQBl1UBBQEBB0CJ5y4W33sx5J6j6RuOJIkuCxrU2oC7ZmuFh3v80WI5AAMBCAfCeAQYFggAIAUCav6euwIbDBYhBHxIS//00snfAB6VIGaUNm87pyRKAAoJEGaUNm87pyRKXSEBAN7F2FwnLhf0nd0S6Uolb1aAkYj3qwYQPF0YmLK8MlZOAP9LFTxrj8GhoOw2tYzE5qQMTaUPIXVq8L6mpzDew9PHAQ==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBR8SEv/9NLJ3wAelSBmlDZvO6ckSmTlx0/B5TEJ7dJ/SWp9ALvBK9DuIwI1XhORSxoDXCveAQAAAAc=",
+            "signature": "aLb3I1f2ULri91NIJc2lApj/9u88FTrSEwJXFqV4BQQpZ0lkRmU+JFFbIdj9o8R7melVVnlmCxB1o4S9gvxLAA=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "address": "ada_l@kutup.dev",
+        "sequence": 1,
+        "primary": 0,
+        "all": [
+          0
+        ],
+        "encryptionDisabled": true,
+        "disabled": false
+      }
+    },
+    {
+      "name": "encryption off only in the server's rows",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "5e7d0d7655a2a9a34433342ca2fc97584d05873d",
+            "sha256Fingerprint": "19452cb27802884805d448a26570e80bc53cc0cabd7cfe5ba124948fd0990a1a",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAXdc6y4XIJu/2U3ck8QjoTpX3MZ1BQ1gXPUcsKX87JHPNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRefQ12VaKpo0QzNCyi/JdYTQWHPQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEKL8l1hNBYc9uIgBALUoR0qzK30exeLPXQIAqm3p+cK8o81qp7YpANPZlKOXAQDDXCBKzXPrn+x2vtSfj+ED9d3DyOL1H3pi/AW9UAPbCc44BGjneAASCisGAQQBl1UBBQEBB0C+23vk0SbZWUU0IaseudnZD44+B+fY2yzFikQ5XtbSYgMBCAfCeAQYFggAIAUCav6euwIbDBYhBF59DXZVoqmjRDM0LKL8l1hNBYc9AAoJEKL8l1hNBYc91T0BAJY9HJw7eQTHnq8p2UHp+xLH76YCRRTc0jPkIeyPYdzJAP9OPQyHiFQlOQ+2rW9QufZttUw37pbsgoeMwqaDwz6aAw==",
+            "primary": true,
+            "flags": 7
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBRefQ12VaKpo0QzNCyi/JdYTQWHPRlFLLJ4AohIBdRIomVw6AvFPMDKvXz+W6EklI/QmQoaAQAAAAM=",
+            "signature": "RJUDGk/qdLSD4YAxzKVc+sw3cglrTbCMlEzuXXL4IyWQs1JafX+TNyoUuep18QtJ3Eeskp/9u7FZKYCeDczXAg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "address": "ada_l@kutup.dev",
+        "sequence": 1,
+        "primary": 0,
+        "all": [
+          0
+        ],
+        "encryptionDisabled": false,
+        "disabled": false
+      }
+    },
+    {
+      "name": "a disabled address (its list encrypts to nothing)",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "046ae859222a259c8fa71452666be22bfaf55608",
+            "sha256Fingerprint": "3c37c8a879da03a0f520614caad61f581839f43464bc838462f73fcb32c3d446",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAWvUB6JoP1+C+VfX/pydHcng3zxLGA/zpRD+gf201jk3NF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQQEauhZIiolnI+nFFJma+Ir+vVWCAIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEGZr4iv69VYIOVAA/jhGJEaG2BXQHXfZuVjEVSF0hZsc48+R5y6E7Ya6CjeVAPwNzNcDrOiKgpU5p8sQR6iUHp+awlwZDqGL2YN3FMJuAM44BGjneAASCisGAQQBl1UBBQEBB0C2HRmAuRiTtjOKdPPzXPNjMgYN7/iujbkWGPtKSLpRVQMBCAfCeAQYFggAIAUCav6euwIbDBYhBARq6FkiKiWcj6cUUmZr4iv69VYIAAoJEGZr4iv69VYIR1IBAIvUY4uiiieEFv2ZS/s4S6NaXqujZW0d6AghbAan/M7fAQDpmdsn1fLJsC0a+zjoF6mXqGeFr7Yp2R4A/Ai4Yy58CA==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBQEauhZIiolnI+nFFJma+Ir+vVWCDw3yKh52gOg9SBhTKrWH1gYOfQ0ZLyDhGL3P8syw9RGAQAAAAE=",
+            "signature": "qOyIz9mVB26aiywRVvsbDHhiE/CgbpoonKKkwOT9wbMWBs7t/T3gvglzTTSkMeEAqDan21jmjAY0g3NgzIwMDg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "address": "ada_l@kutup.dev",
+        "sequence": 1,
+        "primary": 0,
+        "all": [
+          0
+        ],
+        "encryptionDisabled": false,
+        "disabled": true
+      }
+    },
+    {
+      "name": "a chain of three lists, the old key kept then compromised",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "94d6a211de0bea2ca758279ee35a46514f068c6f",
+            "sha256Fingerprint": "b9c77cf2dbce95d4cf25828c714c2a7a077f49f374b52a740b03197e9acca54d",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdA9OgQUlcg4KVrRQljl/7xp2wHEavaVf3796E0V9MM3svNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQSU1qIR3gvqLKdYJ57jWkZRTwaMbwIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEONaRlFPBoxvJagBALK7NBhIg+rMXbo6FvkMf+4qpRTRxVjpGTXV74nclqEyAQDDt57/el+sjxC+/N5VXR6M9ouW49zYHBNGx/cGfd0MBM44BGjneAASCisGAQQBl1UBBQEBB0AT/oRpdDwcWVnB9LLKRZTonnKOKKf0WzsmGKbRwSEdZAMBCAfCeAQYFggAIAUCav6euwIbDBYhBJTWohHeC+osp1gnnuNaRlFPBoxvAAoJEONaRlFPBoxvlpYA/3Zq9VfeaSJEK1yxZjHovT+4UnHeXXRCVCsLneGeF0DcAP0cUtu2FnBmcgm38lcJwUivp0fVHta+T9sTxEnsTSpzBQ==",
+            "primary": false,
+            "flags": 3
+          },
+          {
+            "fingerprint": "6b93a6d5ef7167036aa7332efe7775c6ae7c6e19",
+            "sha256Fingerprint": "149a7fe81b497d4be4c94e9b73d0ace32cced9566fffc501aae3fe930d846824",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAKwHMTwMwJyh4+n/KapZwP3aZUaL3pTT8V4iqZbXNlf/NF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRrk6bV73FnA2qnMy7+d3XGrnxuGQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEP53dcaufG4ZGCMA/RHTEUeHuJ/0P5w611MP7DPKMsZ7Muu4N7tmbx2JzEiKAQCNB6M0LZDN5BXMUUYjUUj4y0hz1RbbHjZhKMs8uQGgAc44BGjneAASCisGAQQBl1UBBQEBB0Aq+dVbfCksCBaobWwOxenLVmDBQNU0AaVj97KC4NCbVQMBCAfCeAQYFggAIAUCav6euwIbDBYhBGuTptXvcWcDaqczLv53dcaufG4ZAAoJEP53dcaufG4Z2pkA/1FP8+9BziDg6GF/7/M0hP0AY+HJBbCZH5ATxmcwP7j6AQDGwgtAmY8PAOAz9i27BhDMUwy0WU+LUOVsEN0PslhgBg==",
+            "primary": true,
+            "flags": 3
+          },
+          {
+            "fingerprint": "ec39b1ad29a5813de8a58d0af0be7ec0536f61f2",
+            "sha256Fingerprint": "0995c0791a32bc6a75711bb9dd09a0802f4654330361bd57deb1f1d00b8e1f16",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAfKxM+w6ndhpLzc6pJdZrH0Vsyx/2rLtR+dSsvzNBcbfNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQTsObGtKaWBPeiljQrwvn7AU29h8gIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEPC+fsBTb2Hy6L0BAI24uK2bz+EwIjk2+IK/5YXiq8Pdlz3hP0iYd4eCP4aFAP9a5B+ZT0FfxsKMP0tuVOEyj0bp7mSUXqnyBgu+9UmkBs44BGjneAASCisGAQQBl1UBBQEBB0BcEzsfmUif2nt5kJca2TTruqqnusWivOsQPcNaJzMHDAMBCAfCeAQYFggAIAUCav6euwIbDBYhBOw5sa0ppYE96KWNCvC+fsBTb2HyAAoJEPC+fsBTb2HyUfsA/1PN7+9UR6rOD3xnanEYx7yBIxZp86Eyg8EO+WckTc4+AQDXwFtvNpmgRUI4vP6+fIgrZQAytvLjod1i0P+1FtUJAg==",
+            "primary": false,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBSU1qIR3gvqLKdYJ57jWkZRTwaMb7nHfPLbzpXUzyWCjHFMKnoHf0nzdLUqdAsDGX6azKVNAQAAAAM=",
+            "signature": "PqviLjg0rLKl9nqe+v26RhdtscKyirtBZ4GaunxoI7QO4rM90CFIUhi18zEDeodC3HgVfOPWxzRBTgU2szCUAg=="
+          },
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAACAT8SlMygV3IIeN5lUQfWXIpZLKDzEXXXQOfeXXx9Mkv7ABQyMDI2LTEwLTExVDEyOjAwOjAwWgAAAAIEFGuTptXvcWcDaqczLv53dcaufG4ZFJp/6BtJfUvkyU6bc9Cs4yzO2VZv/8UBquP+kw2EaCQBAAAAAwQUlNaiEd4L6iynWCee41pGUU8GjG+5x3zy286V1M8lgoxxTCp6B39J83S1KnQLAxl+msylTQAAAAAD",
+            "signature": "bvnHPzJQGjoAV/YNqDo3Mg2ix+rn9QFWQO0Yjn4jy/76yL4EYRfhl8EbEhevlWIPD+030XwU9ucKALVFzACgBA=="
+          },
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAADAbqH2rTbtnhcEjTR9+/0TFGPG1jccy6E3OAHeM0B1Ll+ABQyMDI2LTEwLTEyVDEyOjAwOjAwWgAAAAIEFGuTptXvcWcDaqczLv53dcaufG4ZFJp/6BtJfUvkyU6bc9Cs4yzO2VZv/8UBquP+kw2EaCQBAAAAAwQUlNaiEd4L6iynWCee41pGUU8GjG+5x3zy286V1M8lgoxxTCp6B39J83S1KnQLAxl+msylTQAAAAAC",
+            "signature": "f536KRqCWP77mxVyHUTBCdjP0Tx9mc/FeCVnT8z5JO9mUFUI83rfqMoe1a1cA/zVLUkLiCYOlzlW8N3JJGF0DA=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "address": "ada_l@kutup.dev",
+        "sequence": 3,
+        "primary": 1,
+        "all": [
+          1
+        ],
+        "encryptionDisabled": false,
+        "disabled": false
+      }
+    },
+    {
+      "name": "the old key still trusted for signatures before it was compromised",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "94d6a211de0bea2ca758279ee35a46514f068c6f",
+            "sha256Fingerprint": "b9c77cf2dbce95d4cf25828c714c2a7a077f49f374b52a740b03197e9acca54d",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdA9OgQUlcg4KVrRQljl/7xp2wHEavaVf3796E0V9MM3svNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQSU1qIR3gvqLKdYJ57jWkZRTwaMbwIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEONaRlFPBoxvJagBALK7NBhIg+rMXbo6FvkMf+4qpRTRxVjpGTXV74nclqEyAQDDt57/el+sjxC+/N5VXR6M9ouW49zYHBNGx/cGfd0MBM44BGjneAASCisGAQQBl1UBBQEBB0AT/oRpdDwcWVnB9LLKRZTonnKOKKf0WzsmGKbRwSEdZAMBCAfCeAQYFggAIAUCav6euwIbDBYhBJTWohHeC+osp1gnnuNaRlFPBoxvAAoJEONaRlFPBoxvlpYA/3Zq9VfeaSJEK1yxZjHovT+4UnHeXXRCVCsLneGeF0DcAP0cUtu2FnBmcgm38lcJwUivp0fVHta+T9sTxEnsTSpzBQ==",
+            "primary": false,
+            "flags": 3
+          },
+          {
+            "fingerprint": "6b93a6d5ef7167036aa7332efe7775c6ae7c6e19",
+            "sha256Fingerprint": "149a7fe81b497d4be4c94e9b73d0ace32cced9566fffc501aae3fe930d846824",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAKwHMTwMwJyh4+n/KapZwP3aZUaL3pTT8V4iqZbXNlf/NF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRrk6bV73FnA2qnMy7+d3XGrnxuGQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEP53dcaufG4ZGCMA/RHTEUeHuJ/0P5w611MP7DPKMsZ7Muu4N7tmbx2JzEiKAQCNB6M0LZDN5BXMUUYjUUj4y0hz1RbbHjZhKMs8uQGgAc44BGjneAASCisGAQQBl1UBBQEBB0Aq+dVbfCksCBaobWwOxenLVmDBQNU0AaVj97KC4NCbVQMBCAfCeAQYFggAIAUCav6euwIbDBYhBGuTptXvcWcDaqczLv53dcaufG4ZAAoJEP53dcaufG4Z2pkA/1FP8+9BziDg6GF/7/M0hP0AY+HJBbCZH5ATxmcwP7j6AQDGwgtAmY8PAOAz9i27BhDMUwy0WU+LUOVsEN0PslhgBg==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBSU1qIR3gvqLKdYJ57jWkZRTwaMb7nHfPLbzpXUzyWCjHFMKnoHf0nzdLUqdAsDGX6azKVNAQAAAAM=",
+            "signature": "PqviLjg0rLKl9nqe+v26RhdtscKyirtBZ4GaunxoI7QO4rM90CFIUhi18zEDeodC3HgVfOPWxzRBTgU2szCUAg=="
+          },
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAACAT8SlMygV3IIeN5lUQfWXIpZLKDzEXXXQOfeXXx9Mkv7ABQyMDI2LTEwLTExVDEyOjAwOjAwWgAAAAIEFGuTptXvcWcDaqczLv53dcaufG4ZFJp/6BtJfUvkyU6bc9Cs4yzO2VZv/8UBquP+kw2EaCQBAAAAAwQUlNaiEd4L6iynWCee41pGUU8GjG+5x3zy286V1M8lgoxxTCp6B39J83S1KnQLAxl+msylTQAAAAAD",
+            "signature": "bvnHPzJQGjoAV/YNqDo3Mg2ix+rn9QFWQO0Yjn4jy/76yL4EYRfhl8EbEhevlWIPD+030XwU9ucKALVFzACgBA=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "address": "ada_l@kutup.dev",
+        "sequence": 2,
+        "primary": 1,
+        "all": [
+          1,
+          0
+        ],
+        "encryptionDisabled": false,
+        "disabled": false
+      }
+    },
+    {
+      "name": "a chain with a list left out",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "94d6a211de0bea2ca758279ee35a46514f068c6f",
+            "sha256Fingerprint": "b9c77cf2dbce95d4cf25828c714c2a7a077f49f374b52a740b03197e9acca54d",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdA9OgQUlcg4KVrRQljl/7xp2wHEavaVf3796E0V9MM3svNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQSU1qIR3gvqLKdYJ57jWkZRTwaMbwIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEONaRlFPBoxvJagBALK7NBhIg+rMXbo6FvkMf+4qpRTRxVjpGTXV74nclqEyAQDDt57/el+sjxC+/N5VXR6M9ouW49zYHBNGx/cGfd0MBM44BGjneAASCisGAQQBl1UBBQEBB0AT/oRpdDwcWVnB9LLKRZTonnKOKKf0WzsmGKbRwSEdZAMBCAfCeAQYFggAIAUCav6euwIbDBYhBJTWohHeC+osp1gnnuNaRlFPBoxvAAoJEONaRlFPBoxvlpYA/3Zq9VfeaSJEK1yxZjHovT+4UnHeXXRCVCsLneGeF0DcAP0cUtu2FnBmcgm38lcJwUivp0fVHta+T9sTxEnsTSpzBQ==",
+            "primary": false,
+            "flags": 3
+          },
+          {
+            "fingerprint": "6b93a6d5ef7167036aa7332efe7775c6ae7c6e19",
+            "sha256Fingerprint": "149a7fe81b497d4be4c94e9b73d0ace32cced9566fffc501aae3fe930d846824",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAKwHMTwMwJyh4+n/KapZwP3aZUaL3pTT8V4iqZbXNlf/NF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQRrk6bV73FnA2qnMy7+d3XGrnxuGQIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEP53dcaufG4ZGCMA/RHTEUeHuJ/0P5w611MP7DPKMsZ7Muu4N7tmbx2JzEiKAQCNB6M0LZDN5BXMUUYjUUj4y0hz1RbbHjZhKMs8uQGgAc44BGjneAASCisGAQQBl1UBBQEBB0Aq+dVbfCksCBaobWwOxenLVmDBQNU0AaVj97KC4NCbVQMBCAfCeAQYFggAIAUCav6euwIbDBYhBGuTptXvcWcDaqczLv53dcaufG4ZAAoJEP53dcaufG4Z2pkA/1FP8+9BziDg6GF/7/M0hP0AY+HJBbCZH5ATxmcwP7j6AQDGwgtAmY8PAOAz9i27BhDMUwy0WU+LUOVsEN0PslhgBg==",
+            "primary": true,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBSU1qIR3gvqLKdYJ57jWkZRTwaMb7nHfPLbzpXUzyWCjHFMKnoHf0nzdLUqdAsDGX6azKVNAQAAAAM=",
+            "signature": "PqviLjg0rLKl9nqe+v26RhdtscKyirtBZ4GaunxoI7QO4rM90CFIUhi18zEDeodC3HgVfOPWxzRBTgU2szCUAg=="
+          },
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAADAbqH2rTbtnhcEjTR9+/0TFGPG1jccy6E3OAHeM0B1Ll+ABQyMDI2LTEwLTEyVDEyOjAwOjAwWgAAAAIEFGuTptXvcWcDaqczLv53dcaufG4ZFJp/6BtJfUvkyU6bc9Cs4yzO2VZv/8UBquP+kw2EaCQBAAAAAwQUlNaiEd4L6iynWCee41pGUU8GjG+5x3zy286V1M8lgoxxTCp6B39J83S1KnQLAxl+msylTQAAAAAC",
+            "signature": "f536KRqCWP77mxVyHUTBCdjP0Tx9mc/FeCVnT8z5JO9mUFUI83rfqMoe1a1cA/zVLUkLiCYOlzlW8N3JJGF0DA=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    },
+    {
+      "name": "no list naming the server's key",
+      "asked": "ada_l@kutup.dev",
+      "ownServer": "kutup.dev",
+      "lookup": {
+        "address": "ada_l@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "accountAuthorityPublicKey": "awOsUnU5hJRfGEW7ihYwE9yTCcLWbSH7f9StoW8VOLY=",
+        "keys": [
+          {
+            "fingerprint": "ec39b1ad29a5813de8a58d0af0be7ec0536f61f2",
+            "sha256Fingerprint": "0995c0791a32bc6a75711bb9dd09a0802f4654330361bd57deb1f1d00b8e1f16",
+            "publicKey": "xjMEaOd4ABYJKwYBBAHaRw8BAQdAfKxM+w6ndhpLzc6pJdZrH0Vsyx/2rLtR+dSsvzNBcbfNF2FkYV9sIDxhZGFfbEBrdXR1cC5kZXY+wowEExYIADQFAmr+nrsWIQTsObGtKaWBPeiljQrwvn7AU29h8gIbAwIeAQMLCQcDFQoIAxYAAgEnAhkBAAoJEPC+fsBTb2Hy6L0BAI24uK2bz+EwIjk2+IK/5YXiq8Pdlz3hP0iYd4eCP4aFAP9a5B+ZT0FfxsKMP0tuVOEyj0bp7mSUXqnyBgu+9UmkBs44BGjneAASCisGAQQBl1UBBQEBB0BcEzsfmUif2nt5kJca2TTruqqnusWivOsQPcNaJzMHDAMBCAfCeAQYFggAIAUCav6euwIbDBYhBOw5sa0ppYE96KWNCvC+fsBTb2HyAAoJEPC+fsBTb2HyUfsA/1PN7+9UR6rOD3xnanEYx7yBIxZp86Eyg8EO+WckTc4+AQDXwFtvNpmgRUI4vP6+fIgrZQAytvLjod1i0P+1FtUJAg==",
+            "primary": false,
+            "flags": 3
+          }
+        ],
+        "keyLists": [
+          {
+            "data": "a3V0dXAvbWFpbC1rZXktbGlzdC92MQAAAclSoiHUDBhV0LqjKxv51z3YSg+CEeiaSUqLO2Dzv0CkndD7xECgMJ+oDxFyKbKuiQyf7nCP08IGevZiPt+hWc0AD2FkYV9sQGt1dHVwLmRldgAAAAAAAAABAAAUMjAyNi0xMC0xMFQxMjowMDowMFoAAAABBBRefQ12VaKpo0QzNCyi/JdYTQWHPRlFLLJ4AohIBdRIomVw6AvFPMDKvXz+W6EklI/QmQoaAQAAAAM=",
+            "signature": "RJUDGk/qdLSD4YAxzKVc+sw3cglrTbCMlEzuXXL4IyWQs1JafX+TNyoUuep18QtJ3Eeskp/9u7FZKYCeDczXAg=="
+          }
+        ]
+      },
+      "expect": {
+        "ok": false
+      }
+    }
+  ]
+}

@@ -346,6 +346,7 @@ pub enum SettingSection {
     Backups,
     Mail,
     AccountRecords,
+    Pass,
     Sessions,
 }
 
@@ -1339,8 +1340,38 @@ pub const DRIVE_TRASH_RETENTION_DAYS: NumericSetting = NumericSetting {
     unit: SettingUnit::Days,
     per_account: false,
 };
-pub const DRIVE_SETTINGS: [NumericSetting; 10] = [
+/// The furthest ahead a public link's expiry may be set, in days
+/// (docs/plans/drive-link-password.md). 0, the first value, sets no cap and
+/// allows links that never expire, as Proton does; any other value also
+/// makes every link expire: one made without an expiry gets the furthest,
+/// and an expiry can't be taken off. It applies to links made or changed
+/// from then on; existing links keep theirs until their owner changes them.
+pub const DRIVE_PUBLIC_LINK_MAX_EXPIRY_DAYS: NumericSetting = NumericSetting {
+    key: "drive.public_link_max_expiry_days",
+    field: "drivePublicLinkMaxExpiryDays",
+    default: 0,
+    min: 0,
+    max: 36_600,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// The longest public link password, in characters (Proton's is 50). At
+/// most a quarter of what the sealed owner copy holds
+/// (`kutup_crypto::link_password::MAX_PASSWORD_BYTES`), four bytes a
+/// character.
+pub const DRIVE_PUBLIC_LINK_PASSWORD_MAX_CHARS: NumericSetting = NumericSetting {
+    key: "drive.public_link_password_max_chars",
+    field: "drivePublicLinkPasswordMaxChars",
+    default: 50,
+    min: 1,
+    max: (kutup_crypto::link_password::MAX_PASSWORD_BYTES / 4) as i64,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const DRIVE_SETTINGS: [NumericSetting; 12] = [
     DRIVE_TRASH_RETENTION_DAYS,
+    DRIVE_PUBLIC_LINK_MAX_EXPIRY_DAYS,
+    DRIVE_PUBLIC_LINK_PASSWORD_MAX_CHARS,
     DRIVE_UPLOAD_MAX_BYTES,
     DRIVE_VERSION_MAX_BYTES,
     DRIVE_STREAM_MAX_BYTES,
@@ -1468,6 +1499,43 @@ pub const MAIL_KEYS_PER_ADDRESS: NumericSetting = NumericSetting {
     per_account: false,
 };
 pub const MAIL_SETTINGS: [NumericSetting; 1] = [MAIL_KEYS_PER_ADDRESS];
+
+/// The weakest key derivation Kutup Pass lets a vault be set to
+/// (docs/plans/pass-gaps-2.md, P2). A vault already below them still opens,
+/// with a warning and an offer to strengthen it. The maxima are the Pass
+/// core's (`kutup_pass::edit::MAX_*`), the most any device is asked to do.
+pub const PASS_ARGON2_MIN_MEMORY_MIB: NumericSetting = NumericSetting {
+    key: "pass.argon2_min_memory_mib",
+    field: "passArgon2MinMemoryMib",
+    default: 64,
+    min: 1,
+    max: 2048,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const PASS_ARGON2_MIN_ITERATIONS: NumericSetting = NumericSetting {
+    key: "pass.argon2_min_iterations",
+    field: "passArgon2MinIterations",
+    default: 2,
+    min: 1,
+    max: 10_000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const PASS_AES_KDF_MIN_ROUNDS: NumericSetting = NumericSetting {
+    key: "pass.aes_kdf_min_rounds",
+    field: "passAesKdfMinRounds",
+    default: 100_000,
+    min: 1,
+    max: 1_000_000_000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const PASS_SETTINGS: [NumericSetting; 3] = [
+    PASS_ARGON2_MIN_MEMORY_MIB,
+    PASS_ARGON2_MIN_ITERATIONS,
+    PASS_AES_KDF_MIN_ROUNDS,
+];
 
 /// The account-records store (docs/plans/account-records.md): the most
 /// records one account keeps in a scope, per scope (a single-record scope
@@ -1697,6 +1765,7 @@ pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetti
         .chain(section(SettingSection::Privacy, &PRIVACY_SETTINGS))
         .chain(section(SettingSection::Backups, &BACKUP_SETTINGS))
         .chain(section(SettingSection::Mail, &MAIL_SETTINGS))
+        .chain(section(SettingSection::Pass, &PASS_SETTINGS))
         .chain(section(
             SettingSection::AccountRecords,
             &ACCOUNT_RECORDS_SETTINGS,

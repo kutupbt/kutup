@@ -91,6 +91,16 @@ pub enum DriveEnvelopePurpose {
     /// = 1. History versions, note snapshots and the original upload open
     /// against it (docs/plans/drive-block-format.md §2).
     RevisionContent = 13,
+    /// A password-protected public link's key, sealed under the wrap key
+    /// its URL secret and password derive (`crate::link_password`): object
+    /// = link id, parent = owner, epoch 1, revision = the link's key
+    /// revision (docs/plans/drive-link-password.md).
+    PublicLinkPasswordKey = 14,
+    /// A password-protected link's URL secret and password, sealed for its
+    /// owner under their Drive root (`crate::link_password::LinkSecret`):
+    /// object = link id, parent = owner, epoch 1, revision = the Drive
+    /// root's generation. Lets the owner copy the link and see its password.
+    PublicLinkSecret = 15,
 }
 
 impl DriveEnvelopePurpose {
@@ -108,7 +118,11 @@ impl DriveEnvelopePurpose {
             | Self::PublicLinkKey
             | Self::PreviousFileKey
             | Self::PublicLinkFileKey
-            | Self::AlbumFileKey => KEY_LEN..=KEY_LEN,
+            | Self::AlbumFileKey
+            | Self::PublicLinkPasswordKey => KEY_LEN..=KEY_LEN,
+            Self::PublicLinkSecret => {
+                KEY_LEN + 1..=KEY_LEN + crate::link_password::MAX_PASSWORD_BYTES
+            }
             Self::CollectionName => 1..=MAX_COLLECTION_NAME_BYTES,
             Self::FileMetadata => 1..=MAX_FILE_METADATA_BYTES,
             Self::WhiteboardAsset => 1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES,
@@ -124,7 +138,10 @@ impl DriveEnvelopePurpose {
     /// content, sealed as they are (as file blobs).
     pub const fn padding(self) -> Option<Length> {
         match self {
-            Self::CollectionName | Self::FileMetadata => Some(Length::Bucket(NAME_BUCKET)),
+            // A link's secret and password: the password's length never shows.
+            Self::CollectionName | Self::FileMetadata | Self::PublicLinkSecret => {
+                Some(Length::Bucket(NAME_BUCKET))
+            }
             // Always one length: the size's digits never show.
             Self::RevisionContent => Some(Length::Fixed(MAX_REVISION_CONTENT_BYTES + 1)),
             Self::WhiteboardAsset | Self::Thumbnail => None,
@@ -184,6 +201,8 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             11 => Ok(Self::PublicLinkFileKey),
             12 => Ok(Self::AlbumFileKey),
             13 => Ok(Self::RevisionContent),
+            14 => Ok(Self::PublicLinkPasswordKey),
+            15 => Ok(Self::PublicLinkSecret),
             // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
             0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
@@ -382,6 +401,34 @@ impl DriveEnvelopeContextV1 {
         )
     }
 
+    /// A password-protected link's URL secret and password, sealed for its
+    /// owner under their Drive root of `root_generation`.
+    pub fn owner_link_secret(
+        link_id: &str,
+        owner_id: &str,
+        root_generation: RootGeneration,
+    ) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::PublicLinkSecret,
+            1,
+            u64::from(root_generation.get()),
+            link_id,
+            owner_id,
+        )
+    }
+
+    /// A password-protected link's key under its password wrap key: bound
+    /// to the link, its owner and the link's key revision.
+    pub fn link_password_key(link_id: &str, owner_id: &str, key_revision: u32) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::PublicLinkPasswordKey,
+            1,
+            u64::from(key_revision),
+            link_id,
+            owner_id,
+        )
+    }
+
     /// The Drive root generation an owner envelope of this context is
     /// sealed under, for the purposes sealed under the Drive root.
     pub fn drive_root_generation(&self) -> Result<RootGeneration> {
@@ -401,7 +448,10 @@ impl DriveEnvelopePurpose {
     /// The purposes sealed for the account itself under its Drive root
     /// (owned folder keys and link owner copies); nothing else is.
     pub const fn is_under_drive_root(self) -> bool {
-        matches!(self, Self::CollectionKey | Self::PublicLinkKey)
+        matches!(
+            self,
+            Self::CollectionKey | Self::PublicLinkKey | Self::PublicLinkSecret
+        )
     }
 }
 

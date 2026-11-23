@@ -2,6 +2,7 @@ import { CalendarX, Copy, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@kutup/ui/components/badge'
 import { securityReport } from '../lib/report'
+import { useStrength } from '../lib/strength'
 import { fieldValue, type EntryView, type VaultView } from '../vault/types'
 
 function EntryLink({ entry, onOpen }: { entry: EntryView; onOpen: (id: string) => void }) {
@@ -40,7 +41,8 @@ function Section({ title, description, count, icon, children }: { title: string;
 /** Weak, reused and expired passwords in the vault, worked out on this device. */
 export function SecurityPanel({ view, onOpen }: { view: VaultView; onOpen: (id: string) => void }) {
   const { t } = useTranslation()
-  const report = securityReport(view)
+  const rate = useStrength()
+  const report = securityReport(view, new Date(), rate)
   const issues = report.weak.length + report.reused.reduce((n, g) => n + g.length, 0) + report.expired.length
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">

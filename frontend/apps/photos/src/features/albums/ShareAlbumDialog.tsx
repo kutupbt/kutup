@@ -1,9 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Copy, Link2, Link2Off, UserMinus } from 'lucide-react'
+import { Copy, Link2, Link2Off, Settings2, UserMinus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { openLinkKey, useFolderAccess, type AccessLink, type Removal } from '@kutup/drive-core/access'
+import { useFolderAccess, type AccessLink, type Removal } from '@kutup/drive-core/access'
+import { linkSecret } from '@kutup/drive-core/linkSettings'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { publicLinkUrl, RecipientNotFound, useCreatePublicLink, useShareFolder } from '@kutup/drive-core/mutations'
 import { isTargetBlocked, sharingOffScope, usePublicSharing } from '@kutup/drive-core/publicSharing'
@@ -18,6 +19,7 @@ import { Spinner } from '@kutup/ui/components/states'
 import { useRemoveAlbumAccess, type Album } from './albums'
 import { IdentityNotConfirmed, MembersPendingUpgrade, RecipientRenamed } from '@kutup/drive-core/identityPins'
 import { IdentityShareWarning, RecipientRenamedNotice, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
+import { LinkSettingsDialog } from '@kutup/drive-ui/LinkSettingsDialog'
 import { PendingUpgradeConfirm } from '@kutup/drive-ui/PendingUpgradeConfirm'
 
 /**
@@ -61,6 +63,8 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
   const createLink = useCreatePublicLink('photos')
   const sharingOff = usePublicSharing().data ?? null
   const [created, setCreated] = useState<string | null>(null)
+  // The link whose settings (expiry, password) are open.
+  const [settings, setSettings] = useState<AccessLink | null>(null)
   useEffect(() => {
     if (open) {
       setEmail('')
@@ -82,7 +86,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
   async function copyLink(link: AccessLink) {
     if (!identity.data) return
     try {
-      await copy(publicLinkUrl(link.token, await openLinkKey(link, identity.data), 'photos'))
+      await copy(publicLinkUrl(link.token, await linkSecret(link, identity.data), 'photos'))
     } catch {
       toast.error(t('share.failed'))
     }
@@ -273,10 +277,25 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
               <li key={link.id} className="flex items-center gap-2 px-3 py-2">
                 <p className="min-w-0 flex-1 truncate text-sm">
                   {t('share.linkMade', { date: new Date(link.createdAt).toLocaleDateString(i18n.language, { dateStyle: 'medium' }) })}
+                  {link.expiresAt
+                    ? ` · ${t('linkSettings.expires', { date: new Date(link.expiresAt).toLocaleDateString(i18n.language, { dateStyle: 'medium' }) })}`
+                    : ''}
+                  {link.ownerSecretEnvelope ? ` · ${t('linkSettings.hasPassword')}` : ''}
                   {link.blockedReason ? ` · ${t(`publicSharing.blocked.${link.blockedReason}`)}` : ''}
                 </p>
                 <Button variant="ghost" size="icon" aria-label={t('share.copyLink')} onClick={() => void copyLink(link)}>
                   <Copy />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={removeAccess.isPending || !album.folder.key}
+                  aria-label={t('linkSettings.openFor')}
+                  title={t('linkSettings.open')}
+                  onClick={() => setSettings(link)}
+                  data-testid="link-settings-open"
+                >
+                  <Settings2 />
                 </Button>
                 <Button
                   variant="ghost"
@@ -296,6 +315,11 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
             ))}
           </ul>
         </section>
+        <LinkSettingsDialog
+          link={settings}
+          target={album.folder.key ? { kind: 'collection', id: album.folder.id, key: album.folder.key, epoch: album.folder.keyEpoch } : null}
+          onClose={() => setSettings(null)}
+        />
       </DialogContent>
     </Dialog>
   )

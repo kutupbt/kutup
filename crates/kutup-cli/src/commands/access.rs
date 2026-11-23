@@ -36,8 +36,16 @@ struct Link {
     id: String,
     token: String,
     owner_link_key_envelope: String,
+    /// The link key's revision; a re-key names it, and a password change
+    /// since makes the server refuse it (docs/plans/drive-link-password.md).
+    #[serde(default = "first_key_revision")]
+    key_revision: i32,
     expires_at: Option<String>,
     created_at: String,
+}
+
+fn first_key_revision() -> i32 {
+    1
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -233,6 +241,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
                     &link_key,
                     context(DriveEnvelopePurpose::PublicLinkCollectionKey, 1)?,
                 )?,
+                "keyRevision": l.key_revision,
             }))
         })
         .collect::<Result<Vec<_>>>()?;

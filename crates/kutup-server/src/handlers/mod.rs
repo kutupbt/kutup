@@ -33,6 +33,7 @@ pub mod files;
 pub mod folder_access;
 pub mod identity;
 pub mod link_reports;
+pub mod link_settings;
 pub mod mail;
 pub mod mail_addresses;
 pub mod mail_auto_reply;

@@ -30,6 +30,8 @@ use crate::AppState;
 const REASONS: [&str; 5] = ["phishing", "malware", "illegal", "abuse", "other"];
 const MAX_DETAILS_CHARS: usize = 2000;
 const MAX_LINK_CHARS: usize = 2048;
+/// A reported link's password: what a link password can be at most (1024 bytes).
+const MAX_LINK_PASSWORD_CHARS: usize = 1024;
 /// Open reports kept per link: more say nothing new, and a script could
 /// otherwise fill the table through one token.
 const MAX_OPEN_REPORTS_PER_LINK: i64 = 50;
@@ -53,7 +55,7 @@ pub(crate) async fn resolve_reports_of_owner(
 ) -> AppResult<()> {
     sqlx::query(
         "UPDATE drive_public_link_reports r
-            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'disabled', link = NULL
+            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'disabled', link = NULL, link_password = NULL
            FROM drive_public_shares p
           WHERE r.share_id = p.id AND p.owner_account_id = $1 AND r.resolved_at IS NULL",
     )
@@ -75,6 +77,10 @@ pub struct ReportLinkRequest {
     /// look: a public page of this server's for this token.
     #[serde(default)]
     link: Option<String>,
+    /// A password-protected link's password, when the reporter gives it with
+    /// the link (as Proton's report form): kept only while the report is open.
+    #[serde(default)]
+    link_password: Option<String>,
 }
 
 /// Whether `link` is one of this server's public pages for `token`: an
@@ -132,6 +138,15 @@ pub async fn report_public_link(
         }
         other => other,
     };
+    let link_password = match req.link_password.as_deref().filter(|p| !p.is_empty()) {
+        Some(_) if link.is_none() => {
+            return Err(AppError::bad_request("a link password comes with the link"))
+        }
+        Some(p) if p.chars().count() > MAX_LINK_PASSWORD_CHARS => {
+            return Err(AppError::bad_request("the link password is too long"))
+        }
+        other => other,
+    };
     ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let share: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM drive_public_shares WHERE token = $1")
@@ -144,8 +159,8 @@ pub async fn report_public_link(
     // Past the cap, a report is accepted and not stored: the link is already
     // waiting for an administrator.
     sqlx::query(
-        "INSERT INTO drive_public_link_reports (share_id, reason, details, link)
-         SELECT $1, $2, $3, $4
+        "INSERT INTO drive_public_link_reports (share_id, reason, details, link, link_password)
+         SELECT $1, $2, $3, $4, $6
           WHERE (SELECT COUNT(*) FROM drive_public_link_reports WHERE share_id = $1 AND resolved_at IS NULL) < $5",
     )
     .bind(share)
@@ -153,6 +168,7 @@ pub async fn report_public_link(
     .bind(details)
     .bind(link)
     .bind(MAX_OPEN_REPORTS_PER_LINK)
+    .bind(link_password)
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -167,6 +183,9 @@ pub struct LinkReport {
     details: String,
     /// The whole link, when the reporter gave it (open reports only).
     link: Option<String>,
+    /// A password-protected link's password, when the reporter gave it
+    /// (open reports only).
+    link_password: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -198,24 +217,27 @@ pub struct ReportsQuery {
     status: Option<String>,
 }
 
-type ReportRow = (
-    Uuid,
-    String,
-    String,
-    Option<String>,
-    OffsetDateTime,
-    Option<OffsetDateTime>,
-    Option<String>,
-    Uuid,
-    String,
-    OffsetDateTime,
-    Option<OffsetDateTime>,
-    Option<String>,
-    Uuid,
-    Option<String>,
-    bool,
-    i64,
-);
+/// A report as the list reads it.
+#[derive(sqlx::FromRow)]
+struct ReportRow {
+    id: Uuid,
+    reason: String,
+    details: String,
+    link: Option<String>,
+    link_password: Option<String>,
+    created_at: OffsetDateTime,
+    resolved_at: Option<OffsetDateTime>,
+    resolution: Option<String>,
+    share_id: Uuid,
+    share_type: String,
+    share_created_at: OffsetDateTime,
+    share_removed_at: Option<OffsetDateTime>,
+    share_blocked_reason: Option<String>,
+    owner_account_id: Uuid,
+    owner_username: Option<String>,
+    owner_is_active: bool,
+    open_reports_on_link: i64,
+}
 
 /// `GET /api/v1/admin/reports` — reports on public links, oldest open first
 /// (or the latest resolved).
@@ -238,20 +260,24 @@ pub async fn list_reports(
         Some(_) => return Err(AppError::bad_request("unknown status")),
     };
     let rows: Vec<ReportRow> = sqlx::query_as(if resolved {
-        "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
-                p.id, p.share_type, p.created_at, p.removed_at, p.blocked_reason,
-                u.id, u.username, u.state = 'active',
+        "SELECT r.id, r.reason, r.details, r.link, r.link_password, r.created_at, r.resolved_at, r.resolution,
+                p.id AS share_id, p.share_type, p.created_at AS share_created_at,
+                p.removed_at AS share_removed_at, p.blocked_reason AS share_blocked_reason,
+                u.id AS owner_account_id, u.username AS owner_username, u.state = 'active' AS owner_is_active,
                 (SELECT COUNT(*) FROM drive_public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
+                  AS open_reports_on_link
            FROM drive_public_link_reports r
            JOIN drive_public_shares p ON p.id = r.share_id
            JOIN accounts u ON u.id = p.owner_account_id
           WHERE r.resolved_at IS NOT NULL
           ORDER BY r.resolved_at DESC LIMIT 100"
     } else {
-        "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
-                p.id, p.share_type, p.created_at, p.removed_at, p.blocked_reason,
-                u.id, u.username, u.state = 'active',
+        "SELECT r.id, r.reason, r.details, r.link, r.link_password, r.created_at, r.resolved_at, r.resolution,
+                p.id AS share_id, p.share_type, p.created_at AS share_created_at,
+                p.removed_at AS share_removed_at, p.blocked_reason AS share_blocked_reason,
+                u.id AS owner_account_id, u.username AS owner_username, u.state = 'active' AS owner_is_active,
                 (SELECT COUNT(*) FROM drive_public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
+                  AS open_reports_on_link
            FROM drive_public_link_reports r
            JOIN drive_public_shares p ON p.id = r.share_id
            JOIN accounts u ON u.id = p.owner_account_id
@@ -262,43 +288,25 @@ pub async fn list_reports(
     .await?;
     let reports: Vec<LinkReport> = rows
         .into_iter()
-        .map(
-            |(
-                id,
-                reason,
-                details,
-                link,
-                created_at,
-                resolved_at,
-                resolution,
-                share_id,
-                share_type,
-                share_created_at,
-                share_removed_at,
-                share_blocked_reason,
-                owner_account_id,
-                owner_username,
-                owner_is_active,
-                open_reports_on_link,
-            )| LinkReport {
-                id,
-                reason,
-                details,
-                link,
-                created_at,
-                resolved_at,
-                resolution,
-                share_id,
-                share_type,
-                share_created_at,
-                share_removed_at,
-                share_blocked_reason,
-                owner_account_id,
-                owner_username: owner_username.unwrap_or_default(),
-                owner_is_active,
-                open_reports_on_link,
-            },
-        )
+        .map(|r| LinkReport {
+            id: r.id,
+            reason: r.reason,
+            details: r.details,
+            link: r.link,
+            link_password: r.link_password,
+            created_at: r.created_at,
+            resolved_at: r.resolved_at,
+            resolution: r.resolution,
+            share_id: r.share_id,
+            share_type: r.share_type,
+            share_created_at: r.share_created_at,
+            share_removed_at: r.share_removed_at,
+            share_blocked_reason: r.share_blocked_reason,
+            owner_account_id: r.owner_account_id,
+            owner_username: r.owner_username.unwrap_or_default(),
+            owner_is_active: r.owner_is_active,
+            open_reports_on_link: r.open_reports_on_link,
+        })
         .collect();
     Ok(Json(reports).into_response())
 }
@@ -340,7 +348,7 @@ pub async fn dismiss_report(
     let (report, share, owner) = open_report(&state.pool, &id).await?;
     sqlx::query(
         "UPDATE drive_public_link_reports
-            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'dismissed', link = NULL
+            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'dismissed', link = NULL, link_password = NULL
           WHERE id = $1 AND resolved_at IS NULL",
     )
     .bind(report)
@@ -383,7 +391,7 @@ pub async fn remove_reported_link(
     .await?;
     sqlx::query(
         "UPDATE drive_public_link_reports
-            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'removed', link = NULL
+            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'removed', link = NULL, link_password = NULL
           WHERE share_id = $1 AND resolved_at IS NULL",
     )
     .bind(share)
@@ -466,9 +474,12 @@ pub async fn block_link(
         return Err(AppError::not_found("not found"));
     };
     sqlx::query(
-        // The reporter's link stays: under a legal order it may be evidence.
+        // Erased on every resolution, as the others: a resolved report keeps
+        // no link or link password (the table's CHECKs); the block's own
+        // record (reason, reference, the audit log) is what stays.
         "UPDATE drive_public_link_reports
-            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'blocked'
+            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'blocked',
+                link = NULL, link_password = NULL
           WHERE share_id = $1 AND resolved_at IS NULL",
     )
     .bind(share)

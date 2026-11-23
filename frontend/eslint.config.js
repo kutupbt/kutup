@@ -109,6 +109,14 @@ const computedImports = [
     message: 'A dynamic import of a computed name. Name the module; a WASM loader is a named exception in eslint.config.js.',
   },
 ]
+/* Kutup Pass makes passwords, passphrases and keys: every random value there
+   comes from @kutup/crypto/random (docs/plans/pass-gaps-3.md, Q-2), never
+   Math.random, whose output is predictable. */
+const PASS_CODE = ['apps/pass/src/**/*.{ts,tsx}']
+const mathRandom = [
+  { selector: "MemberExpression[object.name='Math'][property.name='random']", message: 'Math.random in Kutup Pass. Use @kutup/crypto/random (randomBytes, fillRandom).' },
+  { selector: "MemberExpression[object.name='Math'][computed=true]", message: 'A computed Math member in Kutup Pass (it could be Math.random). Name it.' },
+]
 const sodiumImports = [
   'error',
   {
@@ -163,6 +171,11 @@ export default tseslint.config(
       'no-restricted-syntax': ['error', ...bufferSinks, ...webCrypto, ...computedImports],
       'no-restricted-imports': sodiumImports,
     },
+  },
+  {
+    files: PASS_CODE,
+    ignores: UI_WASM_LOADERS,
+    rules: { 'no-restricted-syntax': [...restricted, ...webCrypto, ...computedImports, ...mathRandom] },
   },
   {
     files: UI_WASM_LOADERS,

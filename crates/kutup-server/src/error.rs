@@ -47,6 +47,15 @@ impl AppError {
         self
     }
 
+    /// Says when to ask again: `Retry-After` (seconds) on the answer, and
+    /// `retryAfterSeconds` in its body.
+    pub fn with_retry_after(mut self, seconds: u64) -> Self {
+        self.details
+            .get_or_insert_with(serde_json::Map::new)
+            .insert("retryAfterSeconds".into(), seconds.into());
+        self
+    }
+
     pub fn bad_request(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, message)
     }
@@ -129,7 +138,18 @@ impl IntoResponse for AppError {
             .entry("code")
             .or_insert_with(|| serde_json::Value::String(default_code(self.status).into()));
         details.insert("error".into(), serde_json::Value::String(self.message));
-        (self.status, Json(serde_json::Value::Object(details))).into_response()
+        let retry_after = details
+            .get("retryAfterSeconds")
+            .and_then(serde_json::Value::as_u64);
+        let mut response = (self.status, Json(serde_json::Value::Object(details))).into_response();
+        if let Some(seconds) = retry_after {
+            if let Ok(value) = axum::http::HeaderValue::from_str(&seconds.to_string()) {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, value);
+            }
+        }
+        response
     }
 }
 

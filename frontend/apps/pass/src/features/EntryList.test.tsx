@@ -22,7 +22,7 @@ describe('the entry list', () => {
     // The vault as the session holds it now: the bin was turned off.
     const session = { canEdit: true, apply, getState: () => ({ view: view(false) }) } as unknown as VaultSession
     const shown = [entry('a', 'A1'), entry('b', 'A2')]
-    const props = { session, shown, currentId: undefined, viewingBin: false, pictures: new Map<string, string>(), onOpen: () => undefined }
+    const props = { session, shown, currentId: undefined, viewingBin: false, pictures: new Map<string, string>(), columns: ['userName' as const], onOpen: () => undefined }
     const { rerender } = render(<EntryList {...props} view={view(true)} />)
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select A1' }))
     fireEvent.click(screen.getByRole('button', { name: 'Move to recycle bin' }))
@@ -42,7 +42,7 @@ describe('the entry list', () => {
     const apply = vi.fn(() => Promise.reject(new Error('offline')))
     const session = { canEdit: true, apply, getState: () => ({ view: view(true) }) } as unknown as VaultSession
     toast.error.mockClear()
-    render(<EntryList session={session} view={view(true)} shown={[entry('c', 'A3')]} currentId={undefined} viewingBin={false} pictures={new Map<string, string>()} onOpen={() => undefined} />)
+    render(<EntryList session={session} view={view(true)} shown={[entry('c', 'A3')]} currentId={undefined} viewingBin={false} pictures={new Map<string, string>()} columns={['userName']} onOpen={() => undefined} />)
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select A3' }))
     fireEvent.click(screen.getByRole('button', { name: 'Move to recycle bin' }))
     await screen.findByRole('alertdialog', { name: 'Move 1 entry to the recycle bin?' })

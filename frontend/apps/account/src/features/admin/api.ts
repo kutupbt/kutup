@@ -370,6 +370,8 @@ export interface LinkReport {
   details: string
   /** The whole link, key included, when the reporter gave it; open reports only. */
   link: string | null
+  /** A password-protected link's password, when the reporter gave it; open reports only. */
+  linkPassword: string | null
   createdAt: string
   resolvedAt: string | null
   resolution: 'dismissed' | 'removed' | 'disabled' | 'blocked' | null

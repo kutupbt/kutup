@@ -37,6 +37,10 @@ export interface AccessLink {
   token: string
   /** The link's key sealed for the owner, to copy and re-wrap it. */
   ownerLinkKeyEnvelope: string
+  /** The link key's revision; a re-key names it (docs/plans/drive-link-password.md). */
+  keyRevision: number
+  /** A password-protected link: its URL secret and password, for the owner. */
+  ownerSecretEnvelope?: string
   expiresAt: string | null
   createdAt: string
   /** Why an operator blocked what the link reaches; it doesn't open until they lift it. */
@@ -85,7 +89,7 @@ export function useFolderAccess(folder: Folder | undefined) {
   })
 }
 
-/** A link's key, from the owner's copy. */
+/** A link's key, from the owner's copy: what the folder key is sealed under (not the URL's secret when it has a password). */
 export function openLinkKey(link: AccessLink, me: DriveIdentity): Promise<Uint8Array> {
   return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.roots, { linkId: link.id, ownerAccountId: me.accountId })
 }
@@ -218,6 +222,7 @@ export async function rotateFolder(
           ownerAccountId: me.accountId,
           epoch: next,
         }),
+        keyRevision: l.keyRevision,
       })),
   )
   const federatedShares = await Promise.all(

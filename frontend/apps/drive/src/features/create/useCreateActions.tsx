@@ -127,6 +127,7 @@ export function useCreateActions(target: Folder | null): {
         title={t('newMenu.folderTitle')}
         initial={t('newMenu.untitledFolder')}
         submit={t('newMenu.create')}
+        creating
         pending={createFolder.isPending}
         error={createFolder.error}
         onClose={() => {

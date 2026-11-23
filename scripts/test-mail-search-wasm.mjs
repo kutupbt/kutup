@@ -139,4 +139,10 @@ const found = search(index, 'kelime7')
 const searched = performance.now() - started - built
 console.log(`5,000 messages indexed in ${Math.round(built)} ms; a search over them in ${Math.round(searched)} ms; ${store.size} sealed records`)
 assert.equal(found.length, 100)
+// The browser's fold (kutup-search's `browser` feature) gives what the
+// native one gives (crates/kutup-search/tests/vectors/fold.json).
+{
+  const vectors = JSON.parse(await readFile(`${root}/crates/kutup-search/tests/vectors/fold.json`, 'utf8'))
+  for (const { text, folded } of vectors.cases) assert.equal(wasm.searchFold(text), folded, `fold(${JSON.stringify(text)})`)
+}
 console.log('mail search wasm: ok')

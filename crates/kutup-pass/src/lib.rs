@@ -11,13 +11,22 @@
 //! `keepass` crate in `crates/kutup-pass/vendor/keepass`, re-exported here as [`keepass`].
 
 pub mod edit;
+pub mod export;
+pub mod generate;
 pub mod import;
+mod import_json;
+mod import_xml;
 pub mod kdbx;
 pub mod kept;
 pub mod merge;
+pub mod otp;
+pub mod passkey;
 mod refs;
+pub mod resolve;
+pub mod search;
 pub mod ssh;
 pub mod view;
+mod zip;
 
 pub use kdbx::{key_file_secret, open, save, KdbxError, VaultKey};
 pub use keepass;

@@ -1,4 +1,4 @@
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Settings2, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Alert } from '@kutup/ui/components/alert'
@@ -11,7 +11,8 @@ import { Label } from '@kutup/ui/components/label'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Textarea } from '@kutup/ui/components/textarea'
 import { otpFieldValue } from '../lib/otp'
-import { strengthOf } from '../lib/generator'
+import { useStrength } from '../lib/strength'
+import { TotpSetupDialog } from './TotpSetupDialog'
 import type { EntryInput, EntryView, FieldView } from '../vault/types'
 import { fieldValue, STANDARD_FIELDS } from '../vault/types'
 import { PasswordGenerator } from './PasswordGenerator'
@@ -29,11 +30,16 @@ interface Draft {
   tags: string
   expires: boolean
   expiry: string
+  /** KeePass's QualityCheck: off leaves the entry out of the security report. */
+  qualityCheck: boolean
+  /** `#rrggbb`, or empty for none. */
+  foregroundColor: string
+  backgroundColor: string
 }
 
 function draftOf(entry: EntryView | null, defaultUserName: string): Draft {
   if (!entry) {
-    return { title: '', userName: defaultUserName, password: '', url: '', notes: '', otp: '', custom: [], tags: '', expires: false, expiry: '' }
+    return { title: '', userName: defaultUserName, password: '', url: '', notes: '', otp: '', custom: [], tags: '', expires: false, expiry: '', qualityCheck: true, foregroundColor: '', backgroundColor: '' }
   }
   return {
     title: fieldValue(entry, 'Title'),
@@ -47,6 +53,9 @@ function draftOf(entry: EntryView | null, defaultUserName: string): Draft {
     expires: entry.expires,
     // datetime-local wants minutes, local time.
     expiry: entry.expiry ? toLocalInput(entry.expiry) : '',
+    qualityCheck: entry.qualityCheck,
+    foregroundColor: entry.foregroundColor ?? '',
+    backgroundColor: entry.backgroundColor ?? '',
   }
 }
 
@@ -85,10 +94,10 @@ function inputOf(draft: Draft, original: EntryView | null): EntryInput {
       .map((tag) => tag.trim())
       .filter(Boolean),
     icon: original?.icon ?? null,
-    foregroundColor: original?.foregroundColor ?? null,
-    backgroundColor: original?.backgroundColor ?? null,
+    foregroundColor: draft.foregroundColor || null,
+    backgroundColor: draft.backgroundColor || null,
     overrideUrl: original?.overrideUrl ?? '',
-    qualityCheck: original?.qualityCheck ?? true,
+    qualityCheck: draft.qualityCheck,
     expires: draft.expires,
     expiry: draft.expires && draft.expiry ? new Date(draft.expiry).toISOString().replace(/\.\d{3}Z$/, 'Z') : null,
   }
@@ -100,6 +109,7 @@ export function EntryEditor({
   onOpenChange,
   entry,
   defaultUserName,
+  knownTags = [],
   onSave,
 }: {
   open: boolean
@@ -107,12 +117,16 @@ export function EntryEditor({
   /** The entry edited; `null` makes a new one. */
   entry: EntryView | null
   defaultUserName: string
+  /** The vault's tags, offered as suggestions. */
+  knownTags?: string[]
   onSave: (input: EntryInput) => Promise<void>
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState<Draft>(() => draftOf(entry, defaultUserName))
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const [settingUpOtp, setSettingUpOtp] = useState(false)
+  const rate = useStrength()
 
   useEffect(() => {
     if (!open) return
@@ -163,7 +177,10 @@ export function EntryEditor({
           <Field label={t('entry.userName')}>
             {(field) => <Input {...field} value={draft.userName} onChange={(e) => set({ userName: e.target.value })} autoComplete="off" />}
           </Field>
-          <Field label={t('entry.password')} description={draft.password ? t(`strength.${strengthOf(draft.password)}`) : undefined}>
+          <Field
+            label={t('entry.password')}
+            description={/\{REF:/i.test(draft.password) ? t('entry.referenceNote') : draft.password ? t(`strength.${rate(draft.password)}`) : undefined}
+          >
             {(field) => (
               <div className="flex gap-2">
                 <PasswordInput {...field} className="flex-1" value={draft.password} onChange={(e) => set({ password: e.target.value })} autoComplete="new-password" />
@@ -175,8 +192,16 @@ export function EntryEditor({
             {(field) => <Input {...field} type="url" inputMode="url" value={draft.url} onChange={(e) => set({ url: e.target.value })} placeholder="https://" />}
           </Field>
           <Field label={t('entry.otp')} description={t('entry.otpDescription')}>
-            {(field) => <Input {...field} value={draft.otp} onChange={(e) => set({ otp: e.target.value })} autoComplete="off" spellCheck={false} />}
+            {(field) => (
+              <div className="flex gap-2">
+                <Input {...field} value={draft.otp} onChange={(e) => set({ otp: e.target.value })} autoComplete="off" spellCheck={false} />
+                <Button type="button" variant="outline" size="icon" onClick={() => setSettingUpOtp(true)} aria-label={t('totp.open')} title={t('totp.open')}>
+                  <Settings2 />
+                </Button>
+              </div>
+            )}
           </Field>
+          <TotpSetupDialog open={settingUpOtp} onOpenChange={setSettingUpOtp} value={draft.otp} title={draft.title} userName={draft.userName} onSave={(uri) => set({ otp: uri })} />
           <Field label={t('entry.notes')}>
             {(field) => <Textarea {...field} rows={4} value={draft.notes} onChange={(e) => set({ notes: e.target.value })} />}
           </Field>
@@ -233,6 +258,19 @@ export function EntryEditor({
           <Field label={t('entry.tags')} description={t('entry.tagsDescription')}>
             {(field) => <Input {...field} value={draft.tags} onChange={(e) => set({ tags: e.target.value })} />}
           </Field>
+          {(() => {
+            const present = new Set(draft.tags.split(',').map((tag) => tag.trim()).filter(Boolean))
+            const offered = knownTags.filter((tag) => !present.has(tag)).slice(0, 12)
+            return offered.length > 0 ? (
+              <div className="-mt-2 flex flex-wrap items-center gap-1" aria-label={t('entry.tagSuggestions')}>
+                {offered.map((tag) => (
+                  <Button key={tag} type="button" variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={() => set({ tags: [...present, tag].join(', ') })}>
+                    + {tag}
+                  </Button>
+                ))}
+              </div>
+            ) : null
+          })()}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <Checkbox id="entry-expires" checked={draft.expires} onCheckedChange={(v) => set({ expires: v === true })} />
@@ -241,6 +279,27 @@ export function EntryEditor({
             {draft.expires ? (
               <Input type="datetime-local" aria-label={t('entry.expiry')} value={draft.expiry} onChange={(e) => set({ expiry: e.target.value })} />
             ) : null}
+          </div>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">{t('entry.colours')}</legend>
+            <div className="flex flex-wrap gap-4">
+              {(['foregroundColor', 'backgroundColor'] as const).map((key) => (
+                <div key={key} className="flex items-center gap-2">
+                  <Checkbox id={`entry-${key}`} checked={draft[key] !== ''} onCheckedChange={(v) => set({ [key]: v === true ? (key === 'foregroundColor' ? '#1d4ed8' : '#fef3c7') : '' })} />
+                  <Label htmlFor={`entry-${key}`} className="font-normal">
+                    {t(`entry.${key}`)}
+                  </Label>
+                  {draft[key] !== '' ? <input type="color" value={draft[key]} onChange={(e) => set({ [key]: e.target.value })} aria-label={t(`entry.${key}`)} className="h-7 w-10 cursor-pointer rounded border border-border bg-transparent" /> : null}
+                </div>
+              ))}
+            </div>
+          </fieldset>
+          <div className="flex items-start gap-2">
+            <Checkbox id="entry-exclude-report" checked={!draft.qualityCheck} onCheckedChange={(v) => set({ qualityCheck: v !== true })} />
+            <Label htmlFor="entry-exclude-report" className="font-normal">
+              {t('entry.excludeFromReports')}
+              <span className="block text-xs text-muted-foreground">{t('entry.excludeFromReportsHint')}</span>
+            </Label>
           </div>
           {error ? <Alert variant="error">{error}</Alert> : null}
           <DialogFooter>

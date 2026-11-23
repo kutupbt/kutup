@@ -30,8 +30,14 @@ import { getAccessToken } from '@kutup/session/store'
 import { apiErrorCode } from '@kutup/ui/lib/apiError'
 import { parseLinkFragment } from '@kutup/crypto/linkFragment'
 import { goToLinkHome } from '@kutup/session/apps'
+import { forgetLink, linkHeaders, linkKeyOf, linkPasswordFailure, linkRetryAfter, unlockLink } from '@kutup/drive-core/publicLinkPassword'
 
 interface ShareInfo {
+  id: string
+  /** The link key's revision; a protected link's key envelope is bound to it. */
+  keyRevision: number
+  /** A protected link opened with its password: the link key under the password (docs/plans/drive-link-password.md). */
+  passwordLinkKeyEnvelope?: string
   /** 'collection': a folder's files; 'file': one file (docs/plans/drive-file-sharing.md). */
   shareType: 'collection' | 'file'
   targetId: string
@@ -98,12 +104,24 @@ export type PublicFailure =
   | 'signInRequired'
   | 'badKey'
   | 'waiting'
+  | 'passwordRequired'
+  | 'passwordWrong'
+  | 'passwordLocked'
   | 'other'
 
 export class PublicLinkError extends Error {
-  constructor(readonly failure: PublicFailure) {
+  constructor(
+    readonly failure: PublicFailure,
+    /** A locked link's wait, in seconds (`Retry-After`). */
+    readonly retryAfter: number | null = null,
+  ) {
     super(failure)
   }
+}
+
+/** How long a locked link asks to wait, in seconds; null when not said. */
+export function publicRetryAfter(error: unknown): number | null {
+  return error instanceof PublicLinkError ? error.retryAfter : null
 }
 
 /** Why a link did not open, for the page to say. */
@@ -111,7 +129,7 @@ export function publicFailure(error: unknown): PublicFailure {
   return error instanceof PublicLinkError ? error.failure : 'other'
 }
 
-/** The key lives only in the fragment (`#v1.…`), which browsers never send to a server. */
+/** The link's secret lives only in the fragment (`#v1.…`), which browsers never send to a server. */
 export function linkKey(): Uint8Array | null {
   const fragment = parseLinkFragment(window.location.hash)
   if (fragment.kind === 'newer') throw new PublicLinkError('newerLink')
@@ -123,6 +141,8 @@ export function linkKey(): Uint8Array | null {
  * administrator, or with its owner's account: `410` `linkRemoved`).
  */
 export function linkFailure(error: unknown): PublicFailure {
+  const password = linkPasswordFailure(error)
+  if (password) return password
   const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
   // The server's controls on public links (docs/plans/server-personal-data.md, A11).
   const code = response?.data?.code
@@ -145,14 +165,28 @@ export function viewerToken(): string {
   return getAccessToken() ?? ''
 }
 
-export async function loadShare(token: string): Promise<PublicShare> {
-  const key = linkKey()
-  if (!key) throw new PublicLinkError('missingKey')
+/**
+ * The link's files, opened with the key from its fragment. A protected link
+ * answers `passwordRequired` until `password` is given (the page asks for
+ * it); the password is then remembered for this page's later reads.
+ */
+export async function loadShare(token: string, password?: string): Promise<PublicShare> {
+  const secret = linkKey()
+  if (!secret) throw new PublicLinkError('missingKey')
   let share: ShareInfo
   try {
-    share = (await api.get<ShareInfo>(shareBase(token))).data
+    if (password) await unlockLink(token, secret, password)
+    share = (await api.get<ShareInfo>(shareBase(token), { headers: linkHeaders(token) })).data
   } catch (error) {
-    throw new PublicLinkError(linkFailure(error))
+    const failure = linkFailure(error)
+    if (failure === 'passwordWrong' || failure === 'passwordRequired') forgetLink(token)
+    throw new PublicLinkError(failure, linkRetryAfter(error))
+  }
+  let key: Uint8Array
+  try {
+    key = await linkKeyOf(token, share, secret)
+  } catch {
+    throw new PublicLinkError('badKey')
   }
   if (share.expiresAt && Date.parse(share.expiresAt) < Date.now()) throw new PublicLinkError('expired')
   // An album's link shows in Photos: opened on Drive or Office, it goes
@@ -182,7 +216,7 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
   const keyAt = (epoch: number): Promise<Uint8Array> => {
     if (epoch === share.collectionKeyEpoch) return Promise.resolve(collectionKey)
     keyring ??= api
-      .get<EpochLinkV1[]>(`${shareBase(token)}/epochs`)
+      .get<EpochLinkV1[]>(`${shareBase(token)}/epochs`, { headers: linkHeaders(token) })
       .then(({ data: chain }) => {
         if (chain.length !== share.collectionKeyEpoch) throw new Error('incomplete folder key history')
         return unlockCollectionKeyring(collectionKey, share.targetId, share.ownerAccountId, share.ownerAuthorityPublicKey, chain)
@@ -193,7 +227,7 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
       return key
     })
   }
-  const { data } = await api.get<PublicFileRow[]>(`${shareBase(token)}/files`)
+  const { data } = await api.get<PublicFileRow[]>(`${shareBase(token)}/files`, { headers: linkHeaders(token) })
   return Promise.all(
     data.map(async (row) => {
       const opened = await keyAt(row.keyEpoch)
@@ -317,7 +351,7 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
   const url = `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`
   const parts: Uint8Array[] = []
   let length = 0
-  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, currentExpected(file), viewerToken(), signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, currentExpected(file), viewerToken(), signal, linkHeaders(token))) {
     parts.push(plain)
     length += plain.length
   }
@@ -352,6 +386,7 @@ export async function openPublicFilePlayback(
       mimeType: file.mimeType,
       content: () => Promise.resolve({ fileKey, expected: currentExpected(file) }),
       accessToken: viewerToken(),
+      headers: linkHeaders(token),
       readWhole: (readSignal) => readPublicFile(token, file, readSignal),
     },
     signal,
@@ -378,6 +413,7 @@ export async function downloadPublicFile(token: string, file: PublicFile): Promi
     expectedPlainSize: file.size,
     blobFallbackMaxBytes: async () => (await driveStreamLimits({ anonymous: true })).blobFallbackMaxBytes,
     accessToken: viewerToken(),
+    headers: linkHeaders(token),
   })
 }
 

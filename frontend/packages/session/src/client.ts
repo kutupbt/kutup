@@ -212,7 +212,10 @@ api.interceptors.response.use(
     // network-level disconnects). Retry up to 3 times with 0.5/1/2 s backoff
     // before bubbling the error to the caller.
     // The account's lockout is not transient: asking again only waits it out.
-    const lockedOut = status === 429 && error.response?.data?.code === 'accountLocked'
+    // Nor is a public link's password lockout (docs/plans/drive-link-password.md):
+    // its page says when to try again (`Retry-After`).
+    const lockedOut =
+      status === 429 && (error.response?.data?.code === 'accountLocked' || error.response?.data?.code === 'linkPasswordLocked')
     const isTransient =
       status === 503 ||
       (status === 429 && !lockedOut) ||
@@ -241,7 +244,10 @@ api.interceptors.response.use(
       code === 'preAuthInvalid' ||
       // A Chat device's own credential (X-Kutup-Device) refused: the
       // device was removed, not this session.
-      code === 'deviceCredential'
+      code === 'deviceCredential' ||
+      // A public link's password missing or wrong: the link's, not the session's.
+      code === 'linkPassword' ||
+      code === 'linkPasswordWrong'
     if (status === 401 && !originalRequest._retry && !skipRefresh) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {

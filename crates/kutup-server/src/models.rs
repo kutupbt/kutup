@@ -72,6 +72,8 @@ pub struct SettingsResponse {
     pub old_address_receive_days: i64,
     /// The largest `.kdbx` file Kutup Pass takes in an upload, in bytes.
     pub pass_vault_max_bytes: i64,
+    /// The weakest key derivation Kutup Pass sets a vault to.
+    pub pass_kdf_minimums: PassKdfMinimums,
     /// Who may open public links: `on`, `off` or `signedIn` (the share
     /// dialogs say why links are off).
     pub public_sharing: crate::public_sharing::PublicSharing,
@@ -92,6 +94,16 @@ pub struct CalendarPublicSettings {
     /// The key generations one calendar keeps: the owner's app compacts a
     /// calendar nearing it.
     pub key_generations: i64,
+}
+
+/// The weakest key derivation Kutup Pass sets a vault to (administrators'
+/// settings): Argon2 memory in MiB and passes, AES-KDF rounds.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PassKdfMinimums {
+    pub argon2_memory_mib: i64,
+    pub argon2_iterations: i64,
+    pub aes_kdf_rounds: i64,
 }
 
 /// What the feedback form offers besides sending to the administrators.
@@ -530,6 +542,12 @@ pub struct PublicShareResponse {
     pub owner_account_id: String,
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
+    /// The link key's revision.
+    pub key_revision: i32,
+    /// A password-protected link opened with `X-Kutup-Link-Proof`: the
+    /// link key under the password wrap key (docs/plans/drive-link-password.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password_link_key_envelope: Option<String>,
 }
 
 /// `POST /api/v1/admin/accounts` body — mirrors `handlers.CreateAdminAccountRequest`.
@@ -774,6 +792,8 @@ mod tests {
             collection_key_epoch: 1,
             owner_account_id: "u1".into(),
             expires_at: None,
+            key_revision: 1,
+            password_link_key_envelope: None,
         };
         let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
         assert_eq!(v.get("collectionKeyEpoch").unwrap(), 1);

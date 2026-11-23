@@ -1,8 +1,12 @@
+import { FolderPlus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { useCreateFolder } from '@kutup/drive-core/mutations'
+import { canonicalName } from '@kutup/drive-core/names'
+import { NameDialog } from '@kutup/drive-ui/NameDialog'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -15,17 +19,24 @@ import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { putKeptKey, sealVaultKey, secretsKey, type SealedKey } from '../drive/secrets'
 import { useCreateVaultFile, useVaultFiles } from '../drive/vaults'
+import { canMakeSubfolder, vaultFolderChoices } from '../lib/folderPaths'
 import { randomVaultKey, strengthOf } from '../lib/generator'
+import { keyFileName, NEW_VAULT_KEY_FILE_CHOICES, newVaultKeyProblem, type NewVaultKeyForm } from '../lib/keyChange'
 import { freshKeys } from '../sync/openVaults'
 import { VaultHandle } from '../vault/client'
+import { GeneratedKeyFileField } from './GeneratedKeyFile'
 import { KeyFileInput } from './KeyFileInput'
+import { useGeneratedKeyFile } from './useGeneratedKeyFile'
 import { VaultKeyShown } from './VaultKeyDialog'
 
 /**
  * Makes a new vault: a KeePass file in a Drive folder, with its own key. As
  * in Proton Pass, the key is by default a random one kept in the account
  * (docs/plans/pass.md, "Vault keys"), shown on asking for a KeePass app; or
- * a password and/or key file the person chooses.
+ * a password and/or key file the person chooses: one they have, or one
+ * generated here (KeePassXC's New Database wizard), downloaded and said
+ * saved before the vault is made, and wiped when the dialog goes. The
+ * folder is any Drive folder it may be saved in, or a new one made here.
  */
 export function CreateVaultDialog({
   open,
@@ -50,20 +61,25 @@ export function CreateVaultDialog({
   const [unkept, setUnkept] = useState<{ key: string; fileId: string; sealed: SealedKey | null } | null>(null)
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
+  const [keyFileMode, setKeyFileMode] = useState<NewVaultKeyForm['keyFile']>('none')
   const [keyFile, setKeyFile] = useState<{ name: string; contents: Uint8Array } | null>(null)
+  const generated = useGeneratedKeyFile()
+  const createFolder = useCreateFolder()
+  const [naming, setNaming] = useState(false)
   const [remember, setRemember] = useState(true)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const writable = useMemo(
-    () =>
-      folders
-        .filter((f) => f.key && f.canUpload && (f.source === 'owned' || f.source === 'shared'))
-        .sort((a, b) => Number(b.isRoot) - Number(a.isRoot) || (a.name ?? '').localeCompare(b.name ?? '')),
-    [folders],
+    () => vaultFolderChoices(folders, { myFiles: t('vaults.myFiles'), unnamed: t('vaults.unnamedFolder') }),
+    [folders, t],
   )
+  const { forget: forgetGenerated } = generated
+  const { reset: resetCreateFolder } = createFolder
 
   useEffect(() => {
+    // A generated key file lives only in this dialog: wiped when it goes.
+    forgetGenerated()
     if (!open) return
     setName(t('vaults.defaultName'))
     setMode('random')
@@ -71,29 +87,54 @@ export function CreateVaultDialog({
     setFolderId('')
     setPassword('')
     setConfirm('')
+    setKeyFileMode('none')
     setKeyFile(null)
+    setNaming(false)
+    resetCreateFolder()
     setRemember(true)
     setError(null)
-  }, [open, t])
+  }, [open, t, forgetGenerated, resetCreateFolder])
 
   const random = mode === 'random'
   const mismatch = !random && confirm.length > 0 && password !== confirm
-  const noKey = !random && !password && !keyFile
+  const problem = random
+    ? null
+    : newVaultKeyProblem({
+        password,
+        confirm,
+        keyFile: keyFileMode,
+        generated: generated.name !== null,
+        generatedSaved: generated.saved,
+        chosen: keyFile !== null,
+      })
   // Until one is chosen: the folder Drive asked for, else My files.
-  const chosen = folderId || (wantedFolder && writable.some((f) => f.id === wantedFolder) ? wantedFolder : (root?.id ?? ''))
-  const folder = writable.find((f) => f.id === chosen)
+  const chosen = folderId || (wantedFolder && writable.some((c) => c.folder.id === wantedFolder) ? wantedFolder : (root?.id ?? ''))
+  const choice = writable.find((c) => c.folder.id === chosen)
+  const folder = choice?.folder
+  // Names a new subfolder may not take: its siblings' (the server checks files too).
+  const taken = useMemo(
+    () => new Set(folders.flatMap((f) => (folder && f.parentId === folder.id && f.name ? [canonicalName(f.name)] : []))),
+    [folders, folder],
+  )
+
+  const makeKeyFile = async () => {
+    setError(null)
+    if (!(await generated.make(keyFileName(name.trim() || t('vaults.defaultName'))))) setError(t('changeKey.generateFailed'))
+  }
 
   const submit = async () => {
-    if (!folder || !name.trim() || mismatch || noKey || unkept) return
+    if (!folder || !name.trim() || problem || unkept) return
     setPending(true)
     setError(null)
-    const generated = random ? randomVaultKey() : null
-    const key = generated ? { password: generated, keyFile: null } : { password: password || null, keyFile: keyFile?.contents ?? null }
+    const madeKey = random ? randomVaultKey() : null
+    // A copy: the dialog's generated key file is wiped when it closes.
+    const chosenFile = keyFileMode === 'generate' ? (generated.bytes()?.slice() ?? null) : keyFileMode === 'choose' ? (keyFile?.contents ?? null) : null
+    const key = madeKey ? { password: madeKey, keyFile: null } : { password: password || null, keyFile: chosenFile }
     try {
       const vault = await VaultHandle.create(name.trim(), key)
       let fileId: string
       let sealed: SealedKey | null = null
-      let kept = !(generated || remember)
+      let kept = !(madeKey || remember)
       try {
         const contents = await vault.save()
         fileId = await createFile(folder, name.trim(), contents)
@@ -101,7 +142,7 @@ export function CreateVaultDialog({
         if (!kept) {
           try {
             // Sealed in the worker from the key this vault was made with.
-            sealed = await sealVaultKey(session, fileId, vault, 0, Boolean(generated))
+            sealed = await sealVaultKey(session, fileId, vault, 0, Boolean(madeKey))
             await putKeptKey(session, fileId, sealed)
             await queryClient.invalidateQueries({ queryKey: secretsKey })
             kept = true
@@ -114,9 +155,9 @@ export function CreateVaultDialog({
       }
       freshKeys.set(fileId, key)
       if (!kept) {
-        if (generated) {
+        if (madeKey) {
           // Kept nowhere else: shown now, or the vault is lost.
-          setUnkept({ key: generated, fileId, sealed })
+          setUnkept({ key: madeKey, fileId, sealed })
           toast.error(t('vaultKey.notKept'))
           return
         }
@@ -173,18 +214,26 @@ export function CreateVaultDialog({
           </Field>
           <Field label={t('vaults.folder')} description={t('vaults.folderDescription')}>
             {(field) => (
-              <Select value={chosen} onValueChange={setFolderId}>
-                <SelectTrigger id={field.id} aria-describedby={field['aria-describedby']}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {writable.map((f) => (
-                    <SelectItem key={f.id} value={f.id}>
-                      {f.isRoot ? t('vaults.myFiles') : (f.name ?? t('vaults.unnamedFolder'))}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                <Select value={chosen} onValueChange={setFolderId}>
+                  <SelectTrigger id={field.id} aria-describedby={field['aria-describedby']} className="min-w-0 flex-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {writable.map((c) => (
+                      <SelectItem key={c.folder.id} value={c.folder.id}>
+                        {c.path}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {canMakeSubfolder(folder) ? (
+                  <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setNaming(true)} disabled={pending}>
+                    <FolderPlus />
+                    {t('vaults.newFolder')}
+                  </Button>
+                ) : null}
+              </div>
             )}
           </Field>
           <fieldset className="space-y-2">
@@ -210,10 +259,26 @@ export function CreateVaultDialog({
           <Field label={t('vaults.confirmPassword')} error={mismatch ? t('vaults.mismatch') : undefined}>
             {(field) => <PasswordInput {...field} value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" />}
           </Field>
-          <div className="space-y-1.5">
-            <span className="text-sm font-medium">{t('keyFile.label')}</span>
-            <KeyFileInput value={keyFile} onChange={setKeyFile} />
-          </div>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">{t('keyFile.label')}</legend>
+            <p className="text-xs text-muted-foreground">{t('vaults.keyFileDescription')}</p>
+            {NEW_VAULT_KEY_FILE_CHOICES.map((value) => (
+              <label key={value} className="flex items-center gap-2 text-sm">
+                <input type="radio" name="new-vault-key-file" checked={keyFileMode === value} onChange={() => setKeyFileMode(value)} />
+                {t(`changeKey.keyFileChoice.${value}`)}
+              </label>
+            ))}
+            {keyFileMode === 'generate' ? (
+              <div className="pl-6">
+                <GeneratedKeyFileField keyFile={generated} id="new-vault-key" onGenerate={() => void makeKeyFile()} />
+              </div>
+            ) : null}
+            {keyFileMode === 'choose' ? (
+              <div className="pl-6">
+                <KeyFileInput value={keyFile} onChange={setKeyFile} />
+              </div>
+            ) : null}
+          </fieldset>
           <div className="flex items-start gap-2">
             <Checkbox id="vault-remember" checked={remember} onCheckedChange={(v) => setRemember(v === true)} />
             <div className="space-y-0.5">
@@ -223,7 +288,13 @@ export function CreateVaultDialog({
           </div>
           </>
           )}
-          {noKey ? <p className="text-xs text-muted-foreground">{t('vaults.needsKey')}</p> : null}
+          {problem === 'noKey' ? <p className="text-xs text-muted-foreground">{t('vaults.needsKey')}</p> : null}
+          {problem === 'mismatch' && !confirm ? <p className="text-xs text-muted-foreground">{t('vaults.repeatPassword')}</p> : null}
+          {problem === 'saveKeyFile' || problem === 'chooseKeyFile' ? (
+            <p className="text-xs text-muted-foreground" data-testid="new-vault-problem">
+              {t(`changeKey.problem.${problem}`)}
+            </p>
+          ) : null}
           {error ? <Alert variant="error">{error}</Alert> : null}
           {unkept ? <VaultKeyShown value={unkept.key} warning={t('vaultKey.notKeptDescription')} /> : null}
           {unkept ? (
@@ -242,12 +313,39 @@ export function CreateVaultDialog({
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
                 {t('common.cancel')}
               </Button>
-              <Button type="submit" loading={pending} disabled={!folder || !name.trim() || mismatch || noKey}>
+              <Button type="submit" loading={pending} disabled={!folder || !name.trim() || problem !== null}>
                 {t('vaults.create')}
               </Button>
             </DialogFooter>
           )}
         </form>
+        <NameDialog
+          open={naming}
+          title={t('vaults.newFolderTitle')}
+          description={choice ? t('vaults.newFolderIn', { path: choice.path }) : undefined}
+          initial=""
+          submit={t('vaults.newFolderCreate')}
+          pending={createFolder.isPending}
+          error={createFolder.error}
+          taken={taken}
+          onClose={() => {
+            setNaming(false)
+            createFolder.reset()
+          }}
+          onSubmit={(folderName) => {
+            if (!folder) return
+            // Made under the chosen folder, then chosen: subfolders at any depth.
+            createFolder.mutate(
+              { parent: folder, name: folderName },
+              {
+                onSuccess: (id) => {
+                  setNaming(false)
+                  setFolderId(id)
+                },
+              },
+            )
+          }}
+        />
       </DialogContent>
     </Dialog>
   )

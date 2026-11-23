@@ -524,6 +524,17 @@ key, so a bounce of it matches nothing and is filed as ordinary mail.
 Matching it needs the bounce check to hash under the keys of the groups the
 account sends for as well.
 
+### Mail · Sieve run by the server
+
+Kutup's server runs filters as its own conditions (docs/plans/mail-filters.md),
+so the Sieve editor and import take only what those can hold
+(docs/plans/mail-sieve-editor.md): tests on the sender, recipients, subject and
+attachments; move, label, read and star. Proton runs the script itself, so
+any Sieve its server supports works there. Running Sieve on Kutup's server
+(Stalwart has an engine) would need a design for what a script may do with
+Kutup's own folders, labels and encryption. Sieve's `vacation` and `redirect`
+are already features of their own here (Auto-reply, Forwarding).
+
 ### Backup / restore CLI
 
 The database half exists: `scripts/backup-postgres.sh` and `scripts/backup-stalwart.sh` store age-encrypted backups (to an offline key) in a bucket of their own and restore them after checking them (`docs/self-hosting.md`, "Backups"). Deleted blobs stay in the store for `storageDeletedBlobRetentionSeconds` (two days at first), so a dump younger than that restores with every blob it names, and `GET /api/health/ready` reports the newest backup's age. Still open: the blob bucket's second copy is the provider's versioning or replica (not set up by Kutup), the restore drill ran before the wipe on staging (E1, 2026-11-20, "Restore, as last run") and runs again on production after it, a blob that a restored dump names but the store lacks is answered with a 500 (`storage::get_object` turns `NoSuchKey` into a storage error) and shown as "can't be opened … check your connection" instead of a "missing" state (a 404-class answer with its own message), the watcher that alerts on readiness (docs/plans/restore-drill-and-alerting.md, Part 2 B) is deferred, and `kutup backup` / `kutup restore` subcommands in the Rust CLI (`crates/kutup-cli`) to wrap both.
@@ -1021,16 +1032,11 @@ other KeePass apps still working and a Kutup three-way merge that never loses
 an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 [`research/19-password-manager.md`](research/19-password-manager.md).
 
-- **New vault: gaps found after the wipe (user, 2026-11-23).**
-  - The location picker in *New vault* (`CreateVaultDialog.tsx`) lists only
-    existing Drive folders: it can't make a new folder or subfolder there, so
-    a vault can't be stored in a folder that doesn't exist yet without going
-    to Drive first. Add "New folder" in the picker (Drive's folder creation,
-    under the chosen parent).
-  - *New vault* can only take an existing key file (`KeyFileInput`); it can't
-    generate one. Generation (KeePassXC's XML v2 key file, downloaded once)
-    exists only in *Vault settings → Security* (`ChangeKeyDialog.tsx`). Offer
-    "Generate a key file" at creation too, reusing that code.
+- **New vault: gaps found after the wipe (user, 2026-11-23)** ✅: the
+  location picker names folders by their path and makes a new folder or
+  subfolder under the chosen one (Drive's New folder); a key file can be
+  generated at creation (KeePassXC's XML v2, downloaded and said saved
+  before the vault is made, wiped when the dialog closes). Spec 207.
 - **K0** ✅: `crates/kutup-pass`, KDBX through the `keepass` crate and the
   three-way merge, with corpus and property tests.
 - **K1** ✅: conditional version saves (`basedOn`, `parentVersionId`,
@@ -1039,7 +1045,9 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   (`scripts/verify-pass-sync.sh`).
 - **K2a** ✅: vault secrets sealed under the account key
   (`kutup_crypto::pass_vault`; since W3 the account-records scope `passSecrets`); `kutup sync`
-  opens vaults with the sign-in, `kutup pass keep|ls|forget`.
+  opens vaults with the sign-in, `kutup pass keep|ls|forget`; entries from
+  the CLI with `kutup pass ls|search|show|clip|add|edit|rm|generate`
+  (docs/plans/pass-gaps-3.md, B2).
 - **K2b** ✅: vault editing in `kutup-pass` (KeePass semantics: history,
   recycle bin, deletions recorded) and `kutup-pass-wasm`.
 - **K2c** ✅: the website at `pass.<domain>`: vaults from Drive, unlock with
@@ -1069,6 +1077,20 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   prompt checked on a Mac (the osascript dialog is built but not yet run on
   macOS). `kutup ssh-agent install` (systemd / launchd), desktop approval
   and `status` (noticing another agent in the shell) are built.
+- **Pass WASM size.** The search fold (`kutup_search::fold`, NFKD tables)
+  added about 86 KB gzipped and the JSON/ZIP importers about 46 KB; the
+  budget was raised to 830000 (2026-11-17). Done (2026-11-19): the WASM
+  build folds through the browser's own `String.prototype.normalize('NFKD')`
+  (`kutup-search`'s `browser` feature, through `js_sys`), native and the CLI
+  keep the Rust tables, and `crates/kutup-search/tests/vectors/fold.json`
+  holds both to the same results (a Rust test and `scripts/test-pass-wasm.mjs`).
+  Pass went from 826,605 to 761,665 bytes gzipped, and Mail's body search
+  (its index stays in one browser too) from 204,432 to 139,592. Only such
+  indexes may use it: `scripts/check-browser-fold.py` (the static gate) lists
+  the crates allowed; the server's keyed search tokens keep the Rust tables. Next lever: `url` pulls
+  `idna` and ICU's normalizer data into the Pass WASM (the vendored `keepass`
+  crate and `kutup-pass` parse URLs); a host-only parser there would save
+  more.
 - **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing
   single items between users (research 19 §5).
 
@@ -1076,6 +1098,9 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 
 ## Polish / smaller items (future)
 
+- **A licences page per app (third-party credits).** Each app lists what it
+  ships from others and their licences, e.g. Kutup Pass's EFF word list
+  (CC BY 3.0), credited today in the generator's passphrase panel.
 - **Rate limits across backends (2026-10-21):** every rate limit is an
   administrators' setting (Administration → Rate limits, per account where it
   counts per account), but the windows are counted in each backend's memory.
@@ -1554,6 +1579,13 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   public links in the web app and with `kutup share access` / `kutup share
   remove`; every removal rotates the folder key. Federated uploads stream
   (signed content digest, spooled and checked before parsing).
+- **Link password and expiry in the CLI** (docs/plans/drive-link-password.md):
+  the web dialogs set both; the CLI's folder re-key already names each
+  link's key revision. Still open: `kutup share link --password/--expires`
+  (and changing them on an existing link), and `kutup pubshare` opening a
+  password-protected link (it gets `401 linkPassword` today: it needs the
+  password prompt, the `X-Kutup-Link-Proof` header and the purpose-14 link
+  key).
 - **Server improvements that unlock better CLI behavior** (noted per the
   "do when we touch the server" decision):
   - `latestVersionId` on the `GET /collections/:id/files` rows (one

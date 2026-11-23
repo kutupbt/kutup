@@ -18,6 +18,7 @@ import { joinLivePhotos, type Photo } from '../library/library'
 import { newestFirst } from '../library/timeline'
 import { parseLinkFragment } from '@kutup/crypto/linkFragment'
 import { goToLinkHome } from '@kutup/session/apps'
+import { forgetLink, linkHeaders, linkKeyOf, linkPasswordFailure, linkRetryAfter, unlockLink } from '@kutup/drive-core/publicLinkPassword'
 
 // An album's public link (docs/plans/photos.md): the album key sealed under
 // a link key that lives only in the URL fragment, so the server never holds
@@ -35,15 +36,27 @@ export type PublicFailure =
   | 'signInRequired'
   | 'badKey'
   | 'notAlbum'
+  | 'passwordRequired'
+  | 'passwordWrong'
+  | 'passwordLocked'
   | 'other'
 
 export class PublicAlbumError extends Error {
-  constructor(public readonly failure: PublicFailure) {
+  constructor(
+    public readonly failure: PublicFailure,
+    /** A locked link's wait, in seconds (`Retry-After`). */
+    public readonly retryAfter: number | null = null,
+  ) {
     super(failure)
   }
 }
 
 interface ShareInfo {
+  id: string
+  /** The link key's revision; a protected link's key envelope is bound to it. */
+  keyRevision: number
+  /** A protected link opened with its password (docs/plans/drive-link-password.md). */
+  passwordLinkKeyEnvelope?: string
   shareType: string
   targetId: string
   collectionKeyEnvelope: string
@@ -75,7 +88,7 @@ export interface PublicAlbum {
   photos: PublicPhoto[]
 }
 
-/** The link's key, from the fragment (`#v1.…`), which browsers never send. */
+/** The link's secret, from the fragment (`#v1.…`), which browsers never send. */
 function linkKey(): Uint8Array | null {
   const fragment = parseLinkFragment(window.location.hash)
   if (fragment.kind === 'newer') throw new PublicAlbumError('newerLink')
@@ -84,13 +97,20 @@ function linkKey(): Uint8Array | null {
 
 const base = (token: string) => `/drive/public-links/${encodeURIComponent(token)}`
 
-export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
-  const key = linkKey()
-  if (!key) throw new PublicAlbumError('missingKey')
+/** The album, opened with the fragment's secret; a protected link needs `password` too (the page asks for it). */
+export async function loadPublicAlbum(token: string, password?: string): Promise<PublicAlbum> {
+  const secret = linkKey()
+  if (!secret) throw new PublicAlbumError('missingKey')
   let share: ShareInfo
   try {
-    share = (await api.get<ShareInfo>(base(token))).data
+    if (password) await unlockLink(token, secret, password)
+    share = (await api.get<ShareInfo>(base(token), { headers: linkHeaders(token) })).data
   } catch (error) {
+    const refused = linkPasswordFailure(error)
+    if (refused) {
+      if (refused !== 'passwordLocked') forgetLink(token)
+      throw new PublicAlbumError(refused, linkRetryAfter(error))
+    }
     const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
     const status = response?.status
     const code = response?.data?.code
@@ -108,6 +128,7 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
   let albumKey: Uint8Array
   let name: string
   try {
+    const key = await linkKeyOf(token, share, secret)
     albumKey = await openPublicLinkCollectionKeyV1(share.collectionKeyEnvelope, key, {
       collectionId: share.targetId,
       ownerAccountId: share.ownerAccountId,
@@ -125,7 +146,7 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
   } catch {
     throw new PublicAlbumError('badKey')
   }
-  const { data } = await api.get<PublicItem[]>(`${base(token)}/album`)
+  const { data } = await api.get<PublicItem[]>(`${base(token)}/album`, { headers: linkHeaders(token) })
   const photos = await Promise.all(
     data.map(async (item): Promise<PublicPhoto | null> => {
       try {
@@ -179,7 +200,7 @@ export async function readPublicOriginal(token: string, photo: PublicPhoto, sign
   const current = await currentContentOf(file)
   const url = `${await resolveApiBase()}${base(token)}/files/${file.id}/download`
   const parts: BlobPart[] = []
-  for await (const { plain } of fetchDecryptedChunks(url, current.fileKey, current.expected, getAccessToken() ?? '', signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, current.fileKey, current.expected, getAccessToken() ?? '', signal, linkHeaders(token))) {
     parts.push(new Blob([plain as BlobPart]))
   }
   return new Blob(parts, { type: file.mimeType })
@@ -205,6 +226,7 @@ export async function openPublicVideo(
       mimeType: photo.file.mimeType,
       content: () => currentContentOf(photo.file),
       accessToken: getAccessToken() ?? '',
+      headers: linkHeaders(token),
       readWhole: (readSignal) => readPublicOriginal(token, photo, readSignal),
     },
     signal,

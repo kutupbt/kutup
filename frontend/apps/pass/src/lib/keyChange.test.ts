@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { keyChangeProblem, keyFileChoices, keyFileName, passwordChoices, type KeyChangeForm } from './keyChange'
+import {
+  keyChangeProblem,
+  keyFileChoices,
+  keyFileName,
+  NEW_VAULT_KEY_FILE_CHOICES,
+  newVaultKeyProblem,
+  passwordChoices,
+  type KeyChangeForm,
+  type NewVaultKeyForm,
+} from './keyChange'
 
 const form = (over: Partial<KeyChangeForm> = {}): KeyChangeForm => ({
   now: { password: true, keyFile: false },
@@ -48,5 +57,43 @@ describe('a vault key change', () => {
     expect(keyFileName('Kişisel')).toBe('Kişisel.keyx')
     expect(keyFileName('a/b:c')).toBe('abc.keyx')
     expect(keyFileName('  ')).toBe('vault.keyx')
+  })
+})
+
+const fresh = (over: Partial<NewVaultKeyForm> = {}): NewVaultKeyForm => ({
+  password: '',
+  confirm: '',
+  keyFile: 'none',
+  generated: false,
+  generatedSaved: false,
+  chosen: false,
+  ...over,
+})
+
+describe("a new vault's chosen key", () => {
+  it('needs a password, a key file, or both', () => {
+    expect(newVaultKeyProblem(fresh())).toBe('noKey')
+    expect(newVaultKeyProblem(fresh({ password: 'a', confirm: 'a' }))).toBeNull()
+    expect(newVaultKeyProblem(fresh({ keyFile: 'choose', chosen: true }))).toBeNull()
+    expect(newVaultKeyProblem(fresh({ password: 'a', confirm: 'a', keyFile: 'choose', chosen: true }))).toBeNull()
+  })
+
+  it('takes a password only when typed twice the same', () => {
+    expect(newVaultKeyProblem(fresh({ password: 'a' }))).toBe('mismatch')
+    expect(newVaultKeyProblem(fresh({ password: 'a', confirm: 'b' }))).toBe('mismatch')
+    // Repeated but no password: none.
+    expect(newVaultKeyProblem(fresh({ confirm: 'a' }))).toBe('noKey')
+  })
+
+  it('takes a generated key file only once it is made and said to be saved', () => {
+    expect(newVaultKeyProblem(fresh({ keyFile: 'generate' }))).toBe('saveKeyFile')
+    expect(newVaultKeyProblem(fresh({ keyFile: 'generate', generated: true }))).toBe('saveKeyFile')
+    expect(newVaultKeyProblem(fresh({ keyFile: 'generate', generated: true, generatedSaved: true }))).toBeNull()
+    expect(newVaultKeyProblem(fresh({ password: 'a', confirm: 'a', keyFile: 'generate', generated: true }))).toBe('saveKeyFile')
+    expect(newVaultKeyProblem(fresh({ keyFile: 'choose' }))).toBe('chooseKeyFile')
+  })
+
+  it('offers no key file, a generated one, or one the person has', () => {
+    expect(NEW_VAULT_KEY_FILE_CHOICES).toEqual(['none', 'generate', 'choose'])
   })
 })

@@ -1,4 +1,4 @@
-import { Download, Filter, GripVertical, ListChecks, Pencil, Plus, Trash2, Upload } from 'lucide-react'
+import { Download, FileCode2, Filter, GripVertical, ListChecks, Pencil, Plus, Trash2, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -18,6 +18,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { FilterDialog } from './FilterDialog'
 import { describeFilter } from './filterText'
 import { SieveImportDialog } from './SieveDialog'
+import { SieveFilterDialog } from './SieveFilterDialog'
 import { exportSieve } from './sieveFiles'
 
 /**
@@ -34,6 +35,8 @@ export function FiltersSettingsPage() {
   const order = useOrderFilters()
   const apply = useApplyFilters()
   const [editing, setEditing] = useState<MailFilter | 'new' | null>(null)
+  // The same filter as Sieve (docs/plans/mail-sieve-editor.md), as Proton's "Edit Sieve".
+  const [sieveEditing, setSieveEditing] = useState<MailFilter | 'new' | null>(null)
   const [importing, setImporting] = useState(false)
   const [deleting, setDeleting] = useState<MailFilter | null>(null)
   const [applying, setApplying] = useState<MailFilter | null>(null)
@@ -67,6 +70,10 @@ export function FiltersSettingsPage() {
             <Button variant="outline" disabled={list.length === 0} onClick={() => exportSieve(list, places.data)}>
               <Download />
               {t('sieve.export')}
+            </Button>
+            <Button variant="outline" onClick={() => setSieveEditing('new')}>
+              <FileCode2 />
+              {t('sieve.editor.add')}
             </Button>
             <Button onClick={() => setEditing('new')}>
               <Plus />
@@ -147,6 +154,11 @@ export function FiltersSettingsPage() {
                     <Pencil />
                   </Button>
                 </Tooltip>
+                <Tooltip label={t('sieve.editor.edit')}>
+                  <Button variant="ghost" size="icon" className="size-8" aria-label={t('sieve.editor.edit')} onClick={() => setSieveEditing(filter)}>
+                    <FileCode2 />
+                  </Button>
+                </Tooltip>
                 <Tooltip label={t('filters.delete')}>
                   <Button variant="ghost" size="icon" className="size-8" aria-label={t('filters.delete')} onClick={() => setDeleting(filter)}>
                     <Trash2 />
@@ -159,6 +171,7 @@ export function FiltersSettingsPage() {
       )}
       {importing ? <SieveImportDialog places={places.data} onClose={() => setImporting(false)} /> : null}
       {editing ? <FilterDialog filter={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} /> : null}
+      {sieveEditing ? <SieveFilterDialog filter={sieveEditing === 'new' ? undefined : sieveEditing} onClose={() => setSieveEditing(null)} /> : null}
       <Dialog open={applying !== null} onOpenChange={(open) => !open && setApplying(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

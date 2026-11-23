@@ -3,6 +3,7 @@
 // leaves it: no password, hash or prefix is sent anywhere.
 
 import { strengthOf } from './generator'
+import type { StrengthOf } from './strength'
 import { fieldValue, type EntryView, type VaultView } from '../vault/types'
 
 export interface SecurityReport {
@@ -16,8 +17,14 @@ export interface SecurityReport {
   checked: number
 }
 
-export function securityReport(view: VaultView, now: Date = new Date()): SecurityReport {
-  const live = view.entries.filter((e) => !e.inRecycleBin)
+/**
+ * The report over the vault outside the recycle bin. Entries marked
+ * "Exclude from reports" (KeePass's QualityCheck off) are left out of every
+ * list, as in KeePassXC. `rate` says how strong a password is (zxcvbn once
+ * loaded, lib/strength.ts).
+ */
+export function securityReport(view: VaultView, now: Date = new Date(), rate: StrengthOf = strengthOf): SecurityReport {
+  const live = view.entries.filter((e) => !e.inRecycleBin && e.qualityCheck)
   const withPassword = live.filter((e) => fieldValue(e, 'Password') !== '')
   const byPassword = new Map<string, EntryView[]>()
   for (const entry of withPassword) {
@@ -27,7 +34,7 @@ export function securityReport(view: VaultView, now: Date = new Date()): Securit
   const title = (e: EntryView) => fieldValue(e, 'Title')
   const byTitle = (a: EntryView, b: EntryView) => title(a).localeCompare(title(b), undefined, { sensitivity: 'base', numeric: true })
   return {
-    weak: withPassword.filter((e) => strengthOf(fieldValue(e, 'Password')) === 'weak').sort(byTitle),
+    weak: withPassword.filter((e) => rate(fieldValue(e, 'Password')) === 'weak').sort(byTitle),
     reused: [...byPassword.values()]
       .filter((group) => group.length > 1)
       .map((group) => [...group].sort(byTitle))

@@ -874,6 +874,7 @@
       "linkRemoved": "taken down",
       "openLink": "Open the link",
       "noLink": "The reporter did not include the link.",
+      "linkPassword": "The link's password, as the reporter gave it:",
       "dismiss": "Dismiss",
       "dismissed": "Report dismissed",
       "remove": "Take link down",
@@ -1137,6 +1138,10 @@
       "driveLimits": {
         "driveTrashRetentionDays": "Keep trashed items (days)",
         "driveTrashRetentionDaysHint": "How long a deleted file or folder can be restored before it is deleted for good. 0 keeps the trash until its owner empties it.",
+        "drivePublicLinkMaxExpiryDays": "Furthest public link expiry (days)",
+        "drivePublicLinkMaxExpiryDaysHint": "How far ahead an owner may set a public link to expire. 0: no limit, and links may never expire; any other value makes every link expire. It applies to links made or changed from then on: existing links keep their expiry (or none) until their owner changes it.",
+        "drivePublicLinkPasswordMaxChars": "Longest public link password (characters)",
+        "drivePublicLinkPasswordMaxCharsHint": "The longest password an owner may set on a public link.",
         "driveUploadMaxBytes": "Largest upload (bytes)",
         "driveUploadMaxBytesHint": "The largest file one upload stores, encrypted.",
         "driveVersionMaxBytes": "Largest version (bytes)",
@@ -1217,6 +1222,14 @@
       "mailLimits": {
         "mailKeysPerAddress": "Keys per address",
         "mailKeysPerAddressHint": "Each address keeps its current key and older ones to read old mail. Lists that already hold more keep them."
+      },
+      "passLimits": {
+        "passArgon2MinMemoryMib": "Least Argon2 memory (MiB)",
+        "passArgon2MinMemoryMibHint": "A vault's settings can't set Argon2 to use less memory. Vaults already below it still open, with a warning.",
+        "passArgon2MinIterations": "Least Argon2 passes",
+        "passArgon2MinIterationsHint": "A vault's settings can't set fewer Argon2 passes.",
+        "passAesKdfMinRounds": "Least AES-KDF rounds",
+        "passAesKdfMinRoundsHint": "For vaults kept on AES-KDF for older apps: a vault's settings can't set fewer rounds."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "First wait (seconds)",
@@ -1639,6 +1652,7 @@
         "capability": "capability",
         "recipient": "recipient",
         "forwarding": "forwarding",
+        "linkAndAddress": "link and address",
         "connection": "connection",
         "link": "link",
         "server": "server"
@@ -1699,7 +1713,9 @@
             "collab_frame_burst": "Collaboration frame burst",
             "collab_bytes_per_second": "Collaboration bytes per socket",
             "collab_byte_burst": "Collaboration byte burst",
-            "reports": "Reports on public links"
+            "reports": "Reports on public links",
+            "link_password_failures": "Wrong passwords for one public link from one address",
+            "link_password_address_failures": "Wrong public link passwords from one address, over every link"
           }
         },
         "chat": {
@@ -1820,7 +1836,9 @@
             "collab_frame_burst": "Collaboration frames one socket may send in a burst.",
             "collab_bytes_per_second": "Collaboration bytes one socket sends a second, on average.",
             "collab_byte_burst": "Collaboration bytes one socket may send in a burst.",
-            "reports": "Reports on public links, which need no account."
+            "reports": "Reports on public links, which need no account.",
+            "link_password_failures": "Wrong passwords for one public link from one address: guessing a link's password. Past it that address waits out the hour; others still open the link.",
+            "link_password_address_failures": "Wrong public link passwords from one address, over every link."
           }
         },
         "chat": {

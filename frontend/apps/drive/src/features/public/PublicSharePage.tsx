@@ -5,10 +5,11 @@ import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { opensInOffice } from '@kutup/drive-core/editorKind'
+import { PublicLinkPassword } from '@kutup/drive-ui/PublicLinkPassword'
 import { PublicNotice } from '@kutup/drive-ui/PublicNotice'
 import { publicDocumentUrl } from '@kutup/editors/paths'
 import { loadAppDirectory } from '@kutup/session/apps'
-import { downloadPublicFile, loadShare, publicFailure, type PublicFile } from '@kutup/editors/public/share'
+import { downloadPublicFile, loadShare, publicFailure, publicRetryAfter, type PublicFile } from '@kutup/editors/public/share'
 import { Alert } from '@kutup/ui/components/alert'
 import { KutupLogo } from '@kutup/ui/components/brand'
 import { LocaleToggle } from '@kutup/ui/components/locale-toggle'
@@ -38,10 +39,12 @@ export function PublicSharePage() {
   const [prefs, updatePrefs] = useExplorerPrefs()
   const [selection, setSelection] = useState<Set<string>>(new Set())
   const [playing, setPlaying] = useState<PublicFile | null>(null)
+  // A protected link's password, once typed; each try is a new attempt.
+  const [password, setPassword] = useState<{ value: string; attempt: number } | null>(null)
   const share = useQuery({
-    queryKey: ['public-share', token],
+    queryKey: ['public-share', token, password?.attempt ?? 0],
     // The app origins first: a document's address on Office comes from them.
-    queryFn: async () => (await loadAppDirectory(), loadShare(token)),
+    queryFn: async () => (await loadAppDirectory(), loadShare(token, password?.value)),
     retry: false,
   })
   const files = useMemo(() => share.data?.files ?? [], [share.data])
@@ -73,6 +76,7 @@ export function PublicSharePage() {
   }
 
   const failure = share.isError ? publicFailure(share.error) : null
+  const asksPassword = failure === 'passwordRequired' || failure === 'passwordWrong' || failure === 'passwordLocked'
 
   return (
     <div className="flex min-h-svh flex-col bg-background">
@@ -85,7 +89,13 @@ export function PublicSharePage() {
         </span>
       </header>
       {share.isPending ? <LoadingPanel label={t('public.decrypting')} /> : null}
-      {failure ? (
+      {asksPassword ? (
+        <PublicLinkPassword
+          refusal={failure === 'passwordWrong' ? 'wrong' : failure === 'passwordLocked' ? 'locked' : null}
+          retryAfter={publicRetryAfter(share.error)}
+          onSubmit={(value) => setPassword((last) => ({ value, attempt: (last?.attempt ?? 0) + 1 }))}
+        />
+      ) : failure ? (
         <div className="mx-auto w-full max-w-lg p-6">
           <Alert variant="error" title={t(`public.failure.${failure}.title`)}>
             {t(`public.failure.${failure}.description`)}

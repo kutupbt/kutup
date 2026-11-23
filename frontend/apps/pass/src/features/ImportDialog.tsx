@@ -116,7 +116,7 @@ export function ImportDialog({
             <input
               ref={input}
               type="file"
-              accept=".csv,.txt,text/csv"
+              accept=".csv,.txt,text/csv,.json,application/json,.zip,application/zip,.1pux,.xml,application/xml,text/xml"
               hidden
               onChange={(e) => {
                 const picked = e.target.files?.[0]
