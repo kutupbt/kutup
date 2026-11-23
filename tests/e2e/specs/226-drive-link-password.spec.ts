@@ -44,6 +44,18 @@ async function saveSettings(page: Page, change: { password?: string | null; expi
   await expect(form).toBeHidden({ timeout: 60_000 })
 }
 
+/** A new public link to `folder` from its menu, once made; the dialog closed. */
+async function newFolderLink(page: Page, folder: string): Promise<string> {
+  await itemAction(page, folder, 'Get public link')
+  const dialog = page.getByRole('dialog', { name: 'Public link' })
+  const field = dialog.getByRole('textbox')
+  await expect(field).toHaveValue(/#v1\./, { timeout: 30_000 })
+  const link = await field.inputValue()
+  await dialog.getByRole('button', { name: 'Close' }).first().click()
+  await expect(dialog).toBeHidden()
+  return link
+}
+
 /** A day `days` from today, as a date field takes it. */
 function dayAhead(days: number): string {
   const d = new Date()
@@ -126,19 +138,13 @@ test("a folder link's password holds across the folder's re-key", async ({ brows
   const note = await createNote(drive)
   await noteLive(drive)
   await drive.goto(appUrl('drive', '/'))
-  await itemAction(drive, folder, 'Get public link')
-  let dialog = drive.getByRole('dialog')
-  const field = dialog.getByRole('textbox')
-  await expect(field).toHaveValue(/#v1\./, { timeout: 30_000 })
-  const link = await field.inputValue()
-  await drive.keyboard.press('Escape')
+  const link = await newFolderLink(drive, folder)
 
   // A second link, then the password on the first; removing the second
   // re-keys the folder, and the first must stay behind its password.
-  await itemAction(drive, folder, 'Get public link')
-  await drive.keyboard.press('Escape')
+  await newFolderLink(drive, folder)
   await itemAction(drive, folder, 'Share')
-  dialog = drive.getByRole('dialog')
+  const dialog = drive.getByRole('dialog')
   await saveSettings(drive, { password: LINK_PASSWORD })
   await dialog.getByRole('button', { name: 'Remove this link' }).last().click()
   await dialog.getByRole('button', { name: 'Remove', exact: true }).last().click()

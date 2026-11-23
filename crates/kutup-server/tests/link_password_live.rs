@@ -348,7 +348,10 @@ fn a_link_password_gates_the_link_and_survives_a_rekey() {
 
 /// Too many wrong passwords lock one address out of one link, with
 /// `Retry-After`, as Proton's clients wait; anyone else still opens it.
-/// Needs an administrator to lower the limit (`KUTUP_LIVE_ADMIN`).
+/// Needs an administrator to lower the limit (`KUTUP_LIVE_ADMIN`). On a
+/// stack the browser suites share, run it after them with their
+/// administrator's password: on a fresh server the first sign-in here sets
+/// the administrator up with the password given.
 #[test]
 fn wrong_passwords_lock_one_address_not_the_link() {
     let (Ok(base), Ok(admin)) = (
