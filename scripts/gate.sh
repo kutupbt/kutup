@@ -40,6 +40,10 @@ static() {
   scripts/test-restore-drill.sh
   step "Migrations (applied ones unchanged, new ones newer than the base)"
   scripts/check-migrations.sh "${KUTUP_MIGRATION_BASE:-origin/master}"
+  # The docs workflow runs the same check on a pull request's changes
+  # (whitespace errors, a blank line at a file's end).
+  step "Changed-file whitespace"
+  git diff --check "${KUTUP_MIGRATION_BASE:-origin/master}...HEAD"
   step "Documentation checks"
   python3 scripts/test-check-docs.py
   python3 scripts/check-docs.py
