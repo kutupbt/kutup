@@ -265,6 +265,11 @@ function ReportCard({
           ) : (
             <span className="self-center text-xs text-muted-foreground">{t('admin.reports.noLink')}</span>
           )}
+          {report.linkPassword ? (
+            <span className="self-center text-xs" data-testid="report-link-password">
+              {t('admin.reports.linkPassword')} <code className="rounded bg-muted px-1">{report.linkPassword}</code>
+            </span>
+          ) : null}
           <div className="ml-auto flex flex-wrap gap-2">
             <Button size="sm" variant="ghost" loading={dismissing} onClick={onDismiss}>
               {t('admin.reports.dismiss')}

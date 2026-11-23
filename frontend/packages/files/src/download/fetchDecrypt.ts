@@ -43,8 +43,10 @@ export async function* fetchDecryptedChunks(
   expected: DriveObjectToOpen,
   accessToken: AccessToken,
   signal?: AbortSignal,
+  /** Headers each range request adds (a protected public link's proof). */
+  headers?: Record<string, string>,
 ): AsyncGenerator<DecryptedChunk, void, void> {
-  const reader = await openBlockReader({ source: { family: 'drive', url, fileKey, expected }, accessToken, settings: DOWNLOAD_SETTINGS, signal })
+  const reader = await openBlockReader({ source: { family: 'drive', url, fileKey, expected, headers }, accessToken, settings: DOWNLOAD_SETTINGS, signal })
   try {
     const { blockCount } = reader.opened
     for (let index = 0; index < blockCount; index++) {

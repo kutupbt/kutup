@@ -508,6 +508,10 @@ pub struct DriveLimits {
     stream_max_concurrent: i64,
     stream_response_max_bytes: i64,
     stream_blob_fallback_max_bytes: i64,
+    /// The furthest ahead a public link's expiry may be set, in days.
+    public_link_max_expiry_days: i64,
+    /// The longest public link password, in characters.
+    public_link_password_max_chars: i64,
 }
 
 /// `GET /api/v1/drive/limits` — the upload and streaming limits, as they are
@@ -541,6 +545,8 @@ pub async fn limits(
         stream_blob_fallback_max_bytes: s::DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES
             .load_for(pool, account)
             .await?,
+        public_link_max_expiry_days: s::DRIVE_PUBLIC_LINK_MAX_EXPIRY_DAYS.load(pool).await?,
+        public_link_password_max_chars: s::DRIVE_PUBLIC_LINK_PASSWORD_MAX_CHARS.load(pool).await?,
     }))
 }
 

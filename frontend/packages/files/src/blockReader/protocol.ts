@@ -122,6 +122,11 @@ export interface DriveBlockSource {
   family: 'drive'
   /** The content route, answered with Range. */
   url: string
+  /**
+   * Headers every range request adds: a password-protected public link's
+   * proof (`X-Kutup-Link-Proof`, docs/plans/drive-link-password.md).
+   */
+  headers?: Record<string, string>
   fileKey: Uint8Array
   /** What the object must be (the committed content, or a revision by its record). */
   expected: DriveObjectToOpen

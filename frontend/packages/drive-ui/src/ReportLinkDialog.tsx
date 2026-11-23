@@ -7,6 +7,7 @@ import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
 import { Label } from '@kutup/ui/components/label'
+import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { Textarea } from '@kutup/ui/components/textarea'
 
@@ -26,6 +27,8 @@ export function ReportLinkDialog({ token, open, onClose }: { token: string; open
   const [reason, setReason] = useState<Reason | null>(null)
   const [details, setDetails] = useState('')
   const [shareLink, setShareLink] = useState(true)
+  // A password-protected link's password, if the reporter gives it with the link.
+  const [linkPassword, setLinkPassword] = useState('')
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle')
 
   function send() {
@@ -35,6 +38,7 @@ export function ReportLinkDialog({ token, open, onClose }: { token: string; open
         reason,
         details: details.trim(),
         link: shareLink ? window.location.href : null,
+        linkPassword: shareLink && linkPassword ? linkPassword : null,
       })
       .then(() => setStatus('sent'), () => setStatus('failed'))
   }
@@ -46,6 +50,7 @@ export function ReportLinkDialog({ token, open, onClose }: { token: string; open
       setReason(null)
       setDetails('')
       setShareLink(true)
+      setLinkPassword('')
       setStatus('idle')
     }, 200)
   }
@@ -102,6 +107,20 @@ export function ReportLinkDialog({ token, open, onClose }: { token: string; open
                 <p className="text-xs text-muted-foreground">{t('reportLink.shareLinkHint')}</p>
               </div>
             </div>
+            {shareLink ? (
+              <Field label={t('reportLink.linkPassword')} description={t('reportLink.linkPasswordHint')}>
+                {(props) => (
+                  <PasswordInput
+                    {...props}
+                    autoComplete="off"
+                    maxLength={1024}
+                    value={linkPassword}
+                    onChange={(e) => setLinkPassword(e.target.value)}
+                    data-testid="report-link-password"
+                  />
+                )}
+              </Field>
+            ) : null}
             {status === 'failed' ? <Alert variant="error">{t('reportLink.failed')}</Alert> : null}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={close}>

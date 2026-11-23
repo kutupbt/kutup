@@ -80,8 +80,8 @@ Both are cheapest before the wipe.
 | Shared with me, Shared by me, stop sharing | `sections/sharedWith/SharedWithMeView.tsx`, `sections/sharedby/SharedByMeView.tsx` | ✅ `shared/SharedPage.tsx`, `shared/SharedByMePage.tsx` |
 | Public link to a folder | `PublicSharing/PublicSharing.tsx` | 🟡 files directly in the folder only, not subfolders (`public/PublicSharePage.tsx`); several links; report link; admin block and site/account switch |
 | Public link to a file | same | ✅ in the file's share dialog; documents open read-only in Office (`editors/PublicFileRoute.tsx`) |
-| Link password | `PublicLinkSettingsModal.tsx`, `publicPage/PublicPagePassword.tsx` | ❌ (**schema**: `drive_public_shares` holds no salt or password-wrapped link key) |
-| Link expiry | `PublicLinkSettingsModal.tsx` | 🟡 `expires_at` stored, enforced and listed; the API takes `expires_in_hours` but the dialogs have no field |
+| Link password | `PublicLinkSettingsModal.tsx`, `publicPage/PublicPagePassword.tsx` | ✅ link settings dialog and password page ([`drive-link-password.md`](drive-link-password.md)); CLI flags on the roadmap |
+| Link expiry | `PublicLinkSettingsModal.tsx` | ✅ the link settings dialog (end of a chosen day, at most the site's `drive.public_link_max_expiry_days` ahead) |
 | Link with edit rights, uploads through a link | `PublicRoleDropdownMenu.tsx`, `publicPage/PublicFolderView.tsx` (anonymous signatures) | ❌ (**schema**: a role on the link, owner-charged anonymous uploads) |
 | Save a public link to your own Drive (bookmark) | `sections/publicPage/BookmarkButton.tsx`, `sharedWith/buttons/OpenBookmarkButton.tsx` | ❌ (**schema** or an account record: the link key must be kept sealed) |
 | Pick a file to share from a dialog | `modals/SelectLinkToShareModal/` | ❌ |
@@ -161,10 +161,8 @@ Both are cheapest before the wipe.
 
 What people hit first, with whether the fix needs the server or the schema:
 
-1. **Link password and expiry in the dialogs:** expiry is only UI (the API
-   takes it); password needs **schema** (`drive_public_shares`: a salt and a
-   password-wrapped link key, Argon2id parameters) and the public pages. Do
-   it once for Drive, Office and Photos links.
+1. ~~**Link password and expiry in the dialogs**~~ — built once for Drive,
+   Office and Photos links ([`drive-link-password.md`](drive-link-password.md)).
 2. **Public folder links with subfolders:** server (walk the tree under the
    link, keys of subfolders sealed to the link) and probably **schema**
    (link keys per subfolder, or a link-to-epoch table).

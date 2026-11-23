@@ -797,7 +797,9 @@ fn generic_drive_purpose(value: u8) -> Result<DriveEnvelopePurpose, JsValue> {
         | DriveEnvelopePurpose::Thumbnail
         | DriveEnvelopePurpose::PreviousCollectionKey
         | DriveEnvelopePurpose::PreviousFileKey
-        | DriveEnvelopePurpose::RevisionContent => Err(js_error(
+        | DriveEnvelopePurpose::RevisionContent
+        | DriveEnvelopePurpose::PublicLinkPasswordKey
+        | DriveEnvelopePurpose::PublicLinkSecret => Err(js_error(
             "this Drive envelope purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -950,6 +952,156 @@ pub fn open_owner_link_key(
     let key = drive_envelope::open_under_drive_root(envelope_base64, &root, context)
         .map_err(crypto_error)?;
     Ok(STANDARD.encode(key.as_slice()))
+}
+
+/// A link password's derivation (docs/plans/drive-link-password.md): what
+/// the URL secret and the password give, with the salt and cost the server
+/// returned for the link.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkPasswordKeysJs {
+    /// Sent with the link's gated reads (`X-Kutup-Link-Proof`).
+    proof: String,
+    /// Opens the link key (`openLinkPasswordKey`).
+    wrap_key: String,
+}
+
+#[wasm_bindgen(js_name = deriveLinkPassword)]
+pub fn derive_link_password(
+    secret_base64: &str,
+    password: &str,
+    salt_base64: &str,
+    operations: u32,
+    memory: u32,
+    link_id: &str,
+) -> Result<JsValue, JsValue> {
+    let secret = zeroize::Zeroizing::new(decode_canonical_base64(secret_base64, "link secret")?);
+    let salt = decode_canonical_base64(salt_base64, "link password salt")?;
+    let params =
+        kutup_crypto::link_password::check_params(u64::from(operations), u64::from(memory))
+            .map_err(crypto_error)?;
+    let keys = kutup_crypto::link_password::derive(&secret, password, &salt, &params, link_id)
+        .map_err(crypto_error)?;
+    serde_wasm_bindgen::to_value(&LinkPasswordKeysJs {
+        proof: STANDARD.encode(keys.proof.as_slice()),
+        wrap_key: STANDARD.encode(keys.wrap_key.as_slice()),
+    })
+    .map_err(|error| js_error(&format!("encode link password keys: {error}")))
+}
+
+/// A password set on a link: what the server stores.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkPasswordProtectionJs {
+    salt: String,
+    operations: u32,
+    memory: u32,
+    verifier: String,
+    link_key_envelope: String,
+}
+
+/// Protects `link_key` with the link's URL secret and `password`, at the
+/// current cost with a fresh salt.
+#[wasm_bindgen(js_name = protectLinkPassword)]
+pub fn protect_link_password(
+    secret_base64: &str,
+    password: &str,
+    link_key_base64: &str,
+    link_id: &str,
+    owner_id: &str,
+    key_revision: u32,
+) -> Result<JsValue, JsValue> {
+    let secret = zeroize::Zeroizing::new(decode_canonical_base64(secret_base64, "link secret")?);
+    let link_key = zeroize::Zeroizing::new(decode_canonical_base64(link_key_base64, "link key")?);
+    let protection = kutup_crypto::link_password::protect(
+        &secret,
+        password,
+        &link_key,
+        link_id,
+        owner_id,
+        key_revision,
+    )
+    .map_err(crypto_error)?;
+    let narrow = |value: u64| u32::try_from(value).map_err(|_| js_error("link password cost"));
+    serde_wasm_bindgen::to_value(&LinkPasswordProtectionJs {
+        salt: STANDARD.encode(protection.salt),
+        operations: narrow(protection.params.operations)?,
+        memory: narrow(protection.params.memory as u64)?,
+        verifier: STANDARD.encode(protection.verifier),
+        link_key_envelope: protection.link_key_envelope,
+    })
+    .map_err(|error| js_error(&format!("encode link password: {error}")))
+}
+
+/// Opens a protected link's key with the wrap key `deriveLinkPassword` gave.
+#[wasm_bindgen(js_name = openLinkPasswordKey)]
+pub fn open_link_password_key(
+    envelope_base64: &str,
+    wrap_key_base64: &str,
+    link_id: &str,
+    owner_id: &str,
+    key_revision: u32,
+) -> Result<String, JsValue> {
+    let wrap_key = zeroize::Zeroizing::new(decode_canonical_base64(wrap_key_base64, "wrap key")?);
+    let key = kutup_crypto::link_password::open_link_key(
+        envelope_base64,
+        &wrap_key,
+        link_id,
+        owner_id,
+        key_revision,
+    )
+    .map_err(crypto_error)?;
+    Ok(STANDARD.encode(key.as_slice()))
+}
+
+/// A protected link's URL secret and password, sealed for its owner under
+/// their Drive root of `drive_generation` (purpose 15).
+#[wasm_bindgen(js_name = sealOwnerLinkSecret)]
+pub fn seal_owner_link_secret(
+    secret_base64: &str,
+    password: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    link_id: &str,
+    owner_id: &str,
+) -> Result<String, JsValue> {
+    let secret = zeroize::Zeroizing::new(decode_canonical_base64(secret_base64, "link secret")?);
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    kutup_crypto::link_password::seal_owner_secret(
+        &secret, password, &root, link_id, owner_id, generation,
+    )
+    .map_err(crypto_error)
+}
+
+#[derive(Serialize)]
+struct LinkSecretJs {
+    secret: String,
+    password: String,
+}
+
+/// Opens a protected link's owner copy: `{ secret, password }`.
+#[wasm_bindgen(js_name = openOwnerLinkSecret)]
+pub fn open_owner_link_secret(
+    envelope_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    link_id: &str,
+    owner_id: &str,
+) -> Result<JsValue, JsValue> {
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let opened = kutup_crypto::link_password::open_owner_secret(
+        envelope_base64,
+        &root,
+        link_id,
+        owner_id,
+        generation,
+    )
+    .map_err(crypto_error)?;
+    serde_wasm_bindgen::to_value(&LinkSecretJs {
+        secret: STANDARD.encode(opened.secret.as_slice()),
+        password: opened.password.as_str().to_owned(),
+    })
+    .map_err(|error| js_error(&format!("encode link secret: {error}")))
 }
 
 #[wasm_bindgen(js_name = sealWhiteboardAsset)]

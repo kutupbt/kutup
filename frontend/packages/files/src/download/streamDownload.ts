@@ -30,6 +30,8 @@ export interface StreamDownloadOptions {
   expectedPlainSize?: number
   /** Bearer token. Same JWT the rest of the app sends. */
   accessToken: string
+  /** Headers each range request adds (a protected public link's proof). */
+  headers?: Record<string, string>
   /** Without the save picker, the largest file assembled in memory (`drive.stream.blob_fallback_max_bytes`). */
   blobFallbackMaxBytes?: number | (() => Promise<number>)
   /** Plaintext bytes written + plaintext total (best-effort estimate). */
@@ -73,6 +75,7 @@ export async function streamDownload(opts: StreamDownloadOptions): Promise<void>
       opts.context,
       opts.accessToken,
       opts.signal,
+      opts.headers,
     )) {
       await sink.write(plain)
       plainWritten += plain.length

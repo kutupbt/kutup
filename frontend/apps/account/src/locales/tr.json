@@ -872,6 +872,7 @@
       "linkRemoved": "kaldırıldı",
       "openLink": "Bağlantıyı aç",
       "noLink": "Bildiren bağlantıyı eklemedi.",
+      "linkPassword": "Şikâyet edenin verdiği bağlantı parolası:",
       "dismiss": "Kapat",
       "dismissed": "Bildirim kapatıldı",
       "remove": "Bağlantıyı kaldır",
@@ -1123,6 +1124,10 @@
       "driveLimits": {
         "driveTrashRetentionDays": "Çöp kutusundakileri sakla (gün)",
         "driveTrashRetentionDaysHint": "Silinen bir dosya ya da klasörün kalıcı olarak silinmeden önce geri yüklenebildiği süre. 0, çöp kutusunu sahibi boşaltana kadar tutar.",
+        "drivePublicLinkMaxExpiryDays": "En uzak bağlantı son kullanma tarihi (gün)",
+        "drivePublicLinkMaxExpiryDaysHint": "Sahibin bir herkese açık bağlantının son kullanma tarihini ne kadar ileriye koyabileceği. 0: sınır yok, bağlantılar hiç dolmayabilir; başka her değer her bağlantının süresinin dolmasını sağlar. O andan sonra oluşturulan ya da değiştirilen bağlantılara uygulanır: var olan bağlantılar, sahipleri değiştirene kadar son kullanma tarihlerini (ya da tarihsizliklerini) korur.",
+        "drivePublicLinkPasswordMaxChars": "En uzun bağlantı parolası (karakter)",
+        "drivePublicLinkPasswordMaxCharsHint": "Sahibin bir herkese açık bağlantıya koyabileceği en uzun parola.",
         "driveUploadMaxBytes": "En büyük yükleme (bayt)",
         "driveUploadMaxBytesHint": "Tek bir yüklemenin şifreli olarak saklayabileceği en büyük dosya.",
         "driveVersionMaxBytes": "En büyük sürüm (bayt)",
@@ -1633,6 +1638,7 @@
         "capability": "yetki",
         "recipient": "alıcı",
         "forwarding": "yönlendirme",
+        "linkAndAddress": "bağlantı ve adres",
         "connection": "bağlantı",
         "server": "sunucu"
       },
@@ -1692,7 +1698,9 @@
             "collab_frame_burst": "Ortak çalışma çerçeve patlaması",
             "collab_bytes_per_second": "Soket başına ortak çalışma baytları",
             "collab_byte_burst": "Ortak çalışma bayt patlaması",
-            "reports": "Herkese açık bağlantı şikâyetleri"
+            "reports": "Herkese açık bağlantı şikâyetleri",
+            "link_password_failures": "Bir adresten bir herkese açık bağlantı için yanlış parolalar",
+            "link_password_address_failures": "Bir adresten tüm bağlantılar için yanlış parolalar"
           }
         },
         "chat": {
@@ -1810,7 +1818,9 @@
             "collab_frame_burst": "Bir soketin bir seferde gönderebileceği ortak çalışma çerçeveleri.",
             "collab_bytes_per_second": "Bir soketin saniyede ortalama gönderdiği ortak çalışma baytları.",
             "collab_byte_burst": "Bir soketin bir seferde gönderebileceği ortak çalışma baytları.",
-            "reports": "Hesap gerektirmeyen herkese açık bağlantı şikâyetleri."
+            "reports": "Hesap gerektirmeyen herkese açık bağlantı şikâyetleri.",
+            "link_password_failures": "Bir adresten bir herkese açık bağlantı için yanlış parolalar: bir bağlantının parolasını tahmin etmek. Aşıldığında o adres saatin dolmasını bekler; başkaları bağlantıyı yine açar.",
+            "link_password_address_failures": "Bir adresten tüm bağlantılar için gelen yanlış parolalar."
           }
         },
         "chat": {

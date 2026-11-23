@@ -525,6 +525,12 @@ pub struct PublicShareResponse {
     pub owner_account_id: String,
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
+    /// The link key's revision.
+    pub key_revision: i32,
+    /// A password-protected link opened with `X-Kutup-Link-Proof`: the
+    /// link key under the password wrap key (docs/plans/drive-link-password.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password_link_key_envelope: Option<String>,
 }
 
 /// `POST /api/v1/admin/accounts` body — mirrors `handlers.CreateAdminAccountRequest`.
@@ -769,6 +775,8 @@ mod tests {
             collection_key_epoch: 1,
             owner_account_id: "u1".into(),
             expires_at: None,
+            key_revision: 1,
+            password_link_key_envelope: None,
         };
         let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
         assert_eq!(v.get("collectionKeyEpoch").unwrap(), 1);

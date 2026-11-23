@@ -13,6 +13,7 @@ import { GridSkeleton } from '@kutup/ui/components/skeleton'
 import { Spinner } from '@kutup/ui/components/states'
 import { ThemeToggle } from '@kutup/ui/components/theme-toggle'
 import { PublicNotice } from '@kutup/drive-ui/PublicNotice'
+import { PublicLinkPassword } from '@kutup/drive-ui/PublicLinkPassword'
 import { formatDuration, formatTaken } from '../library/format'
 import { loadPublicAlbum, openPublicVideo, PublicAlbumError, publicThumbnail, readPublicOriginal, type PublicPhoto } from './publicAlbum'
 import { usePlaybackOf } from '@kutup/drive-core/playback'
@@ -190,9 +191,16 @@ function Viewer({ token, photos, index, onIndex, onClose }: { token: string; pho
 export function PublicAlbumPage() {
   const { t } = useTranslation()
   const { token = '' } = useParams()
-  const album = useQuery({ queryKey: ['public-album', token], queryFn: () => loadPublicAlbum(token), retry: false })
+  // A protected link's password, once typed; each try is a new attempt.
+  const [password, setPassword] = useState<{ value: string; attempt: number } | null>(null)
+  const album = useQuery({
+    queryKey: ['public-album', token, password?.attempt ?? 0],
+    queryFn: () => loadPublicAlbum(token, password?.value),
+    retry: false,
+  })
   const [open, setOpen] = useState<number | null>(null)
   const failure = album.error instanceof PublicAlbumError ? album.error.failure : album.isError ? 'other' : null
+  const asksPassword = failure === 'passwordRequired' || failure === 'passwordWrong' || failure === 'passwordLocked'
 
   return (
     <div className="min-h-svh bg-background">
@@ -206,7 +214,13 @@ export function PublicAlbumPage() {
       {album.data ? <PublicNotice owner={album.data.owner} token={token} /> : null}
       <main className="mx-auto max-w-6xl px-2 py-6 md:px-8">
         {album.isPending ? <GridSkeleton label={t('public.loading')} /> : null}
-        {failure ? (
+        {asksPassword ? (
+          <PublicLinkPassword
+            refusal={failure === 'passwordWrong' ? 'wrong' : failure === 'passwordLocked' ? 'locked' : null}
+            retryAfter={album.error instanceof PublicAlbumError ? album.error.retryAfter : null}
+            onSubmit={(value) => setPassword((last) => ({ value, attempt: (last?.attempt ?? 0) + 1 }))}
+          />
+        ) : failure ? (
           <div className="px-2">
             <Alert variant="error" title={t('public.failedTitle')}>
               {t(`public.failure.${failure}`)}

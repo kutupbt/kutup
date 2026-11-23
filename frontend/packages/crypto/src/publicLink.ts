@@ -103,3 +103,85 @@ export function openPublicLinkFileKeyV1(
 ): Promise<Uint8Array> {
   return openDriveEnvelope(envelope, linkKey, fileContext(expected))
 }
+
+// A link's password (docs/plans/drive-link-password.md): the URL fragment
+// holds the link's secret; with a password the target is sealed under a
+// separate link key, itself sealed under a key the secret and the password
+// derive (Argon2id, then HKDF). All of it is kutup-crypto's, through WASM.
+
+/** A password's salt and cost, as `GET /drive/public-links/{token}/password` returns them. */
+export interface LinkPasswordParams {
+  linkId: string
+  salt: string
+  operations: number
+  memory: number
+}
+
+/** What a link's secret and password derive: the proof the server checks, and the key that opens the link key. */
+export interface LinkPasswordKeys {
+  /** Base64; sent as `X-Kutup-Link-Proof`. */
+  proof: string
+  wrapKey: Uint8Array
+}
+
+export async function deriveLinkPasswordV1(secret: Uint8Array, password: string, params: LinkPasswordParams): Promise<LinkPasswordKeys> {
+  const keys = (await getCryptoWasm()).deriveLinkPassword(toBase64(secret), password, params.salt, params.operations, params.memory, params.linkId)
+  return { proof: keys.proof, wrapKey: fromBase64(keys.wrapKey) }
+}
+
+export interface LinkPasswordContextV1 {
+  linkId: string
+  ownerAccountId: string
+  /** The link's key revision the envelope is bound to. */
+  keyRevision: number
+}
+
+/** Opens a protected link's key (purpose 14) with the wrap key `deriveLinkPasswordV1` gave. */
+export async function openLinkPasswordKeyV1(envelope: string, wrapKey: Uint8Array, context: LinkPasswordContextV1): Promise<Uint8Array> {
+  return fromBase64((await getCryptoWasm()).openLinkPasswordKey(envelope, toBase64(wrapKey), context.linkId, context.ownerAccountId, context.keyRevision))
+}
+
+/** A password set on a link, as `PUT /drive/public-links/{token}/password` takes it (less the owner's copy). */
+export interface LinkPasswordProtection {
+  salt: string
+  operations: number
+  memory: number
+  verifier: string
+  linkKeyEnvelope: string
+}
+
+/** Protects `linkKey` with the link's URL `secret` and `password`, a fresh salt at the current cost. */
+export async function protectLinkPasswordV1(
+  secret: Uint8Array,
+  password: string,
+  linkKey: Uint8Array,
+  context: LinkPasswordContextV1,
+): Promise<LinkPasswordProtection> {
+  return (await getCryptoWasm()).protectLinkPassword(
+    toBase64(secret),
+    password,
+    toBase64(linkKey),
+    context.linkId,
+    context.ownerAccountId,
+    context.keyRevision,
+  )
+}
+
+/** A protected link's URL secret and password, sealed for its owner under their Drive root (purpose 15). */
+export async function sealOwnerLinkSecretV1(
+  secret: Uint8Array,
+  password: string,
+  roots: Pick<AccountRoots, 'driveRoot' | 'driveGeneration'>,
+  context: OwnerLinkKeyContextV1,
+): Promise<string> {
+  return (await getCryptoWasm()).sealOwnerLinkSecret(toBase64(secret), password, roots.driveRoot, roots.driveGeneration, context.linkId, context.ownerAccountId)
+}
+
+export async function openOwnerLinkSecretV1(
+  envelope: string,
+  roots: Pick<AccountRoots, 'driveRoot' | 'driveGeneration'>,
+  context: OwnerLinkKeyContextV1,
+): Promise<{ secret: Uint8Array; password: string }> {
+  const opened = (await getCryptoWasm()).openOwnerLinkSecret(envelope, roots.driveRoot, roots.driveGeneration, context.linkId, context.ownerAccountId)
+  return { secret: fromBase64(opened.secret), password: opened.password }
+}

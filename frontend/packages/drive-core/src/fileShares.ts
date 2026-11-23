@@ -19,6 +19,7 @@ import {
   type ClaimedKeys,
   type PendingUpgradeRemoval,
 } from './identityPins'
+import { linkSecret } from './linkSettings'
 import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
 import { rekeyFile } from './rekey'
 import { fileMetadataOf, type DriveFile, type Folder } from './model'
@@ -299,6 +300,10 @@ export interface FileLink {
   ownerLinkKeyEnvelope: string
   /** The generation its wrap opens; below the file's, it waits to be re-wrapped. */
   keyGeneration: number
+  /** The link key's revision; a re-wrap names it (docs/plans/drive-link-password.md). */
+  keyRevision: number
+  /** A password-protected link: its URL secret and password, for the owner. */
+  ownerSecretEnvelope?: string
   expiresAt: string | null
   createdAt: string
   /** Why an operator blocked what the link reaches; it doesn't open until they lift it. */
@@ -360,7 +365,7 @@ function memberTo(
   }
 }
 
-/** A file link's key, from the owner's copy. */
+/** A file link's key, from the owner's copy: what the file key is sealed under. */
 function fileLinkKey(link: FileLink, me: DriveIdentity): Promise<Uint8Array> {
   return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.roots, { linkId: link.id, ownerAccountId: me.accountId })
 }
@@ -374,9 +379,9 @@ function fileLinkApp(name: string | null): 'drive' | 'office' {
   return name && opensInOffice(name) ? 'office' : 'drive'
 }
 
-/** The link to give people: the key rides in the fragment, never sent to a server. */
+/** The link to give people: its secret rides in the fragment, never sent to a server. */
 export async function fileLinkUrl(link: FileLink, me: DriveIdentity, fileName: string | null): Promise<string> {
-  return publicLinkUrl(link.token, await fileLinkKey(link, me), fileLinkApp(fileName))
+  return publicLinkUrl(link.token, await linkSecret(link, me), fileLinkApp(fileName))
 }
 
 export const fileAccessKey = (fileId: string) => ['file-access', fileId] as const
@@ -474,6 +479,7 @@ export async function bringFileSharesUpToDate(folder: Folder, file: DriveFile, m
       linksBehind.map(async (l) => ({
         id: l.id,
         keyEnvelope: await wrapForLink(fresh, fresh.fileKey!, fresh.keyGeneration, await fileLinkKey(l, me), me),
+        keyRevision: l.keyRevision,
       })),
     )
     const federatedShares = await Promise.all(
@@ -670,7 +676,11 @@ export function useRemoveFileAccess() {
       const publicLinks = await Promise.all(
         access.publicLinks
           .filter((l) => !removedLinks.includes(l.id))
-          .map(async (l) => ({ id: l.id, keyEnvelope: await wrapForLink(file, next.fileKey, next.keyGeneration, await fileLinkKey(l, me), me) })),
+          .map(async (l) => ({
+            id: l.id,
+            keyEnvelope: await wrapForLink(file, next.fileKey, next.keyGeneration, await fileLinkKey(l, me), me),
+            keyRevision: l.keyRevision,
+          })),
       )
       const federatedShares = await Promise.all(
         keptRemote

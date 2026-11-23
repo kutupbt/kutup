@@ -1573,6 +1573,13 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   public links in the web app and with `kutup share access` / `kutup share
   remove`; every removal rotates the folder key. Federated uploads stream
   (signed content digest, spooled and checked before parsing).
+- **Link password and expiry in the CLI** (docs/plans/drive-link-password.md):
+  the web dialogs set both; the CLI's folder re-key already names each
+  link's key revision. Still open: `kutup share link --password/--expires`
+  (and changing them on an existing link), and `kutup pubshare` opening a
+  password-protected link (it gets `401 linkPassword` today: it needs the
+  password prompt, the `X-Kutup-Link-Proof` header and the purpose-14 link
+  key).
 - **Server improvements that unlock better CLI behavior** (noted per the
   "do when we touch the server" decision):
   - `latestVersionId` on the `GET /collections/:id/files` rows (one

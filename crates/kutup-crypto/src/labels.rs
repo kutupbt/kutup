@@ -252,6 +252,19 @@ pub const DRIVE_ENVELOPE_THUMBNAIL_V2: &[u8] = b"kutup/drive-envelope/thumbnail/
 /// `kutup-crypto/src/drive_envelope.rs` (`WHITEBOARD_ASSET_BINDING_LABEL`)
 pub const DRIVE_ENVELOPE_WHITEBOARD_ASSET_V2: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v2\0";
 
+// --- drive-link-password -----------------------------------------------------
+
+/// `kutup-crypto/src/link_password.rs` (`FAMILY`): the HKDF salt
+pub const DRIVE_LINK_PASSWORD_V1: &[u8] = b"kutup/drive-link-password/v1\0";
+/// `kutup-crypto/src/link_password.rs` (`PROOF_INFO`)
+pub const DRIVE_LINK_PASSWORD_PROOF_V1: &[u8] = b"kutup/drive-link-password/proof/v1\0";
+/// `kutup-server/src/link_password.rs`: a link's wrong-password counter subject
+pub const DRIVE_LINK_PASSWORD_RATE_V1: &[u8] = b"kutup/drive-link-password/rate/v1\0";
+/// `kutup-crypto/src/link_password.rs` (`VERIFIER_DOMAIN`)
+pub const DRIVE_LINK_PASSWORD_VERIFIER_V1: &[u8] = b"kutup/drive-link-password/verifier/v1\0";
+/// `kutup-crypto/src/link_password.rs` (`WRAP_INFO`)
+pub const DRIVE_LINK_PASSWORD_WRAP_V1: &[u8] = b"kutup/drive-link-password/wrap/v1\0";
+
 // --- drive-object ------------------------------------------------------------
 
 /// `kutup-crypto/src/drive_blocks.rs`
@@ -536,7 +549,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 165] = [
+pub const ALL: [&[u8]; 170] = [
     SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1,
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
@@ -628,6 +641,11 @@ pub const ALL: [&[u8]; 165] = [
     CONTACT_SUMMARY_V2,
     DKIM_KEY_V1,
     DRIVE_ENVELOPE_KEY_V1,
+    DRIVE_LINK_PASSWORD_V1,
+    DRIVE_LINK_PASSWORD_PROOF_V1,
+    DRIVE_LINK_PASSWORD_RATE_V1,
+    DRIVE_LINK_PASSWORD_VERIFIER_V1,
+    DRIVE_LINK_PASSWORD_WRAP_V1,
     DRIVE_ENVELOPE_THUMBNAIL_V2,
     DRIVE_ENVELOPE_WHITEBOARD_ASSET_V2,
     DRIVE_OBJECT_BLOCKS_BLOCK_KEY_V1,
