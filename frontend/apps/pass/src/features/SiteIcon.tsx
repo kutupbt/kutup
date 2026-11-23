@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@kutup/ui/lib/cn'
+import { builtinIcon, ENTRY_DEFAULT_ICON } from '../lib/builtinIcons'
 import { useSiteIcon } from '../sync/siteIcons'
 
 /**
@@ -8,10 +9,24 @@ import { useSiteIcon } from '../sync/siteIcons'
  * asked for once the row scrolls into view; the title's first letter until
  * then, and when there is none.
  */
-export function SiteIcon({ title, address, picture, className }: { title: string; address: string; picture?: string | null; className?: string }) {
+export function SiteIcon({
+  title,
+  address,
+  picture,
+  builtin,
+  className,
+}: {
+  title: string
+  address: string
+  picture?: string | null
+  /** A built-in KeePass icon other than the key shows instead of the website's. */
+  builtin?: number | null
+  className?: string
+}) {
+  const Builtin = !picture && builtin !== ENTRY_DEFAULT_ICON ? builtinIcon(builtin) : null
   const box = useRef<HTMLSpanElement>(null)
   const [visible, setVisible] = useState(false)
-  const site = useSiteIcon(visible && !picture ? address : '')
+  const site = useSiteIcon(visible && !picture && !Builtin ? address : '')
   const src = picture ?? site
   const [broken, setBroken] = useState<string | null>(null)
 
@@ -32,7 +47,9 @@ export function SiteIcon({ title, address, picture, className }: { title: string
   const showing = src && src !== broken ? src : null
   return (
     <span ref={box} className={cn('grid size-8 shrink-0 place-items-center overflow-hidden rounded-md bg-muted text-xs font-semibold uppercase', className)} aria-hidden>
-      {showing ? (
+      {Builtin ? (
+        <Builtin className="size-5" aria-hidden />
+      ) : showing ? (
         <img src={showing} alt="" className="size-5 object-contain" onError={() => setBroken(showing)} />
       ) : (
         (title || '?').slice(0, 1)

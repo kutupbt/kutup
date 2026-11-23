@@ -37,7 +37,8 @@ import { sanitizeSignature } from './sanitize'
 import { searchText } from './searchText'
 import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, inlineContentId, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage, type Receipt } from './mime'
 import { autocryptKey, openPgp } from './pgp'
-import { PinnedKeyConflict, PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
+import { KeyLookupFailed, PinnedKeyConflict, PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
+import { everyone as allRecipients, kutupTargets, pgpGroups, SendPlanError, splitRecipients, type KutupLookup, type KutupRecipient } from './sendPlan'
 
 // Mail (docs/plans/mail.md): the folders' readable fields from the server,
 // each message opened here with the address key, and messages written here,
@@ -1471,50 +1472,56 @@ export async function sendDraft(
   }
   const content = { html: draft.html, text: draft.text, attachments: attachmentParts, receipt: draft.receipt, plain: draft.plain }
   const message = buildMessage({ ...header, ...content })
-  const everyone = [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((m) => m.address.toLowerCase()))]
+  const everyone = allRecipients(
+    draft.to.map((m) => m.address),
+    draft.cc.map((m) => m.address),
+    draft.bcc.map((m) => m.address),
+  )
   // Kutup recipients: the server's own domain, and any other address this
   // server holds (a custom domain), as its key lookup says (Proton's
   // internal recipients). A disabled one stops the send: never another way.
-  const held = await Promise.all(
-    everyone.map(async (address) => {
-      if (onServer(account, address)) return true
-      try {
-        await addressKeys(address)
-        // This server's word never outranks keys Contacts trust for it.
-        if ((pinned(address)?.keys.length ?? 0) > 0) throw new PinnedKeyConflict(address)
-        return true
-      } catch (error) {
-        if (error instanceof PinnedKeyConflict) throw error
-        if (error instanceof AddressDisabled) throw new RecipientDisabled(address)
-        if (error instanceof NoKutupAddress) return false
-        throw error
-      }
-    }),
+  // The rules are sendPlan.ts's (the Rust client core's, by the same fixtures).
+  const lookups = new Map<string, KutupLookup>()
+  await Promise.all(
+    everyone
+      .filter((address) => !onServer(account, address))
+      .map(async (address) => {
+        try {
+          lookups.set(address, { kind: 'keys', encryptionDisabled: (await addressKeys(address)).encryptionDisabled })
+        } catch (error) {
+          if (error instanceof AddressDisabled) lookups.set(address, { kind: 'disabled' })
+          else if (error instanceof NoKutupAddress) lookups.set(address, { kind: 'notKutup' })
+          else if (error instanceof GroupAddress) lookups.set(address, { kind: 'group' })
+          else throw error
+        }
+      }),
   )
-  const local = everyone.filter((_, i) => held[i])
-  const external = everyone.filter((_, i) => !held[i])
-  const bcc = new Set(draft.bcc.map((m) => m.address.toLowerCase()))
+  const { local, external } = planned(() =>
+    splitRecipients(
+      everyone,
+      (address) => onServer(account, address),
+      (address) => lookups.get(address) ?? { kind: 'failed' },
+      (address) => (pinned(address)?.keys.length ?? 0) > 0,
+    ),
+  )
 
   // Outside recipients' keys, and the PGP/MIME messages for them.
-  const protections = await Promise.all(external.map((address) => protectionFor(address, account.serverDomain, pinned(address))))
-  const unusable = external.find((_, i) => protections[i].kind === 'pinnedUnusable')
-  if (unusable) throw new PinnedKeyUnusable(unusable)
-  // Encrypt off: no outside recipient gets a PGP message.
-  // Each with its scheme: its contact's, else the account's (Proton's X-PM-SCHEME).
-  const keyed = options.encrypt
-    ? external.flatMap((address, i) => {
-        const key = pgpKey(protections[i])
-        const scheme = pinned(address)?.pgp.scheme ?? options.pgpScheme ?? 'pgpMime'
-        return key ? [{ address, key, inline: scheme === 'inline' }] : []
-      })
-    : []
-  // To and Cc together per scheme; each Bcc on their own (key IDs would name them).
-  const groups = [
-    keyed.filter((r) => !bcc.has(r.address) && !r.inline),
-    keyed.filter((r) => !bcc.has(r.address) && r.inline),
-    ...keyed.filter((r) => bcc.has(r.address)).map((r) => [r]),
-  ].filter((g) => g.length)
-  const plain = external.filter((address) => !keyed.some((r) => r.address === address))
+  const protections = new Map(await Promise.all(external.map(async (address) => [address, await protectionFor(address, account.serverDomain, pinned(address))] as const)))
+  // Encrypt off: no outside recipient gets a PGP message. Each with its
+  // scheme: its contact's, else the account's (Proton's X-PM-SCHEME). To and
+  // Cc together per scheme; each Bcc on their own (key IDs would name them).
+  const { groups: pgpPlan, plain } = planned(() =>
+    pgpGroups(
+      external,
+      (address) => pgpKey(protections.get(address)!),
+      (address) => protections.get(address)?.kind === 'pinnedUnusable',
+      draft.bcc.map((m) => m.address),
+      (address) => pinned(address)?.pgp.scheme,
+      options.pgpScheme ?? 'pgpMime',
+      options.encrypt,
+    ),
+  )
+  const groups = pgpPlan.map((group) => group.recipients.map((address, i) => ({ address, key: group.keys[i], inline: group.inline })))
   const body = groups.some((g) => !g[0].inline) ? buildBody(content) : null
   const files = attachmentParts.map((part) => ({ ...describePart(part), bytes: partContent(part) }))
   const packages = await Promise.all(
@@ -1554,26 +1561,23 @@ export async function sendDraft(
 
   const attempt = async (): Promise<SendRecipient[] | HeldSend> => {
     // Each Kutup address, or each member of a group (once, and not you).
-    const targets = new Map<string, string>()
-    const readable: string[] = []
+    const found = new Map<string, KutupRecipient>()
     for (const address of local) {
       try {
         const keys = await addressKeys(address)
-        // An address that forwards outside takes its mail readable (sealed
-        // zero-access when it arrives), as its owner's key list says.
-        if (options.encrypt && !keys.encryptionDisabled) targets.set(address, keys.primary)
-        else readable.push(address)
+        found.set(address, { kind: 'keys', keys })
       } catch (error) {
-        if (error instanceof NoKutupAddress) throw new UnknownRecipient(address)
-        if (error instanceof AddressDisabled) throw new RecipientDisabled(address)
-        if (!(error instanceof GroupAddress)) throw error
-        for (const member of await groupMembers(address)) {
-          if (member.address === self.address || targets.has(member.address) || readable.includes(member.address)) continue
-          if (member.encryptionDisabled) readable.push(member.address)
-          else targets.set(member.address, member.primary)
-        }
+        if (error instanceof NoKutupAddress) found.set(address, { kind: 'notKutup' })
+        else if (error instanceof AddressDisabled) found.set(address, { kind: 'disabled' })
+        else if (error instanceof GroupAddress) found.set(address, { kind: 'group', members: await groupMembers(address) })
+        else throw error
       }
     }
+    // An address that forwards outside takes its mail readable (sealed
+    // zero-access when it arrives), as its owner's key list says.
+    const plan = planned(() => kutupTargets(local, (address) => found.get(address)!, self.address, options.encrypt))
+    const targets = new Map(plan.keyed)
+    const readable = plan.readable
     const addresses = [...targets.keys()]
     const sealed = await seal([self.publicKey, ...addresses.map((a) => targets.get(a)!)], message)
     const keyPackets: Record<string, string> = { self: sealed.keyPackets[0] }
@@ -1631,6 +1635,27 @@ export async function sendDraft(
       throw new RecipientDisabled(response.data.address)
     }
     throw error
+  }
+}
+
+/** A send plan's refusal as the error the composer knows. */
+function planned<T>(plan: () => T): T {
+  try {
+    return plan()
+  } catch (error) {
+    if (!(error instanceof SendPlanError)) throw error
+    switch (error.error) {
+      case 'pinnedKeyConflict':
+        throw new PinnedKeyConflict(error.address)
+      case 'recipientDisabled':
+        throw new RecipientDisabled(error.address)
+      case 'pinnedKeyUnusable':
+        throw new PinnedKeyUnusable(error.address)
+      case 'unknownRecipient':
+        throw new UnknownRecipient(error.address)
+      case 'lookupFailed':
+        throw new KeyLookupFailed(error.address)
+    }
   }
 }
 

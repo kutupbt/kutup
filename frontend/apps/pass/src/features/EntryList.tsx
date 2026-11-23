@@ -1,4 +1,4 @@
-import { ArchiveRestore, FolderInput, Trash2, X } from 'lucide-react'
+import { ArchiveRestore, Clock3, CopyPlus, FolderInput, Paperclip, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -8,9 +8,12 @@ import { Checkbox } from '@kutup/ui/components/checkbox'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { cn } from '@kutup/ui/lib/cn'
+import { formatInstant } from '@kutup/ui/lib/format'
+import { hasTotp, type Column } from '../lib/entryList'
 import { emptySelection, inOrder, keepShown, selectAll, selectRange, toggle, type Selection } from '../lib/selection'
 import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, type EntryView, type GroupView, type VaultView } from '../vault/types'
+import { CloneDialog } from './CloneDialog'
 import { DRAG_TYPE } from './entryDrop'
 import { SiteIcon } from './SiteIcon'
 
@@ -30,6 +33,7 @@ export function EntryList({
   currentId,
   viewingBin,
   pictures,
+  columns,
   onOpen,
 }: {
   session: VaultSession
@@ -38,13 +42,20 @@ export function EntryList({
   currentId: string | undefined
   viewingBin: boolean
   pictures: Map<string, string>
+  /** What each row shows under its title (docs/plans/pass-gaps-2.md P3). */
+  columns: Column[]
   onOpen: (id: string) => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const shows = (column: Column) => columns.includes(column)
+  /** The row's second line: the chosen text columns, in the menu's order. */
+  const secondLine = (e: EntryView) =>
+    [shows('userName') ? fieldValue(e, 'UserName') : '', shows('url') ? fieldValue(e, 'URL') : ''].filter(Boolean).join(' · ')
   const editable = session.canEdit
   const order = useMemo(() => shown.map((e) => e.id), [shown])
   const [selection, setSelection] = useState<Selection>(emptySelection)
   const [confirming, setConfirming] = useState<'recycle' | 'forGood' | null>(null)
+  const [cloning, setCloning] = useState<string[]>([])
   const selected = inOrder(selection, order)
   const forGood = viewingBin || !view.recycleBinEnabled
   const targets = view.groups.filter((g) => !g.inRecycleBin)
@@ -107,7 +118,8 @@ export function EntryList({
   const dragStart = (event: DragEvent, id: string) => {
     const ids = selection.ids.has(id) ? selected : [id]
     event.dataTransfer.setData(DRAG_TYPE, JSON.stringify(ids))
-    event.dataTransfer.effectAllowed = 'move'
+    // Ctrl (⌥ on macOS) copies instead (entryDrop.ts).
+    event.dataTransfer.effectAllowed = 'copyMove'
   }
 
   return (
@@ -130,6 +142,12 @@ export function EntryList({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+          {!viewingBin ? (
+            <Button variant="ghost" size="sm" onClick={() => setCloning(selected)}>
+              <CopyPlus />
+              {t('clone.open')}
+            </Button>
+          ) : null}
           {viewingBin ? (
             <Button variant="ghost" size="sm" onClick={restore}>
               <ArchiveRestore />
@@ -153,6 +171,8 @@ export function EntryList({
             <li
               key={e.id}
               className={cn('group/entry flex items-center border-b border-border', checked && 'bg-accent/40')}
+              // KeePass's entry colours: the background as a bar at the row's edge, the text as the title's colour.
+              style={e.backgroundColor ? { boxShadow: `inset 4px 0 0 ${e.backgroundColor}` } : undefined}
               draggable={editable}
               onDragStart={editable ? (event) => dragStart(event, e.id) : undefined}
             >
@@ -178,11 +198,36 @@ export function EntryList({
                 aria-current={e.id === currentId ? 'true' : undefined}
                 className={cn('flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-accent/50', e.id === currentId && 'bg-accent')}
               >
-                <SiteIcon title={fieldValue(e, 'Title')} address={fieldValue(e, 'URL')} picture={e.customIcon ? pictures.get(e.customIcon) : null} />
+                <SiteIcon title={fieldValue(e, 'Title')} address={fieldValue(e, 'URL')} picture={e.customIcon ? pictures.get(e.customIcon) : null} builtin={e.icon} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{title}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{fieldValue(e, 'UserName') || fieldValue(e, 'URL')}</span>
+                  <span className="block truncate text-sm font-medium" style={e.foregroundColor ? { color: e.foregroundColor } : undefined}>
+                    {title}
+                  </span>
+                  {secondLine(e) ? <span className="block truncate text-xs text-muted-foreground">{secondLine(e)}</span> : null}
+                  {(shows('modified') && e.modified) || (shows('expiry') && e.expires && e.expiry) ? (
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {[
+                        shows('modified') && e.modified ? t('list.modifiedAt', { when: formatInstant(e.modified, i18n.language) }) : '',
+                        shows('expiry') && e.expires && e.expiry ? t('list.expiresAt', { when: formatInstant(e.expiry, i18n.language) }) : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </span>
+                  ) : null}
                 </span>
+                {shows('attachments') && e.attachments.length > 0 ? (
+                  <span className="flex items-center gap-0.5 text-xs text-muted-foreground" title={t('list.attachmentCount', { count: e.attachments.length })}>
+                    <Paperclip className="size-3.5" aria-hidden />
+                    {e.attachments.length}
+                    <span className="sr-only">{t('list.attachmentCount', { count: e.attachments.length })}</span>
+                  </span>
+                ) : null}
+                {shows('totp') && hasTotp(e) ? (
+                  <span className="text-muted-foreground" title={t('list.column.totp')}>
+                    <Clock3 className="size-3.5" aria-hidden />
+                    <span className="sr-only">{t('list.column.totp')}</span>
+                  </span>
+                ) : null}
                 {e.review.length > 0 ? <Badge variant="warn">{t('review.badge')}</Badge> : null}
               </button>
             </li>
@@ -198,6 +243,15 @@ export function EntryList({
         submit={confirming === 'forGood' ? t('bulk.deleteForGood') : t('bulk.recycle')}
         errorFallback={t('entry.saveFailed')}
         onConfirm={remove}
+      />
+      <CloneDialog
+        session={session}
+        ids={cloning}
+        onOpenChange={(open) => !open && setCloning([])}
+        onCloned={(id) => {
+          setSelection(emptySelection)
+          onOpen(id)
+        }}
       />
     </>
   )

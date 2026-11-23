@@ -1,0 +1,226 @@
+{
+  "cases": [
+    {
+      "name": "Kutup recipients end to end, the sender left out of a group",
+      "to": ["Ada@kutup.dev", "team@kutup.dev"],
+      "cc": [],
+      "bcc": [],
+      "ownDomain": "kutup.dev",
+      "sender": "me@kutup.dev",
+      "encrypt": true,
+      "defaultScheme": "pgpMime",
+      "lookups": {},
+      "pinnedKeys": [],
+      "schemes": {},
+      "protections": {},
+      "recipients": {
+        "ada@kutup.dev": { "kind": "keys", "primary": "K-ada", "encryptionDisabled": false },
+        "team@kutup.dev": {
+          "kind": "group",
+          "members": [
+            { "address": "me@kutup.dev", "primary": "K-me", "encryptionDisabled": false },
+            { "address": "ada@kutup.dev", "primary": "K-ada", "encryptionDisabled": false },
+            { "address": "bob@kutup.dev", "primary": "K-bob", "encryptionDisabled": false },
+            { "address": "fwd@kutup.dev", "primary": "K-fwd", "encryptionDisabled": true }
+          ]
+        }
+      },
+      "expect": {
+        "local": ["ada@kutup.dev", "team@kutup.dev"],
+        "external": [],
+        "groups": [],
+        "plain": [],
+        "targets": { "keyed": [["ada@kutup.dev", "K-ada"], ["bob@kutup.dev", "K-bob"]], "readable": ["fwd@kutup.dev"] }
+      }
+    },
+    {
+      "name": "Encrypt off: Kutup recipients readable, a list's members still end to end",
+      "to": ["ada@kutup.dev", "team@kutup.dev", "out@example.org"],
+      "cc": [],
+      "bcc": [],
+      "ownDomain": "kutup.dev",
+      "sender": "me@kutup.dev",
+      "encrypt": false,
+      "defaultScheme": "pgpMime",
+      "lookups": { "out@example.org": "notKutup" },
+      "pinnedKeys": [],
+      "schemes": {},
+      "protections": { "out@example.org": { "kind": "found", "publicKey": "K-out" } },
+      "recipients": {
+        "ada@kutup.dev": { "kind": "keys", "primary": "K-ada", "encryptionDisabled": false },
+        "team@kutup.dev": { "kind": "group", "members": [{ "address": "bob@kutup.dev", "primary": "K-bob", "encryptionDisabled": false }] }
+      },
+      "expect": {
+        "local": ["ada@kutup.dev", "team@kutup.dev"],
+        "external": ["out@example.org"],
+        "groups": [],
+        "plain": ["out@example.org"],
+        "targets": { "keyed": [["bob@kutup.dev", "K-bob"]], "readable": ["ada@kutup.dev"] }
+      }
+    },
+    {
+      "name": "Outside: To and Cc together per scheme, each Bcc alone, the rest readable",
+      "to": ["a@example.org", "B@example.org"],
+      "cc": ["c@example.org", "plain@example.org"],
+      "bcc": ["d@example.org", "e@example.org"],
+      "ownDomain": "kutup.dev",
+      "sender": "me@kutup.dev",
+      "encrypt": true,
+      "defaultScheme": "pgpMime",
+      "lookups": { "a@example.org": "notKutup", "b@example.org": "notKutup", "c@example.org": "notKutup", "plain@example.org": "notKutup", "d@example.org": "notKutup", "e@example.org": "group" },
+      "pinnedKeys": [],
+      "schemes": { "c@example.org": "inline" },
+      "protections": {
+        "a@example.org": { "kind": "found", "publicKey": "K-a" },
+        "b@example.org": { "kind": "pinned", "publicKey": "K-b" },
+        "c@example.org": { "kind": "found", "publicKey": "K-c" },
+        "plain@example.org": { "kind": "none" },
+        "d@example.org": { "kind": "found", "publicKey": "K-d" }
+      },
+      "recipients": {},
+      "expect": { "error": { "error": "lookupFailed", "address": "e@example.org" } }
+    },
+    {
+      "name": "Outside recipients grouped by scheme and Bcc",
+      "to": ["a@example.org", "B@example.org"],
+      "cc": ["c@example.org", "plain@example.org"],
+      "bcc": ["d@example.org", "e@example.org"],
+      "ownDomain": "kutup.dev",
+      "sender": "me@kutup.dev",
+      "encrypt": true,
+      "defaultScheme": "pgpMime",
+      "lookups": { "a@example.org": "notKutup", "b@example.org": "notKutup", "c@example.org": "notKutup", "plain@example.org": "notKutup", "d@example.org": "notKutup", "e@example.org": "notKutup" },
+      "pinnedKeys": [],
+      "schemes": { "c@example.org": "inline" },
+      "protections": {
+        "a@example.org": { "kind": "found", "publicKey": "K-a" },
+        "b@example.org": { "kind": "pinned", "publicKey": "K-b" },
+        "c@example.org": { "kind": "found", "publicKey": "K-c" },
+        "plain@example.org": { "kind": "none" },
+        "d@example.org": { "kind": "found", "publicKey": "K-d" },
+        "e@example.org": { "kind": "found", "publicKey": "K-e" }
+      },
+      "recipients": {},
+      "expect": {
+        "local": [],
+        "external": ["a@example.org", "b@example.org", "c@example.org", "plain@example.org", "d@example.org", "e@example.org"],
+        "groups": [
+          { "recipients": ["a@example.org", "b@example.org"], "keys": ["K-a", "K-b"], "inline": false },
+          { "recipients": ["c@example.org"], "keys": ["K-c"], "inline": true },
+          { "recipients": ["d@example.org"], "keys": ["K-d"], "inline": false },
+          { "recipients": ["e@example.org"], "keys": ["K-e"], "inline": false }
+        ],
+        "plain": ["plain@example.org"],
+        "targets": { "keyed": [], "readable": [] }
+      }
+    },
+    {
+      "name": "Inline as the account's default scheme",
+      "to": ["a@example.org"],
+      "cc": [],
+      "bcc": [],
+      "ownDomain": "kutup.dev",
+      "sender": "me@kutup.dev",
+      "encrypt": true,
+      "defaultScheme": "inline",
+      "lookups": { "a@example.org": "notKutup" },
+      "pinnedKeys": [],
+      "schemes": {},
+      "protections": { "a@example.org": { "kind": "found", "publicKey": "K-a" } },
+      "recipients": {},
+      "expect": {
+        "local": [],
+        "external": ["a@example.org"],
+        "groups": [{ "recipients": ["a@example.org"], "keys": ["K-a"], "inline": true }],
+        "plain": [],
+        "targets": { "keyed": [], "readable": [] }
+      }
+    },
+    {
+      "name": "A custom domain this server holds is a Kutup recipient",
+      "to": ["ada@work.example"],
+      "cc": [],
+      "bcc": [],
+      "ownDomain": "kutup.dev",
+      "sender": "me@kutup.dev",
+      "encrypt": true,
+      "defaultScheme": "pgpMime",
+      "lookups": { "ada@work.example": "keys" },
+      "pinnedKeys": [],
+      "schemes": {},
+      "protections": {},
+      "recipients": { "ada@work.example": { "kind": "keys", "primary": "K-ada", "encryptionDisabled": false } },
+      "expect": {
+        "local": ["ada@work.example"],
+        "external": [],
+        "groups": [],
+        "plain": [],
+        "targets": { "keyed": [["ada@work.example", "K-ada"]], "readable": [] }
+      }
+    },
+    {
+      "name": "This server's word never outranks keys Contacts trust",
+      "to": ["ada@work.example"],
+      "cc": [],
+      "bcc": [],
+      "ownDomain": "kutup.dev",
+      "sender": "me@kutup.dev",
+      "encrypt": true,
+      "defaultScheme": "pgpMime",
+      "lookups": { "ada@work.example": "keys" },
+      "pinnedKeys": ["ada@work.example"],
+      "schemes": {},
+      "protections": {},
+      "recipients": {},
+      "expect": { "error": { "error": "pinnedKeyConflict", "address": "ada@work.example" } }
+    },
+    {
+      "name": "A disabled address stops the send",
+      "to": ["ada@work.example"],
+      "cc": [],
+      "bcc": [],
+      "ownDomain": "kutup.dev",
+      "sender": "me@kutup.dev",
+      "encrypt": true,
+      "defaultScheme": "pgpMime",
+      "lookups": { "ada@work.example": "disabled" },
+      "pinnedKeys": [],
+      "schemes": {},
+      "protections": {},
+      "recipients": {},
+      "expect": { "error": { "error": "recipientDisabled", "address": "ada@work.example" } }
+    },
+    {
+      "name": "Unusable trusted keys stop the send",
+      "to": ["a@example.org"],
+      "cc": [],
+      "bcc": [],
+      "ownDomain": "kutup.dev",
+      "sender": "me@kutup.dev",
+      "encrypt": true,
+      "defaultScheme": "pgpMime",
+      "lookups": { "a@example.org": "notKutup" },
+      "pinnedKeys": [],
+      "schemes": {},
+      "protections": { "a@example.org": { "kind": "pinnedUnusable" } },
+      "recipients": {},
+      "expect": { "error": { "error": "pinnedKeyUnusable", "address": "a@example.org" } }
+    },
+    {
+      "name": "An address on this domain that isn't a Kutup user's",
+      "to": ["nobody@kutup.dev"],
+      "cc": [],
+      "bcc": [],
+      "ownDomain": "kutup.dev",
+      "sender": "me@kutup.dev",
+      "encrypt": true,
+      "defaultScheme": "pgpMime",
+      "lookups": {},
+      "pinnedKeys": [],
+      "schemes": {},
+      "protections": {},
+      "recipients": { "nobody@kutup.dev": { "kind": "notKutup" } },
+      "expect": { "error": { "error": "unknownRecipient", "address": "nobody@kutup.dev" } }
+    }
+  ]
+}

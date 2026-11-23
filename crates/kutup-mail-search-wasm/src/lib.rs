@@ -108,6 +108,13 @@ fn master_keys(encoded: &[u8]) -> Result<MasterKeys, JsValue> {
 }
 
 /// One account's index in this browser.
+/// Text folded as the index folds it (the browser's normalization), for the
+/// check that it matches the native fold (scripts/test-mail-search-wasm.mjs).
+#[wasm_bindgen(js_name = searchFold)]
+pub fn search_fold(text: &str) -> String {
+    kutup_search::fold(text)
+}
+
 #[wasm_bindgen]
 pub struct MailSearch {
     keys: MailSearchKeys,

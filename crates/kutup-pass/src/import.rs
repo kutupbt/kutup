@@ -11,8 +11,10 @@ use serde::Serialize;
 
 use crate::view::FieldView;
 
-/// The largest file read (a CSV of tens of thousands of entries is far less).
+/// The largest CSV read (one of tens of thousands of entries is far less).
 pub const MAX_IMPORT_BYTES: usize = 20 * 1024 * 1024;
+/// The largest JSON or ZIP export read: they can hold attachments.
+pub const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
 /// The most entries one import makes.
 pub const MAX_IMPORT_ENTRIES: usize = 50_000;
 
@@ -31,15 +33,28 @@ pub enum Provider {
     Firefox,
     Safari,
     Generic,
+    /// Bitwarden's unencrypted `.json` export.
+    BitwardenJson,
+    /// 1Password's `.1pux` (a ZIP).
+    OnePassword1pux,
+    /// Proton Pass's export: its ZIP, or the `data.json` in it.
+    ProtonPassExport,
+    /// An unencrypted KeePass XML file (KeePassXC's or KeePass's XML export):
+    /// the whole tree comes in (import_xml.rs).
+    KeePassXml,
 }
 
 impl Provider {
     /// Every format, in the order the import dialog offers them.
-    pub const ALL: [Provider; 11] = [
+    pub const ALL: [Provider; 15] = [
+        Provider::KeePassXml,
         Provider::KeePassXc,
+        Provider::BitwardenJson,
         Provider::Bitwarden,
+        Provider::OnePassword1pux,
         Provider::OnePassword,
         Provider::LastPass,
+        Provider::ProtonPassExport,
         Provider::ProtonPass,
         Provider::NordPass,
         Provider::Dashlane,
@@ -62,6 +77,10 @@ impl Provider {
             Provider::Firefox => "firefox",
             Provider::Safari => "safari",
             Provider::Generic => "generic",
+            Provider::BitwardenJson => "bitwarden-json",
+            Provider::OnePassword1pux => "onepassword-1pux",
+            Provider::ProtonPassExport => "protonpass-export",
+            Provider::KeePassXml => "keepass-xml",
         }
     }
 
@@ -79,6 +98,10 @@ impl Provider {
             Provider::Firefox => "Firefox",
             Provider::Safari => "Safari or Apple Passwords",
             Provider::Generic => "CSV",
+            Provider::BitwardenJson => "Bitwarden (JSON)",
+            Provider::OnePassword1pux => "1Password (1PUX)",
+            Provider::ProtonPassExport => "Proton Pass (ZIP or JSON)",
+            Provider::KeePassXml => "KeePass XML",
         }
     }
 
@@ -102,6 +125,11 @@ impl Provider {
             Provider::Firefox => &["url", "username", "password", "timepasswordchanged"],
             Provider::Safari => &["title", "url", "username", "password"],
             Provider::Generic => &[],
+            // Not CSV: read by their own structure (import_json.rs).
+            Provider::BitwardenJson
+            | Provider::OnePassword1pux
+            | Provider::ProtonPassExport
+            | Provider::KeePassXml => &[],
         }
     }
 }
@@ -128,6 +156,16 @@ pub struct ImportedEntry {
     pub created: Option<NaiveDateTime>,
     #[serde(skip)]
     pub modified: Option<NaiveDateTime>,
+    /// Files, from the formats that carry them (1PUX).
+    #[serde(skip)]
+    pub attachments: Vec<ImportedAttachment>,
+}
+
+/// A file an export carried for an entry.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ImportedAttachment {
+    pub name: String,
+    pub data: Vec<u8>,
 }
 
 /// A file read.
@@ -147,8 +185,10 @@ pub struct Parsed {
 pub enum ImportError {
     #[error("the file is empty")]
     Empty,
-    #[error("the file is larger than 20 MB")]
+    #[error("the file is too large")]
     TooLarge,
+    #[error("the export is encrypted: export it again without a password")]
+    Encrypted,
     #[error("the file is not a CSV this can read: {0}")]
     Unreadable(String),
     #[error("the columns do not look like a password export")]
@@ -391,6 +431,26 @@ const GENERIC_TAGS: &[&str] = &["tags", "tag", "labels"];
 pub fn parse(bytes: &[u8], provider: Option<Provider>) -> Result<Parsed, ImportError> {
     if bytes.is_empty() {
         return Err(ImportError::Empty);
+    }
+    if bytes.len() > MAX_ARCHIVE_BYTES {
+        return Err(ImportError::TooLarge);
+    }
+    // KeePass XML, named or recognised.
+    if provider == Some(Provider::KeePassXml)
+        || (provider.is_none() && crate::import_xml::detect(bytes))
+    {
+        return crate::import_xml::preview(bytes);
+    }
+    // JSON and ZIP exports, named or recognised by their structure.
+    let structured = match provider {
+        Some(
+            p @ (Provider::BitwardenJson | Provider::OnePassword1pux | Provider::ProtonPassExport),
+        ) => Some(p),
+        Some(_) => None,
+        None => crate::import_json::detect(bytes),
+    };
+    if let Some(provider) = structured {
+        return crate::import_json::parse(bytes, provider);
     }
     if bytes.len() > MAX_IMPORT_BYTES {
         return Err(ImportError::TooLarge);
@@ -872,6 +932,13 @@ fn read_row(provider: Provider, row: &Row, warnings: &mut Vec<String>) -> Read {
             entry.urls = vec![row.get("url").into()];
             entry.notes = row.get("notes").into();
             otp = row.get("otpauth").into();
+        }
+        // Never read as CSV rows (`parse` hands them to import_json).
+        Provider::BitwardenJson
+        | Provider::OnePassword1pux
+        | Provider::ProtonPassExport
+        | Provider::KeePassXml => {
+            return Read::Nothing;
         }
         Provider::Generic => {
             entry.title = row.first(GENERIC_TITLE).into();

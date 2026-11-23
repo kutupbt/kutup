@@ -3,7 +3,7 @@
 
 import type { MasterKeysBytes } from '@kutup/crypto/masterKeys'
 import type { Call, Request, Response } from './protocol'
-import type { Applied, EntryView, ImportFailure, ImportFormat, ImportPreview, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
+import type { Applied, CustomDataView, EntryView, ResolvedField, ImportFailure, ImportFormat, ImportPreview, KdfInput, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
 
 /** Why a vault didn't open, when the vault library says (its message's first word). */
 export type VaultFailure = 'wrongKey' | 'unsupported' | 'damaged' | 'keyFile' | 'emptyKey'
@@ -109,8 +109,33 @@ export class VaultHandle {
     return call({ call: 'apply', handle: this.handle, op, now: Date.now() })
   }
 
+  /** The ids of the entries matching a search (kutup_pass::search), `weakIds` counting as weak for `is:weak`. */
+  search(query: string, weakIds: string[], now = Date.now()): Promise<string[]> {
+    return call({ call: 'search', handle: this.handle, query, weakIds, now })
+  }
+
+  /** The vault as CSV in KeePassXC's columns, in the clear; the recycle bin left out. */
+  exportCsv(): Promise<string> {
+    return call({ call: 'exportCsv', handle: this.handle })
+  }
+
+  /** The vault as an unencrypted KeePass XML file (history, attachments, icons); the recycle bin left out. */
+  exportKeePassXml(): Promise<Uint8Array> {
+    return call({ call: 'exportKeePassXml', handle: this.handle })
+  }
+
+  /** The entry's fields whose references and placeholders resolve to something else (kutup_pass::resolve). */
+  resolvedFields(entryId: string, now = new Date()): Promise<ResolvedField[]> {
+    return call({ call: 'resolvedFields', handle: this.handle, entryId, now: now.getTime(), offsetMinutes: -now.getTimezoneOffset() })
+  }
+
   history(entryId: string): Promise<EntryView[]> {
     return call({ call: 'history', handle: this.handle, entryId })
+  }
+
+  /** An entry's or group's custom data, by key (its read-only Properties). */
+  customData(id: string): Promise<CustomDataView[]> {
+    return call({ call: 'customData', handle: this.handle, target: id })
   }
 
   attachment(entryId: string, name: string): Promise<Uint8Array> {
@@ -202,6 +227,17 @@ export interface KeyParts {
 /** A new KeePassXC key file (XML v2), made in the worker: for the person to download, never sent anywhere. */
 export function generateKeyFile(): Promise<Uint8Array> {
   return call({ call: 'generateKeyFile' })
+}
+
+/**
+ * How long one key derivation with `kdf` takes in the worker, in
+ * milliseconds (an empty vault saved under it): the settings page's
+ * benchmark. Throws for settings out of range.
+ */
+export async function timeKdf(kdf: KdfInput): Promise<number> {
+  const start = performance.now()
+  await call({ call: 'deriveOnce', kdf })
+  return performance.now() - start
 }
 
 /** A kept vault key, opened (kutup_pass::kept): bytes in base64. */

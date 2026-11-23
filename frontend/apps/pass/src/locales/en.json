@@ -11,7 +11,8 @@
   },
   "nav": {
     "vaults": "All vaults",
-    "yourVaults": "Vaults"
+    "yourVaults": "Vaults",
+    "generator": "Generator"
   },
   "vaults": {
     "title": "Vaults",
@@ -27,6 +28,12 @@
     "folderDescription": "Where the vault file is kept in Drive. Everyone who can open the folder can open the vault file; only its key opens what is inside.",
     "myFiles": "My files",
     "unnamedFolder": "Folder",
+    "newFolder": "New folder",
+    "newFolderTitle": "New folder",
+    "newFolderIn": "Made in {{path}}, then chosen for the vault.",
+    "newFolderCreate": "Create folder",
+    "keyFileDescription": "A key file adds a second secret, asked for with the password. Keep it secret and never lose it, or you will be locked out of the vault.",
+    "repeatPassword": "Type the vault password again to check it.",
     "password": "Vault password",
     "passwordDescription": "The password KeePass apps ask for. With “Unlock with my Kutup sign-in”, Pass and kutup sync do not ask for it.",
     "confirmPassword": "Repeat the vault password",
@@ -147,6 +154,7 @@
     "nameTaken": "A file with that name is already in this folder."
   },
   "groups": {
+    "copied": "{{name}} copied to {{group}}",
     "label": "Groups",
     "all": "All entries",
     "recycleBin": "Recycle bin",
@@ -164,7 +172,16 @@
     "emptyBin": "Empty recycle bin",
     "emptyBinTitle": "Empty the recycle bin?",
     "emptyBinDescription": "Everything in the recycle bin is deleted for good, on every device that syncs this vault.",
-    "binEmptied": "Recycle bin emptied"
+    "binEmptied": "Recycle bin emptied",
+    "moveTo": "Move to",
+    "moved": "{{name}} moved to {{group}}",
+    "deletedGroups": "Deleted groups",
+    "restore": "Restore",
+    "restored": "{{name}} restored with everything in it",
+    "deletedForGood": "{{name}} deleted for good",
+    "edit": "Edit",
+    "editTitle": "Edit group",
+    "notes": "Notes"
   },
   "entries": {
     "label": "Entries",
@@ -172,7 +189,11 @@
     "noMatch": "No entries match.",
     "binEmpty": "The recycle bin is empty.",
     "empty": "No entries in {{group}} yet.",
-    "pick": "Choose an entry to see it."
+    "pick": "Choose an entry to see it.",
+    "searchHelp": "Search words in the title, user name, URL, notes, tags and fields. Narrow with title:, user:, url:, notes:, tag:, group:, attr:, attachment:, password:, is:expired, is:weak, has:totp; -word or !word leaves out, +word matches whole values, \"quotes\" keep spaces, * matches anything.",
+    "wholeVault": "Whole vault",
+    "withBin": "Include the recycle bin",
+    "searching": "Searching…"
   },
   "entry": {
     "new": "New entry",
@@ -202,7 +223,14 @@
     "created": "Entry added",
     "saved": "Entry saved",
     "saveFailed": "The change could not be made.",
-    "untitled": "Untitled"
+    "untitled": "Untitled",
+    "tagSuggestions": "Tags in this vault",
+    "excludeFromReports": "Exclude from reports",
+    "excludeFromReportsHint": "The security report leaves this entry out (KeePass's quality check off).",
+    "colours": "Colours",
+    "foregroundColor": "Text",
+    "backgroundColor": "Background",
+    "referenceNote": "Refers to another entry: the vault shows and copies that entry's value."
   },
   "detail": {
     "edit": "Edit",
@@ -224,11 +252,28 @@
     "otpRemaining_one": "{{count}} second",
     "otpRemaining_other": "{{count}} seconds",
     "openUrl": "Open the site",
+    "openNamedUrl": "Open {{name}}",
     "attachments": "Attachments",
     "attach": "Attach file",
-    "attached": "File attached",
     "noAttachments": "No attachments.",
-    "attachmentTooLarge": "A file can be at most 50 MB.",
+    "attachmentTooLargeNamed": "{{name}} is larger than 50 MB and was not attached.",
+    "replaceAttachmentsTitle_one": "Replace an attachment?",
+    "replaceAttachmentsTitle_other": "Replace {{count}} attachments?",
+    "replaceAttachments": "This entry already has attachments with these names. Replacing keeps the old files in the entry’s history.",
+    "skipExisting": "Skip these",
+    "replace": "Replace",
+    "attachedCount_one": "{{count}} file attached",
+    "attachedCount_other": "{{count}} files attached",
+    "preview": "Preview {{name}}",
+    "renameAttachment": "Rename {{name}}",
+    "renameAttachmentTitle": "Rename attachment",
+    "attachmentName": "Name",
+    "attachmentNameTaken": "This entry already has an attachment with that name.",
+    "rename": "Rename",
+    "attachmentRenamed": "Attachment renamed",
+    "previewHint": "Shown here only; nothing leaves this page.",
+    "previewFailed": "This attachment couldn't be shown.",
+    "previewCut": "Only the first 1 MB is shown. Download the file to see all of it.",
     "download": "Download {{name}}",
     "removeAttachment": "Remove {{name}}",
     "modified": "Changed {{when}}",
@@ -236,7 +281,8 @@
     "history_one": "{{count}} earlier version",
     "history_other": "{{count}} earlier versions",
     "expired": "This entry expired on {{when}}.",
-    "clipboardNotCleared": "Copied secrets could not be cleared from the clipboard: allow clipboard access, or clear it yourself."
+    "clipboardNotCleared": "Copied secrets could not be cleared from the clipboard: allow clipboard access, or clear it yourself.",
+    "fromReference": "from another entry"
   },
   "history": {
     "title": "Earlier versions",
@@ -245,9 +291,26 @@
     "show": "Show",
     "hide": "Hide",
     "restore": "Restore",
-    "unknownTime": "Time unknown"
+    "unknownTime": "Time unknown",
+    "delete": "Delete this version",
+    "deleteAll": "Delete all versions",
+    "deleteTitle": "Delete this version?",
+    "deleteAllTitle": "Delete every earlier version?",
+    "deleteDescription": "It is deleted on every device that syncs this vault, and won't come back from another device's copy. The current version stays.",
+    "deleted": "Version deleted",
+    "deletedAll": "Earlier versions deleted"
   },
   "generator": {
+    "moreGroups": "More character groups",
+    "groups": {
+      "braces": "Braces",
+      "punctuation": "Punctuation",
+      "quotes": "Quotes",
+      "dashes": "Dashes and slashes",
+      "math": "Math",
+      "logograms": "Logograms",
+      "extended": "Extended ASCII (é ß ¿ …)"
+    },
     "open": "Generate a password",
     "again": "Generate another",
     "length_one": "Length: {{count}} character",
@@ -258,7 +321,26 @@
     "symbols": "Symbols",
     "avoidLookAlikes": "No look-alikes",
     "bits": "About {{bits}} bits of strength",
-    "use": "Use this password"
+    "use": "Use this password",
+    "title": "Password generator",
+    "description": "Passwords and passphrases made on this device; nothing is saved.",
+    "password": "Password",
+    "passphrase": "Passphrase",
+    "copy": "Copy",
+    "value": "Generated value",
+    "custom": "Also use",
+    "exclude": "Never use",
+    "noCharacters": "No characters are left to choose from. Turn a set on, or exclude fewer.",
+    "words_one": "{{count}} word",
+    "words_other": "{{count}} words",
+    "separator": "Separator",
+    "case": "Letters",
+    "cases": {"lower": "lowercase", "first": "Capitalised", "random": "Mixed"},
+    "addNumber": "Add a number",
+    "addSymbol": "Add a symbol",
+    "usePassphrase": "Use this passphrase",
+    "wordlistFailed": "The word list could not be loaded. Check your connection and try again.",
+    "wordlistCredit": "Words from the EFF Large Wordlist, Electronic Frontier Foundation, CC BY 3.0:"
   },
   "strength": {
     "weak": "Weak password",
@@ -319,12 +401,14 @@
     "fromWebsite": "Use the website's icon",
     "reset": "Default icon",
     "unreadable": "That file could not be read as a picture. Choose a PNG, JPEG, GIF, WebP, BMP or ICO image of at most 5 MB.",
-    "noSiteIcon": "The website has no icon Kutup could fetch."
+    "noSiteIcon": "The website has no icon Kutup could fetch.",
+    "builtin": "KeePass icons",
+    "pickBuiltin": "KeePass icon {{number}}"
   },
   "import": {
     "open": "Import from another app…",
     "title": "Import passwords",
-    "description": "From another password manager's CSV export: KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass, Dashlane, Chrome, Edge, Brave, Firefox, Safari or Apple Passwords, or any CSV with named columns.",
+    "description": "From another password manager's export: KeePass XML (everything, as it was), Bitwarden's JSON, 1Password's 1PUX, Proton Pass's ZIP, or a CSV from KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass, Dashlane, Chrome, Edge, Brave, Firefox, Safari or Apple Passwords, or any CSV with named columns.",
     "chooseFile": "Choose export file",
     "otherFile": "Choose another file",
     "format": "Format",
@@ -355,8 +439,9 @@
     "deleteExport": "An export file holds your passwords unencrypted. Delete it (and empty the trash) once they are imported.",
     "errors": {
       "empty": "The file has no entries.",
-      "tooLarge": "The file is larger than 20 MB.",
-      "unreadable": "The file could not be read as CSV. Export it again as UTF-8. {{detail}}",
+      "tooLarge": "The file is too large: a CSV is at most 20 MB, other exports 64 MB.",
+      "unreadable": "The file could not be read. Export it again (as UTF-8, for a CSV). {{detail}}",
+      "encrypted": "The export is protected with a password, which Kutup Pass can't open. Export it again without one, import it, then delete the file.",
       "unknownFormat": "These columns do not look like a password export. Pick its format, or name the columns (Title, Username, Password, URL, Notes).",
       "missingColumns": "The file lacks columns this format has: {{detail}}.",
       "tooMany": "The file holds more than 50,000 entries."
@@ -444,7 +529,127 @@
     "submit": "Upload",
     "unreadable": "This file couldn't be read. Choose it again."
   },
+  "settings": {
+    "open": "Vault settings",
+    "title": "Vault settings",
+    "description": "These settings are saved in the vault and apply on every device and in other KeePass apps.",
+    "general": "General",
+    "encryption": "Encryption",
+    "security": "Security",
+    "securityDescription": "Change the vault's password or key file. Every device that syncs this vault opens it with the new key.",
+    "saved": "Vault settings saved",
+    "vaultDescription": "Description",
+    "defaultUserName": "Default user name",
+    "defaultUserNameHint": "Filled in for new entries.",
+    "recycleBin": "Use a recycle bin",
+    "recycleBinHint": "Deleted entries and groups go there first. Turned off, deleting is for good.",
+    "history": "Entry history",
+    "historyItems": "Keep at most this many earlier versions",
+    "historySize": "Keep at most this many MiB per entry",
+    "historyRange": "Versions are 0 to 1000; the size is 1 to 1024 MiB.",
+    "historyTrims": "Older versions beyond the new limit are deleted from every entry when you save.",
+    "kdf": "Key derivation",
+    "kdfKind": {
+      "argon2id": "Argon2id (recommended)",
+      "argon2d": "Argon2d",
+      "aesKdf": "AES-KDF (older KeePass apps)"
+    },
+    "memory": "Memory (MiB)",
+    "iterations": "Passes",
+    "parallelism": "Threads",
+    "rounds": "Rounds",
+    "aesHint": "Only for vaults that older KeePass apps must open; Argon2id resists attacks better.",
+    "benchmark": "Benchmark 1 s",
+    "benchmarkFailed": "The benchmark couldn't run with these settings.",
+    "measured": "Opening takes about {{seconds}} s on this device.",
+    "belowMinimum": "This server requires at least {{memory}} MiB and {{iterations}} passes for Argon2, or {{rounds}} rounds for AES-KDF.",
+    "outOfRange": "Memory is up to 2048 MiB, passes up to 10,000, threads 1 to 16, and rounds up to 1,000,000,000.",
+    "slowWarning": "Stronger settings make the vault slower to open on every device, phones included. Use the benchmark on your slowest device.",
+    "compression": "Compress the vault file",
+    "weakTitle": "This vault's encryption is weaker than this server requires",
+    "weakDescription": "It still opens. Strengthen its key derivation so a stolen copy is harder to crack.",
+    "strengthen": "Strengthen"
+  },
+  "tags": {
+    "label": "Tags"
+  },
+  "list": {
+    "sort": "Sort by",
+    "by": {
+      "title": "Title",
+      "userName": "User name",
+      "url": "URL",
+      "modified": "Modified",
+      "created": "Created",
+      "expiry": "Expiry"
+    },
+    "ascending": "Ascending",
+    "descending": "Descending",
+    "columns": "Show in the list",
+    "column": {
+      "userName": "User name",
+      "url": "URL",
+      "modified": "Modified",
+      "expiry": "Expiry",
+      "attachments": "Attachments",
+      "totp": "One-time code"
+    },
+    "modifiedAt": "Modified {{when}}",
+    "expiresAt": "Expires {{when}}",
+    "attachmentCount_one": "{{count}} attachment",
+    "attachmentCount_other": "{{count}} attachments"
+  },
+  "clone": {
+    "open": "Clone",
+    "title_one": "Clone entry",
+    "title_other": "Clone {{count}} entries",
+    "description_one": "A copy goes beside it, in the same group.",
+    "description_other": "Each copy goes beside its entry, in the same group.",
+    "suffix": " - Clone",
+    "appendSuffix": "Add “{{suffix}}” to the title",
+    "copyHistory": "Copy the history too",
+    "submit": "Clone",
+    "done_one": "Entry cloned",
+    "done_other": "{{count}} entries cloned",
+    "references": "Use references to the original's user name and password"
+  },
+  "export": {
+    "open": "Export…",
+    "title": "Export the vault",
+    "description": "A file other password managers can read. Entries in the recycle bin are left out.",
+    "warningTitle": "The file is not encrypted",
+    "warning": "Anyone who gets the file can read every password in it. Keep it off shared drives and email, and delete it once you no longer need it.",
+    "password": "Your Kutup password",
+    "passwordHint": "Asked before any export, so nobody at an unlocked screen can take every password at once.",
+    "submit": "Export CSV",
+    "done": "Vault exported",
+    "wrongPassword": "That is not your Kutup password.",
+    "slowDown": "Too many attempts from here. Wait a minute, then try again.",
+    "locked": "Too many wrong passwords: your account is locked for a while, as at sign-in.",
+    "failed": "The export could not be made. Check your connection and try again.",
+    "format": "Format",
+    "formats": {"csv": "CSV", "csvHint": "KeePassXC's columns; most password managers read it. No history, attachments or icons.", "xml": "KeePass XML", "xmlHint": "Everything: history, attachments, icons and custom fields. KeePass and Kutup Pass read it back."},
+    "submitXml": "Export KeePass XML"
+  },
+  "totp": {
+    "open": "Set up one-time codes",
+    "title": "One-time codes",
+    "description": "The secret the site gave you (as text, under its QR code), and its settings if the site says so.",
+    "secret": "Secret",
+    "secretHint": "Letters A–Z and digits 2–7; spaces don't matter.",
+    "digits": "Digits",
+    "steam": "Steam Guard",
+    "period": "Every (seconds)",
+    "algorithm": "Algorithm",
+    "badSecret": "That secret isn't base32 text of at least 16 characters.",
+    "qrTitle": "Show QR code",
+    "qrDescription": "Scan it with another authenticator app to make the same codes there.",
+    "qrWarning": "Anyone who sees or photographs this code can make your one-time codes. Show it only where nobody is looking.",
+    "qrShow": "Show the QR code"
+  },
   "bulk": {
+    "copied_other": "{{count}} entries copied to {{group}}",
+    "copied_one": "{{count}} entry copied to {{group}}",
     "toolbar": "Selected entries",
     "selected_one": "{{count}} selected",
     "selected_other": "{{count}} selected",
@@ -527,5 +732,30 @@
     "done": "The vault's key was changed",
     "submit": "Change key",
     "pendingCopyPassword": "Kutup didn't answer. The vault keeps its new key and is saved under it when the connection is back. The generated password is only on this page: show it and copy it now, before closing."
+  },
+  "properties": {
+    "title": "Properties",
+    "uuid": "UUID",
+    "copyUuid": "Copy the UUID",
+    "uuidCopied": "UUID copied",
+    "created": "Created",
+    "modified": "Modified",
+    "accessed": "Accessed",
+    "customData": "Custom data",
+    "noCustomData": "No custom data.",
+    "key": "Key",
+    "value": "Value",
+    "binary": "Binary, {{size}}",
+    "failed": "The custom data couldn't be read."
+  },
+  "passkey": {
+    "title": "Passkey",
+    "site": "Site",
+    "username": "User name",
+    "credentialId": "Credential ID",
+    "copy": "Copy the {{what}}",
+    "copied": "{{what}} copied",
+    "keptHint": "Its private key stays in the vault and is never shown. Signing in with it takes an app that uses KeePass passkeys, such as KeePassXC.",
+    "noKeyHint": "This passkey has no private key, so it can’t sign in."
   }
 }

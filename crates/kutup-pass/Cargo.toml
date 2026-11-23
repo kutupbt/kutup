@@ -7,11 +7,17 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# The browser build: kutup_search folds through the browser's normalization.
+browser = ["kutup-search/browser"]
+
 [dependencies]
 # The patched copy of the `keepass` crate (vendor/keepass/KUTUP.md).
 keepass = { path = "vendor/keepass", features = ["save_kdbx4", "totp"] }
 # Kept vault keys (kept.rs) use the account envelope format.
 kutup-crypto = { path = "../kutup-crypto" }
+# Search folds text as Kutup's other searches do (search.rs).
+kutup-search = { path = "../kutup-search" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 uuid.workspace = true
 thiserror.workspace = true
@@ -26,6 +32,12 @@ quick-xml = "0.42"
 hex = "0.4"
 # Other password managers' exports (import.rs).
 csv = "1"
+# 1Password's and Proton Pass's ZIP exports (zip.rs); already in the build through `keepass`.
+flate2 = "1"
+# One-time codes (otp.rs): already in the build through `keepass`'s totp feature.
+totp-lite = "2.0"
+base32 = "0.5"
+url = "2"
 serde_json.workspace = true
 signature = "2"
 ssh-encoding = { version = "0.2", features = ["alloc"] }

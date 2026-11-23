@@ -12,6 +12,11 @@ mod key;
 
 pub use self::db::Database;
 
+/// Public in Kutup's copy (vendor/keepass/KUTUP.md): plain KeePass XML.
+pub use self::format::xml_db::from_plain_xml;
+#[cfg(feature = "save_kdbx4")]
+/// Public in Kutup's copy (vendor/keepass/KUTUP.md): plain KeePass XML.
+pub use self::format::xml_db::to_plain_xml;
 /// Public in Kutup's copy (vendor/keepass/KUTUP.md).
 pub use self::key::key_file_element;
 #[cfg(feature = "challenge_response")]

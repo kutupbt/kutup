@@ -71,3 +71,37 @@ export function keyFileName(vaultName: string): string {
       .trim() || 'vault'
   return `${base}.keyx`
 }
+
+/** What a new vault's key asks: a password and/or a key file, nothing to keep. */
+export interface NewVaultKeyForm {
+  password: string
+  confirm: string
+  keyFile: Exclude<KeyFileChoice, 'keep'>
+  generated: boolean
+  generatedSaved: boolean
+  chosen: boolean
+}
+
+/**
+ * The first thing stopping a vault being made with a key the person
+ * chooses, or null: the rules of a key change from no key at all, so a
+ * typed password must be typed twice and a generated key file said saved
+ * (as KeePassXC's New Database wizard asks).
+ */
+export function newVaultKeyProblem(form: NewVaultKeyForm): Exclude<KeyChangeProblem, 'unchanged' | 'emptyPassword'> | null {
+  const problem = keyChangeProblem({
+    now: { password: false, keyFile: false },
+    password: form.password ? 'new' : 'none',
+    newPassword: form.password,
+    confirm: form.confirm,
+    keyFile: form.keyFile,
+    generated: form.generated,
+    generatedSaved: form.generatedSaved,
+    chosen: form.chosen,
+  })
+  // Nothing chosen is no key (never "unchanged"); an empty password is none.
+  return problem === 'unchanged' || problem === 'emptyPassword' ? 'noKey' : problem
+}
+
+/** The key file choices a new vault offers. */
+export const NEW_VAULT_KEY_FILE_CHOICES = keyFileChoices({ password: false, keyFile: false }) as NewVaultKeyForm['keyFile'][]

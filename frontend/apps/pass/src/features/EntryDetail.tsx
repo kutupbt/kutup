@@ -1,5 +1,5 @@
-import { ArchiveRestore, Copy, Download, ExternalLink, Eye, EyeOff, FolderInput, History, Paperclip, Pencil, Trash2 } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArchiveRestore, Copy, CopyPlus, ExternalLink, Eye, EyeOff, FolderInput, History, Pencil, QrCode, Trash2 } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert } from '@kutup/ui/components/alert'
@@ -8,15 +8,20 @@ import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { copyText } from '@kutup/ui/lib/clipboard'
-import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
+import { formatInstant } from '@kutup/ui/lib/format'
 import type { VaultSession } from '../sync/vaultSession'
-import { fieldValue, STANDARD_FIELDS, type EntryView, type OtpView, type VaultView } from '../vault/types'
+import { fieldValue, STANDARD_FIELDS, type EntryView, type OtpView, type VaultView, type ResolvedField } from '../vault/types'
+import { CloneDialog } from './CloneDialog'
 import { HistoryDialog } from './HistoryDialog'
+import { TotpQrDialog } from './TotpQrDialog'
 import { SiteIcon } from './SiteIcon'
 import { IconDialog } from './IconDialog'
+import { AttachmentsSection } from './AttachmentsSection'
+import { PasskeyCard } from './PasskeyCard'
+import { PropertiesSection } from './PropertiesSection'
 import { iconSources } from '../lib/icons'
-import { bytesToBase64 } from '../lib/bytes'
 import { copySecret } from '../lib/copySecret'
+import { isAdditionalUrl, openableUrl } from '../lib/urls'
 
 function Row({ label, children, actions }: { label: string; children: ReactNode; actions?: ReactNode }) {
   return (
@@ -52,9 +57,35 @@ function SecretValue({ value, label }: { value: string; label: string }) {
   )
 }
 
-function OtpRow({ session, entryId }: { session: VaultSession; entryId: string }) {
+/** The entry's fields resolved in the worker; refreshed when the vault changes. */
+function useResolvedFields(session: VaultSession, entry: EntryView): Map<string, ResolvedField> {
+  const [resolved, setResolved] = useState<Map<string, ResolvedField>>(new Map())
+  const hasBraces = entry.fields.some((f) => f.value.includes('{'))
+  const version = session.getState().view
+  useEffect(() => {
+    if (!hasBraces) {
+      setResolved(new Map())
+      return
+    }
+    let live = true
+    void session
+      .vault()
+      .resolvedFields(entry.id)
+      .then(
+        (fields) => live && setResolved(new Map(fields.map((f) => [f.key, f]))),
+        () => live && setResolved(new Map()),
+      )
+    return () => {
+      live = false
+    }
+  }, [session, entry, hasBraces, version])
+  return resolved
+}
+
+function OtpRow({ session, entryId, uri }: { session: VaultSession; entryId: string; uri: string | null }) {
   const { t } = useTranslation()
   const [otp, setOtp] = useState<OtpView | null>(null)
+  const [showingQr, setShowingQr] = useState(false)
   useEffect(() => {
     let live = true
     const tick = () => {
@@ -77,9 +108,17 @@ function OtpRow({ session, entryId }: { session: VaultSession; entryId: string }
     <Row
       label={t('detail.otp')}
       actions={
-        <Button variant="ghost" size="icon" onClick={() => void copySecret(otp.code, t('detail.copied', { what: t('detail.otp') }), t('detail.clipboardCleared'), t('detail.clipboardNotCleared'))} aria-label={t('detail.copy', { what: t('detail.otp') })}>
-          <Copy />
-        </Button>
+        <>
+          {uri ? (
+            <Button variant="ghost" size="icon" onClick={() => setShowingQr(true)} aria-label={t('totp.qrTitle')} title={t('totp.qrTitle')}>
+              <QrCode />
+            </Button>
+          ) : null}
+          <Button variant="ghost" size="icon" onClick={() => void copySecret(otp.code, t('detail.copied', { what: t('detail.otp') }), t('detail.clipboardCleared'), t('detail.clipboardNotCleared'))} aria-label={t('detail.copy', { what: t('detail.otp') })}>
+            <Copy />
+          </Button>
+          {uri ? <TotpQrDialog uri={uri} open={showingQr} onOpenChange={setShowingQr} /> : null}
+        </>
       }
     >
       <span className="flex items-center gap-3">
@@ -92,33 +131,44 @@ function OtpRow({ session, entryId }: { session: VaultSession; entryId: string }
   )
 }
 
-function downloadBytes(bytes: Uint8Array, name: string) {
-  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'application/octet-stream' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
-}
-
-
 /** One entry: its fields to copy, its one-time code, attachments, history and what to do with it. */
-export function EntryDetail({ session, entry, view, onEdit, onGone }: { session: VaultSession; entry: EntryView; view: VaultView; onEdit: () => void; onGone: () => void }) {
+export function EntryDetail({
+  session,
+  entry,
+  view,
+  onEdit,
+  onGone,
+  onOpen,
+}: {
+  session: VaultSession
+  entry: EntryView
+  view: VaultView
+  onEdit: () => void
+  onGone: () => void
+  /** Opens another entry (a clone just made). */
+  onOpen: (id: string) => void
+}) {
   const { t, i18n } = useTranslation()
   const [history, setHistory] = useState(false)
   // Which delete the dialog was opened as: a recycle stays one, whatever the vault says by the time it is confirmed.
   const [confirmDelete, setConfirmDelete] = useState<'recycle' | 'forGood' | null>(null)
   const [changingIcon, setChangingIcon] = useState(false)
-  const attachInput = useRef<HTMLInputElement>(null)
+  const [cloning, setCloning] = useState(false)
   const canEdit = session.canEdit
-  const title = fieldValue(entry, 'Title') || t('entry.untitled')
-  const userName = fieldValue(entry, 'UserName')
-  const password = fieldValue(entry, 'Password')
-  const url = fieldValue(entry, 'URL')
-  const notes = fieldValue(entry, 'Notes')
-  const custom = entry.fields.filter((f) => !(STANDARD_FIELDS as readonly string[]).includes(f.key) && f.key !== 'otp')
+  const resolved = useResolvedFields(session, entry)
+  // What is shown and copied: references and placeholders resolved.
+  const shown = (key: string) => resolved.get(key)?.value ?? fieldValue(entry, key)
+  const labelOf = (key: string, label: string) => (resolved.get(key)?.fromReference ? `${label} · ${t('detail.fromReference')}` : label)
+  const title = shown('Title') || t('entry.untitled')
+  const userName = shown('UserName')
+  const password = shown('Password')
+  const url = shown('URL')
+  const notes = shown('Notes')
+  const custom = entry.fields
+    .filter((f) => !(STANDARD_FIELDS as readonly string[]).includes(f.key) && f.key !== 'otp')
+    .map((f) => ({ ...f, value: shown(f.key) }))
   const groups = view.groups.filter((g) => !g.inRecycleBin)
-  const safeUrl = /^https?:\/\//i.test(url) ? url : null
+  const safeUrl = openableUrl(url)
   const picture = entry.customIcon ? (iconSources(view).get(entry.customIcon) ?? null) : null
   /** Applies `op`; whether it was. */
   const run = (op: Parameters<VaultSession['apply']>[0], done?: string): Promise<boolean> =>
@@ -139,10 +189,10 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
       <header className="flex items-start gap-3 border-b border-border p-4">
         {canEdit && !entry.inRecycleBin ? (
           <button type="button" className="rounded-md focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setChangingIcon(true)} aria-label={t('icons.change')} title={t('icons.change')}>
-            <SiteIcon title={title} address={url} picture={picture} className="size-10 text-sm" />
+            <SiteIcon title={title} address={url} picture={picture} builtin={entry.icon} className="size-10 text-sm" />
           </button>
         ) : (
-          <SiteIcon title={title} address={url} picture={picture} className="size-10 text-sm" />
+          <SiteIcon title={title} address={url} picture={picture} builtin={entry.icon} className="size-10 text-sm" />
         )}
         <div className="min-w-0 flex-1">
           <h2 className="truncate font-display text-lg font-semibold tracking-tight">{title}</h2>
@@ -164,10 +214,15 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
                 {t('detail.restore')}
               </Button>
             ) : (
-              <Button variant="outline" size="sm" onClick={onEdit}>
-                <Pencil />
-                {t('detail.edit')}
-              </Button>
+              <>
+                <Button variant="outline" size="sm" onClick={onEdit}>
+                  <Pencil />
+                  {t('detail.edit')}
+                </Button>
+                <Button variant="ghost" size="icon" onClick={() => setCloning(true)} aria-label={t('clone.open')} title={t('clone.open')}>
+                  <CopyPlus />
+                </Button>
+              </>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -214,7 +269,7 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
         <dl>
           {userName ? (
             <Row
-              label={t('entry.userName')}
+              label={labelOf('UserName', t('entry.userName'))}
               actions={
                 <Button variant="ghost" size="icon" onClick={() => void copyText(userName).then(() => toast.success(t('detail.copied', { what: t('entry.userName') })))} aria-label={t('detail.copy', { what: t('entry.userName') })}>
                   <Copy />
@@ -224,11 +279,11 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
               {userName}
             </Row>
           ) : null}
-          {password ? <SecretValue value={password} label={t('entry.password')} /> : null}
-          <OtpRow session={session} entryId={entry.id} />
+          {password ? <SecretValue value={password} label={labelOf('Password', t('entry.password'))} /> : null}
+          <OtpRow session={session} entryId={entry.id} uri={/^otpauth:\/\/totp\//i.test(fieldValue(entry, 'otp')) ? fieldValue(entry, 'otp') : null} />
           {url ? (
             <Row
-              label={t('entry.url')}
+              label={labelOf('URL', t('entry.url'))}
               actions={
                 safeUrl ? (
                   <Button variant="ghost" size="icon" asChild>
@@ -244,15 +299,25 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
           ) : null}
           {custom.map((f) =>
             f.protected ? (
-              <SecretValue key={f.key} value={f.value} label={f.key} />
+              <SecretValue key={f.key} value={f.value} label={labelOf(f.key, f.key)} />
             ) : (
               <Row
                 key={f.key}
-                label={f.key}
+                label={labelOf(f.key, f.key)}
                 actions={
-                  <Button variant="ghost" size="icon" onClick={() => void copyText(f.value).then(() => toast.success(t('detail.copied', { what: f.key })))} aria-label={t('detail.copy', { what: f.key })}>
-                    <Copy />
-                  </Button>
+                  <>
+                    {/* Keepass2Android's extra URLs (KP2A_URL_n) open as the URL does. */}
+                    {isAdditionalUrl(f.key) && openableUrl(f.value) ? (
+                      <Button variant="ghost" size="icon" asChild>
+                        <a href={openableUrl(f.value)!} target="_blank" rel="noopener noreferrer" aria-label={t('detail.openNamedUrl', { name: f.key })}>
+                          <ExternalLink />
+                        </a>
+                      </Button>
+                    ) : null}
+                    <Button variant="ghost" size="icon" onClick={() => void copyText(f.value).then(() => toast.success(t('detail.copied', { what: f.key })))} aria-label={t('detail.copy', { what: f.key })}>
+                      <Copy />
+                    </Button>
+                  </>
                 }
               >
                 <span className="break-all">{f.value}</span>
@@ -265,62 +330,9 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
             </Row>
           ) : null}
         </dl>
-        <section className="mt-6" aria-label={t('detail.attachments')}>
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium">{t('detail.attachments')}</h3>
-            {canEdit && !entry.inRecycleBin ? (
-              <>
-                <input
-                  ref={attachInput}
-                  type="file"
-                  hidden
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    e.target.value = ''
-                    if (!file) return
-                    if (file.size > 50 * 1024 * 1024) {
-                      toast.error(t('detail.attachmentTooLarge'))
-                      return
-                    }
-                    void file.arrayBuffer().then((buffer) =>
-                      run({ op: 'addAttachment', entryId: entry.id, name: file.name, data: bytesToBase64(new Uint8Array(buffer)) }, t('detail.attached')),
-                    )
-                  }}
-                />
-                <Button variant="ghost" size="sm" onClick={() => attachInput.current?.click()}>
-                  <Paperclip />
-                  {t('detail.attach')}
-                </Button>
-              </>
-            ) : null}
-          </div>
-          {entry.attachments.length === 0 ? (
-            <p className="mt-1 text-xs text-muted-foreground">{t('detail.noAttachments')}</p>
-          ) : (
-            <ul className="mt-2 space-y-1">
-              {entry.attachments.map((a) => (
-                <li key={a.name} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
-                  <Paperclip className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                  <span className="text-xs text-muted-foreground">{formatBytes(a.size, i18n.language)}</span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={t('detail.download', { name: a.name })}
-                    onClick={() => void session.vault().attachment(entry.id, a.name).then((bytes) => downloadBytes(bytes, a.name))}
-                  >
-                    <Download />
-                  </Button>
-                  {canEdit ? (
-                    <Button variant="ghost" size="icon" aria-label={t('detail.removeAttachment', { name: a.name })} onClick={() => void run({ op: 'removeAttachment', entryId: entry.id, name: a.name })}>
-                      <Trash2 />
-                    </Button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        {entry.passkey ? <PasskeyCard passkey={entry.passkey} /> : null}
+        <AttachmentsSection entry={entry} session={session} canEdit={canEdit} run={run} />
+        <PropertiesSection session={session} id={entry.id} created={entry.created} modified={entry.modified} accessed={entry.accessed} />
         <footer className="mt-6 space-y-1 text-xs text-muted-foreground">
           {entry.modified ? <p>{t('detail.modified', { when: formatInstant(entry.modified, i18n.language) })}</p> : null}
           {entry.created ? <p>{t('detail.created', { when: formatInstant(entry.created, i18n.language) })}</p> : null}
@@ -331,15 +343,17 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
         </footer>
       </div>
       <HistoryDialog session={session} entry={entry} open={history} onOpenChange={setHistory} />
+      <CloneDialog session={session} ids={cloning ? [entry.id] : []} onOpenChange={setCloning} onCloned={onOpen} />
       <IconDialog
         open={changingIcon}
         onOpenChange={setChangingIcon}
         name={title}
         view={view}
         current={entry.customIcon}
+        builtinCurrent={entry.icon}
         address={url}
-        onChoose={async (data) => {
-          await session.apply({ op: 'setEntryIcon', id: entry.id, data })
+        onChoose={async (choice) => {
+          await session.apply({ op: 'setEntryIcon', id: entry.id, ...('builtin' in choice ? { data: null, builtin: choice.builtin } : { data: choice.data }) })
         }}
       />
       <ConfirmDestructive

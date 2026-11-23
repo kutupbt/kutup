@@ -117,7 +117,9 @@ fn web_local_state_purpose(purpose: u8) -> Result<LocalStatePurpose, JsValue> {
         p @ (LocalStatePurpose::SessionFork | LocalStatePurpose::WebSession) => Ok(p),
         // Manifest pins are sealed under a key the master key derives:
         // `sealManifestPins`, never with a caller's key.
-        LocalStatePurpose::CliSession | LocalStatePurpose::ManifestPins => Err(js_error(
+        LocalStatePurpose::CliSession
+        | LocalStatePurpose::ManifestPins
+        | LocalStatePurpose::MailBridgeCache => Err(js_error(
             "local-state purpose is not available to web clients",
         )),
     }

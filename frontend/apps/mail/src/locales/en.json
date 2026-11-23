@@ -1386,6 +1386,26 @@
       "unsupported": "Kutup's filters can't do this:",
       "unknownPlace": "No folder or label with this name (make it first, then import again):",
       "noAction": "This filter does nothing Kutup can do:"
+    },
+    "editor": {
+      "add": "Add Sieve filter",
+      "edit": "Edit as Sieve",
+      "addTitle": "Add Sieve filter",
+      "editTitle": "Edit filter as Sieve",
+      "description": "Write one filter in Sieve: its tests on the sender, recipient, subject or attachments, and what it does (move, label, mark read, star). Kutup checks it as you type.",
+      "templateHint": "Write one if block: a test, then fileinto or addflag.",
+      "notKept": "Kutup saves the filter, not this text: comments and formatting aren't kept.",
+      "noFilter": "There is no filter in this script yet.",
+      "oneFilter": "A Sieve filter holds one filter: one if block. Import Sieve takes several at once.",
+      "unknownPlace": "No folder or label with this name:",
+      "elsewhere": {
+        "autoReply": "Kutup's filters don't send replies: use Settings → Auto-reply.",
+        "forwarding": "Kutup's filters don't forward: use Settings → Forwarding."
+      },
+      "discardTitle": "Discard your changes?",
+      "discardBody": "The filter stays as it was.",
+      "keepEditing": "Keep editing",
+      "discard": "Discard"
     }
   },
   "export": {

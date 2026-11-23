@@ -1,5 +1,5 @@
-import { Download, Wand2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Wand2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -28,23 +28,10 @@ import {
 } from '../lib/keyChange'
 import { useSessionState } from '../sync/openVaults'
 import { KeyChangeError, type VaultSession } from '../sync/vaultSession'
-import { generateKeyFile, type KeyChanged } from '../vault/client'
+import { type KeyChanged } from '../vault/client'
+import { GeneratedKeyFileField } from './GeneratedKeyFile'
 import { KeyFileInput } from './KeyFileInput'
-
-/** Saves `contents` as a download named `name`; the bytes go nowhere else. */
-function download(contents: Uint8Array, name: string) {
-  const url = URL.createObjectURL(new Blob([contents as BlobPart], { type: 'application/octet-stream' }))
-  try {
-    const link = document.createElement('a')
-    link.href = url
-    link.download = name
-    document.body.append(link)
-    link.click()
-    link.remove()
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }
-}
+import { useGeneratedKeyFile } from './useGeneratedKeyFile'
 
 /**
  * Changes a vault's key (docs/plans/pass-parity.md, "Change the vault's
@@ -83,9 +70,7 @@ export function ChangeKeyDialog({
   const [confirm, setConfirm] = useState('')
   const [madePassword, setMadePassword] = useState<string | null>(null)
   const [keyFile, setKeyFile] = useState<KeyFileChoice>('keep')
-  const generated = useRef<Uint8Array | null>(null)
-  const [hasGenerated, setHasGenerated] = useState(false)
-  const [generatedSaved, setGeneratedSaved] = useState(false)
+  const generated = useGeneratedKeyFile()
   const [chosen, setChosen] = useState<{ name: string; contents: Uint8Array } | null>(null)
   const [remember, setRemember] = useState(true)
   const [dropVersions, setDropVersions] = useState(false)
@@ -96,12 +81,7 @@ export function ChangeKeyDialog({
   const owner = vault.folder.source === 'owned' && vault.folder.ownerAccountId === signedIn.accountId
 
   // A generated key file lives only here, and is wiped when the dialog goes.
-  const forgetGenerated = () => {
-    generated.current?.fill(0)
-    generated.current = null
-    setHasGenerated(false)
-    setGeneratedSaved(false)
-  }
+  const forgetGenerated = generated.forget
 
   useEffect(() => {
     if (!open) {
@@ -136,21 +116,13 @@ export function ChangeKeyDialog({
   }, [open])
 
   const form: KeyChangeForm | null = now
-    ? { now, password, newPassword, confirm, keyFile, generated: hasGenerated, generatedSaved, chosen: chosen !== null }
+    ? { now, password, newPassword, confirm, keyFile, generated: generated.name !== null, generatedSaved: generated.saved, chosen: chosen !== null }
     : null
   const problem = form ? keyChangeProblem(form) : 'unchanged'
   const saved = state?.status === 'saved'
 
   const makeKeyFile = async () => {
-    try {
-      forgetGenerated()
-      const file = await generateKeyFile()
-      generated.current = file
-      setHasGenerated(true)
-      download(file, keyFileName(title))
-    } catch {
-      setError(t('changeKey.generateFailed'))
-    }
+    if (!(await generated.make(keyFileName(title)))) setError(t('changeKey.generateFailed'))
   }
 
   const change = async () => {
@@ -184,7 +156,7 @@ export function ChangeKeyDialog({
         changed = await session.changeKey({
           password: password === 'keep' ? 'keep' : password === 'new' ? { set: newPassword } : null,
           shownPassword: keptPassword,
-          keyFile: keyFile === 'keep' ? 'keep' : keyFile === 'generate' ? generated.current : keyFile === 'choose' ? (chosen?.contents ?? null) : null,
+          keyFile: keyFile === 'keep' ? 'keep' : keyFile === 'generate' ? generated.bytes() : keyFile === 'choose' ? (chosen?.contents ?? null) : null,
         }, afterSaved)
       } catch (failure) {
         if (failure instanceof KeyChangeError && failure.failure === 'pending') {
@@ -290,19 +262,8 @@ export function ChangeKeyDialog({
                   </label>
                 ))}
                 {keyFile === 'generate' ? (
-                  <div className="space-y-2 pl-6">
-                    <Button type="button" variant="outline" size="sm" onClick={() => void makeKeyFile()} data-testid="change-key-generate">
-                      <Download />
-                      {hasGenerated ? t('changeKey.downloadAgain') : t('changeKey.generateKeyFile')}
-                    </Button>
-                    {hasGenerated ? (
-                      <div className="flex items-start gap-2">
-                        <Checkbox id="change-key-saved" checked={generatedSaved} onCheckedChange={(v) => setGeneratedSaved(v === true)} />
-                        <Label htmlFor="change-key-saved" className="text-sm font-normal">
-                          {t('changeKey.keyFileSaved', { name: keyFileName(title) })}
-                        </Label>
-                      </div>
-                    ) : null}
+                  <div className="pl-6">
+                    <GeneratedKeyFileField keyFile={generated} id="change-key" onGenerate={() => void makeKeyFile()} />
                   </div>
                 ) : null}
                 {keyFile === 'choose' ? (

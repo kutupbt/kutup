@@ -216,6 +216,7 @@ mod kdbx4_otp_tests {
     use std::{fs::File, path::Path};
 
     #[test]
+    #[ignore = "reads upstream's tests/resources, which the published crate leaves out"]
     fn kdbx4_entry() -> Result<(), Box<dyn std::error::Error>> {
         // KDBX4 database format Base64 encodes ExpiryTime (and all other XML timestamps)
         let path = Path::new("tests/resources/test_db_kdbx4_with_totp_entry.kdbx");
