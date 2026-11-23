@@ -41,6 +41,9 @@ test('calendar links: a full link opens the events without an account, and stops
   await sharing.getByRole('button', { name: 'Delete link' }).click()
   await ada.page.getByRole('button', { name: 'Delete link' }).last().click()
   await expect(ada.page.getByText('Link deleted').last()).toBeVisible({ timeout: 30_000 })
+  // A fresh load (from the address without its fragment, only the
+  // fragment would change and the page would not load again).
+  await page.goto('about:blank')
   await page.goto(url)
   await expect(page.getByText("This link doesn't work any more")).toBeVisible({ timeout: 60_000 })
   await visitor.close()
