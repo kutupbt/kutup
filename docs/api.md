@@ -266,6 +266,11 @@ Specific codes, where an app does something particular (a test in
 | `documentNotCurrent` | 400 | A document named that is not the current version (an acknowledgement, or the text a consent is given under) |
 | `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
 | `signInRequired` | 403 | Public links on this server open only for someone signed in to it |
+| `linkPassword` | 401 | A password-protected public link read without `X-Kutup-Link-Proof`: the page asks for the password |
+| `linkPasswordWrong` | 401 | The link's proof does not match its password (counted against the link and the address) |
+| `linkPasswordLocked` | 429 | Too many wrong passwords for this link (per link, or from this address) in the window: every try is refused until it ends |
+| `expiryInPast` | 400 | A public link's expiry that is not in the future |
+| `expiryTooFar` | 400 | A public link's expiry further ahead than the site's `drive.public_link_max_expiry_days` (`maxDays`) |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `keysPendingUpgrade` | 409 | The person can't be shared with yet: an account here with no keys (one an administrator made or reset, before its first sign-in), or one on another server still on an X25519 Drive key (docs/plans/pq-shares.md); share with them once they have signed in again |
 | `versionRetentionNotOffered` | 400 | `PATCH /api/v1/account`: the version retention period is not one the administrators offer; `choices` lists those that are |
@@ -3371,7 +3376,9 @@ account: its own where administrators set them, else the site's.
   "streamReadaheadBlocks": 1,
   "streamMaxConcurrent": 3,
   "streamResponseMaxBytes": 5242880,
-  "streamBlobFallbackMaxBytes": 1073741824
+  "streamBlobFallbackMaxBytes": 1073741824,
+  "publicLinkMaxExpiryDays": 3660,
+  "publicLinkPasswordMaxChars": 50
 }
 ```
 
@@ -4012,8 +4019,10 @@ sees it.
 }
 ```
 
-V1 accepts only `shareType: "collection"`. `expiresInHours` is optional; omit
-or send `null` for no expiry; otherwise 1 to 87,840 (ten years), else `400`.
+`expiresInHours` is optional; omit or send `null` for no expiry; otherwise
+at least 1 and at most the site setting `drive.public_link_max_expiry_days`
+(`drivePublicLinkMaxExpiryDays`, 3660 days at first) ahead, else `400`
+(`expiryTooFar`).
 A link's folder in the trash makes the link answer `404` until it is
 restored. `collectionKeyEnvelope` uses the public-link
 purpose and binds the target collection, owner and current collection epoch.
@@ -4050,6 +4059,62 @@ A block belongs to what a link reaches: no new link to it is made
 or file's access change) only hides it from themselves; the block stays
 until an operator lifts it. Owners' link lists carry `blockedReason`.
 
+**Password-protected links** (docs/plans/drive-link-password.md): the
+reads that show what a link holds (`GET …/:token`, `…/files`, `…/epochs`,
+`…/album`) need the header `X-Kutup-Link-Proof` (base64 of the 32-byte
+proof the URL secret and the password derive, `kutup_crypto::link_password`):
+none answers `401 linkPassword`, a wrong one `401 linkPasswordWrong`, and
+past the limits (`drive.rate.link_password_failures` per link,
+`drive.rate.link_password_address_failures` per address, both an hour)
+`429 linkPasswordLocked`. The blob routes (download, state, assets,
+thumbnails) take no proof: they need a file id, which only those reads give.
+
+### GET /api/v1/drive/public-links/:token/password
+
+A protected link's password salt and cost, to derive its proof. **Auth:**
+none. `404` for a link without a password.
+
+```json
+{ "linkId": "<uuid>", "salt": "<16 bytes base64>", "operations": 3, "memory": 67108864 }
+```
+
+### PUT /api/v1/drive/public-links/:token/password
+
+Sets, changes or removes a link's password (the link's owner). The owner
+picks a new link key (or, removing the password, takes the URL secret again)
+and re-seals the target's key under it at its current epoch or generation.
+
+**Auth:** Bearer JWT
+
+```json
+{
+  "fromKeyRevision": 1,
+  "keyEpoch": 3,
+  "targetKeyEnvelope": "<purpose 5 or 11, under the new link key>",
+  "ownerLinkKeyEnvelope": "<purpose 9, the new link key>",
+  "password": {
+    "salt": "<16 bytes base64>",
+    "operations": 3,
+    "memory": 67108864,
+    "verifier": "<32 bytes base64>",
+    "linkKeyEnvelope": "<purpose 14, at the new key revision>",
+    "ownerSecretEnvelope": "<purpose 15: URL secret and password for the owner>"
+  }
+}
+```
+
+`password: null` removes it. Answers `{ "keyRevision": 2 }`; `409` when the
+link's key revision or the target's key moved on since (reload and retry),
+`404` for a link that isn't the caller's. Each change raises `keyRevision`:
+the folder and file re-key routes (`publicLinks[].keyRevision`, absent = 1)
+are refused with `409` for an older one.
+
+### PUT /api/v1/drive/public-links/:token/expiry
+
+Sets (`{"expiresAt": "<RFC 3339>"}`) or clears (`{"expiresAt": null}`) when a
+link stops opening (the link's owner). `204`; `400 expiryInPast` or
+`expiryTooFar`.
+
 ---
 
 ### GET /api/v1/drive/public-links/:token
@@ -4069,6 +4134,7 @@ Get metadata for a public share. The wrapped collection key is included; the lin
   "ownerAccountId": "<uuid>",
   "ownerAccount": "alice@example.org",
   "expiresAt": "2026-04-01T00:00:00Z",
+  "keyRevision": 1,
   "collectionKind": "album",
   "nameEnvelope": "<DriveEnvelopeV1 base64>",
   "nameRevision": 1
@@ -4080,6 +4146,10 @@ Get metadata for a public share. The wrapped collection key is included; the lin
 page says who shared it, so a link cannot pass its content off as the server's.
 `collectionKind`, `nameEnvelope` and `nameRevision` are present for collection shares; the name
 opens under the collection key (album links show the album's name).
+A password-protected link opened with its proof adds `passwordLinkKeyEnvelope`
+(purpose 14, bound to the link, its owner and `keyRevision`): the link key,
+under the key the URL secret and password derive; `collectionKeyEnvelope` is
+sealed under that link key.
 
 ---
 
@@ -5956,6 +6026,8 @@ Return current global server settings.
   "passVaultMaxBytes": 67108864,
   "driveVersionRetentionChoices": [7, 30, 90, 180, 365, 3650],
   "driveTrashRetentionDays": 30,
+  "drivePublicLinkMaxExpiryDays": 3660,
+  "drivePublicLinkPasswordMaxChars": 50,
   "federationConsentRequired": false,
   "chatSendRetentionDays": 30,
   "sessionTtlDays": 30,

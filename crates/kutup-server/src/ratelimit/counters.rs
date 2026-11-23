@@ -45,12 +45,14 @@ pub enum Scope {
     MediaRecipient,
     /// Chat media: deliveries per federated origin server.
     MediaFederationOrigin,
+    /// Wrong passwords per public link (`crate::link_password`).
+    DriveLinkPassword,
 }
 
 impl Scope {
     /// Every scope (the tests' list).
     #[cfg(test)]
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::AnonymousCapabilityBundle,
         Self::AnonymousCapabilityMinute,
         Self::AnonymousCapabilityDay,
@@ -67,6 +69,7 @@ impl Scope {
         Self::MediaCapabilityDay,
         Self::MediaRecipient,
         Self::MediaFederationOrigin,
+        Self::DriveLinkPassword,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -87,6 +90,7 @@ impl Scope {
             Self::MediaCapabilityDay => "chat.media.capabilityDay",
             Self::MediaRecipient => "chat.media.recipient",
             Self::MediaFederationOrigin => "chat.media.federationOrigin",
+            Self::DriveLinkPassword => "drive.linkPassword.link",
         }
     }
 }

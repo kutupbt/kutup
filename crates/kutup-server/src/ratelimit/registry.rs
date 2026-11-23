@@ -31,6 +31,8 @@ pub enum Per {
     Recipient,
     /// One mail forwarding.
     Forwarding,
+    /// One public link (its password's wrong guesses).
+    Link,
     /// One open connection (a collaboration socket).
     Connection,
     /// The whole server.
@@ -114,6 +116,8 @@ impl Spec {
                 | Limit::LoginSourceDailyCeiling
                 | Limit::TotpAttempts
                 | Limit::PassPinAttempts
+                | Limit::LinkPasswordFailures
+                | Limit::LinkPasswordAddressFailures
                 | Limit::ForwardingCodeAttempts
                 | Limit::Register
                 | Limit::RegistrationCodeChecks
@@ -181,6 +185,8 @@ pub enum Limit {
     CollabBytesPerSecond,
     CollabByteBurst,
     Reports,
+    LinkPasswordFailures,
+    LinkPasswordAddressFailures,
     // Chat.
     ChatKeysAccount,
     ChatLinkTokens,
@@ -538,6 +544,26 @@ pub static SPECS: &[Spec] = &[
         Address,
         Drive,
         "Reports on public links, which need no account."
+    ),
+    spec!(
+        LinkPasswordFailures,
+        "drive.rate.link_password_failures",
+        Some("RATE_LIMIT_LINK_PASSWORD_FAILURES_PER_HOUR"),
+        30,
+        Events(HOUR),
+        Link,
+        Drive,
+        "Wrong passwords for one public link, from anywhere: guessing a link's password. Past it the link refuses every password until the hour is over."
+    ),
+    spec!(
+        LinkPasswordAddressFailures,
+        "drive.rate.link_password_address_failures",
+        Some("RATE_LIMIT_LINK_PASSWORD_ADDRESS_FAILURES_PER_HOUR"),
+        10,
+        Events(HOUR),
+        Address,
+        Drive,
+        "Wrong public link passwords from one address."
     ),
     spec!(
         ChatKeysAccount,

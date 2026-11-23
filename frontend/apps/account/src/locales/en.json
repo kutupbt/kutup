@@ -1123,6 +1123,10 @@
       "driveLimits": {
         "driveTrashRetentionDays": "Keep trashed items (days)",
         "driveTrashRetentionDaysHint": "How long a deleted file or folder can be restored before it is deleted for good. 0 keeps the trash until its owner empties it.",
+        "drivePublicLinkMaxExpiryDays": "Furthest public link expiry (days)",
+        "drivePublicLinkMaxExpiryDaysHint": "How far ahead an owner may set a public link to expire.",
+        "drivePublicLinkPasswordMaxChars": "Longest public link password (characters)",
+        "drivePublicLinkPasswordMaxCharsHint": "The longest password an owner may set on a public link.",
         "driveUploadMaxBytes": "Largest upload (bytes)",
         "driveUploadMaxBytesHint": "The largest file one upload stores, encrypted.",
         "driveVersionMaxBytes": "Largest version (bytes)",
@@ -1625,6 +1629,7 @@
         "capability": "capability",
         "recipient": "recipient",
         "forwarding": "forwarding",
+        "link": "link",
         "connection": "connection",
         "server": "server"
       },
@@ -1684,7 +1689,9 @@
             "collab_frame_burst": "Collaboration frame burst",
             "collab_bytes_per_second": "Collaboration bytes per socket",
             "collab_byte_burst": "Collaboration byte burst",
-            "reports": "Reports on public links"
+            "reports": "Reports on public links",
+            "link_password_failures": "Wrong passwords for one public link",
+            "link_password_address_failures": "Wrong public link passwords from one address"
           }
         },
         "chat": {
@@ -1802,7 +1809,9 @@
             "collab_frame_burst": "Collaboration frames one socket may send in a burst.",
             "collab_bytes_per_second": "Collaboration bytes one socket sends a second, on average.",
             "collab_byte_burst": "Collaboration bytes one socket may send in a burst.",
-            "reports": "Reports on public links, which need no account."
+            "reports": "Reports on public links, which need no account.",
+            "link_password_failures": "Wrong passwords for one public link, from anywhere: guessing a link's password. Past it the link refuses every password until the hour is over.",
+            "link_password_address_failures": "Wrong public link passwords from one address."
           }
         },
         "chat": {

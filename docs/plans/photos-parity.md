@@ -81,8 +81,8 @@ no table. Both are cheapest before the wipe.
 | Leave a shared album | `CollectionHeader.tsx` | ✅ your photos leave with you |
 | Save a shared photo into your own library | Proton `toolbar/PhotosSavePhotoButton.tsx` | ❌ |
 | Public album link | `CollectionShare.tsx`, `apps/albums/src/public-album/page/PublicAlbumPage.tsx` | ✅ key in the link, several links, remove; report link; admin block |
-| Link password | `access/components/PasswordUnlockScreen.tsx` | ❌ (**schema**: `drive_public_shares` has no password-wrapped key or salt) |
-| Link expiry | `CollectionShare.tsx` | 🟡 `expires_at` stored and enforced, the API takes `expires_in_hours`; no field in the dialog |
+| Link password | `access/components/PasswordUnlockScreen.tsx` | ✅ album link settings and the password page ([`drive-link-password.md`](drive-link-password.md)) |
+| Link expiry | `CollectionShare.tsx` | ✅ album link settings ([`drive-link-password.md`](drive-link-password.md)) |
 | Link: downloads off, device limit | `CollectionShare.tsx` | ❌ (**schema**: no columns) |
 | Collect link (anyone uploads, with a name) | `upload/components/UploaderNameInput.tsx` | ❌ (**schema**: no upload permission on a link, anonymous uploads need an owner-quota rule) |
 | Join album from a public link | `access/hooks/use-join-album.ts` | ❌ |
@@ -155,10 +155,9 @@ What people hit first, with whether the fix needs the server or the schema:
    client only; every detail is already decrypted on the device. No server.
 2. **Viewer zoom and full screen**, and the viewer's own actions (trash,
    archive, add to album, hide): client only.
-3. **Link password, downloads off and expiry for album links:** password and
-   downloads-off need **schema** (`drive_public_shares`: a salt and a
-   password-wrapped link key, an `allow_download` flag) and the public page;
-   expiry is only a dialog field. Shared with Drive's links: do it once.
+3. **Downloads off for album links:** **schema** (`drive_public_shares`: an
+   `allow_download` flag) and the public page. Password and expiry are built
+   ([`drive-link-password.md`](drive-link-password.md)).
 4. **Type filters (videos, live, screenshots, RAW, panoramas, selfies):**
    **format**: a `tags` list in the sealed media record, set on upload and by
    `catchUp.ts`. Before the wipe so every photo carries it.

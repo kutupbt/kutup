@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Link2, Server, User } from 'lucide-react'
+import { Check, ChevronDown, Link2, Server, Settings2, User } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -17,11 +17,11 @@ import {
 
 import {
   AccessChanged,
-  openLinkKey,
   RecipientChanged,
   useFolderAccess,
   useRemoveAccess,
   useSetFolderPermissions,
+  type AccessLink,
   type AccessMember,
   type FolderAccess,
   type Removal,
@@ -31,7 +31,9 @@ import type { Folder } from '@kutup/drive-core/model'
 import { publicLinkUrl } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { KeysPendingUpgrade, MembersPendingUpgrade } from '@kutup/drive-core/identityPins'
+import { linkSecret } from '@kutup/drive-core/linkSettings'
 import { VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
+import { LinkSettingsDialog } from '@kutup/drive-ui/LinkSettingsDialog'
 import { PendingUpgradeConfirm } from '@kutup/drive-ui/PendingUpgradeConfirm'
 
 type Pending = { label: string; removal: Removal } | null
@@ -53,6 +55,8 @@ export function AccessList({ folder }: { folder: Folder }) {
   const [pending, setPending] = useState<Pending>(null)
   // A removal that would also take people not yet upgraded: asked again.
   const [upgrade, setUpgrade] = useState<{ removal: Removal; error: MembersPendingUpgrade } | null>(null)
+  // The link whose settings (expiry, password) are open.
+  const [settings, setSettings] = useState<AccessLink | null>(null)
 
   if (access.isPending) return <ListSkeleton label={t('dialogs.access.loading')} rows={3} avatar="round" />
   if (access.isError || !access.data) return <Alert variant="error">{t('dialogs.access.loadFailed')}</Alert>
@@ -64,7 +68,7 @@ export function AccessList({ folder }: { folder: Folder }) {
     const link = data.publicLinks.find((l) => l.id === linkId)
     if (!link || !identity.data) return
     try {
-      await navigator.clipboard.writeText(publicLinkUrl(link.token, await openLinkKey(link, identity.data)))
+      await navigator.clipboard.writeText(publicLinkUrl(link.token, await linkSecret(link, identity.data)))
       toast.success(t('dialogs.access.copied'))
     } catch {
       toast.error(t('common.tryAgain'))
@@ -187,21 +191,35 @@ export function AccessList({ folder }: { folder: Folder }) {
               l.expiresAt
                 ? t('dialogs.access.linkExpires', { created: date(l.createdAt), expires: date(l.expiresAt) })
                 : t('dialogs.access.linkCreated', { created: date(l.createdAt) }),
+              l.ownerSecretEnvelope ? t('linkSettings.hasPassword') : null,
               l.blockedReason ? t(`publicSharing.blocked.${l.blockedReason}`) : null,
             ]
               .filter(Boolean)
               .join(' · ')}
             onCopy={() => void copy(l.id)}
             control={
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setPending({ label: t('dialogs.access.link'), removal: { ...none, publicLinks: [l.id] } })}
-                disabled={busy}
-                aria-label={t('dialogs.access.removeLink')}
-              >
-                {t('dialogs.access.remove')}
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setSettings(l)}
+                  disabled={busy || !folder.key}
+                  aria-label={t('linkSettings.openFor')}
+                  title={t('linkSettings.open')}
+                  data-testid="link-settings-open"
+                >
+                  <Settings2 aria-hidden />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setPending({ label: t('dialogs.access.link'), removal: { ...none, publicLinks: [l.id] } })}
+                  disabled={busy}
+                  aria-label={t('dialogs.access.removeLink')}
+                >
+                  {t('dialogs.access.remove')}
+                </Button>
+              </>
             }
           />
         ))}
@@ -232,6 +250,11 @@ export function AccessList({ folder }: { folder: Folder }) {
         />
       ) : null}
       {error ? <Alert variant="error">{error}</Alert> : null}
+      <LinkSettingsDialog
+        link={settings}
+        target={folder.key ? { kind: 'collection', id: folder.id, key: folder.key, epoch: folder.keyEpoch } : null}
+        onClose={() => setSettings(null)}
+      />
     </section>
   )
 }

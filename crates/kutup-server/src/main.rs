@@ -57,6 +57,7 @@ mod job_health;
 mod jobs;
 mod jwt;
 mod legal;
+mod link_password;
 mod live_locations;
 mod mail;
 mod maps;
@@ -2028,6 +2029,18 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/drive/public-links/:token",
             get(shares::get_public_share).route_layer(from_fn(middleware::no_store)),
+        )
+        // A link's password: its salt and cost for anyone with the link, set
+        // by its owner (docs/plans/drive-link-password.md).
+        .route(
+            "/api/v1/drive/public-links/:token/password",
+            get(handlers::link_settings::password_params)
+                .put(handlers::link_settings::set_password)
+                .route_layer(from_fn(middleware::no_store)),
+        )
+        .route(
+            "/api/v1/drive/public-links/:token/expiry",
+            put(handlers::link_settings::set_expiry),
         )
         .route(
             "/api/v1/drive/public-links/:token/files",

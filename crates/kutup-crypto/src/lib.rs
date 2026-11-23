@@ -91,6 +91,7 @@ pub mod identity_pins;
 pub mod kdf;
 pub mod key_binding;
 pub mod labels;
+pub mod link_password;
 pub mod live_location;
 pub mod local_chain_pin;
 pub mod local_state;

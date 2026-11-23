@@ -1270,8 +1270,35 @@ pub const DRIVE_TRASH_RETENTION_DAYS: NumericSetting = NumericSetting {
     unit: SettingUnit::Days,
     per_account: false,
 };
-pub const DRIVE_SETTINGS: [NumericSetting; 10] = [
+/// The furthest ahead a public link's expiry may be set, in days
+/// (docs/plans/drive-link-password.md). The first value is the ten years
+/// links always allowed; Proton allows 90 days.
+pub const DRIVE_PUBLIC_LINK_MAX_EXPIRY_DAYS: NumericSetting = NumericSetting {
+    key: "drive.public_link_max_expiry_days",
+    field: "drivePublicLinkMaxExpiryDays",
+    default: 3660,
+    min: 1,
+    max: 36_600,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// The longest public link password, in characters (Proton's is 50). At
+/// most a quarter of what the sealed owner copy holds
+/// (`kutup_crypto::link_password::MAX_PASSWORD_BYTES`), four bytes a
+/// character.
+pub const DRIVE_PUBLIC_LINK_PASSWORD_MAX_CHARS: NumericSetting = NumericSetting {
+    key: "drive.public_link_password_max_chars",
+    field: "drivePublicLinkPasswordMaxChars",
+    default: 50,
+    min: 1,
+    max: (kutup_crypto::link_password::MAX_PASSWORD_BYTES / 4) as i64,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const DRIVE_SETTINGS: [NumericSetting; 12] = [
     DRIVE_TRASH_RETENTION_DAYS,
+    DRIVE_PUBLIC_LINK_MAX_EXPIRY_DAYS,
+    DRIVE_PUBLIC_LINK_PASSWORD_MAX_CHARS,
     DRIVE_UPLOAD_MAX_BYTES,
     DRIVE_VERSION_MAX_BYTES,
     DRIVE_STREAM_MAX_BYTES,

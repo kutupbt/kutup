@@ -148,6 +148,13 @@ pub struct AccessLink {
     pub token: String,
     /// The link key sealed for the owner (purpose 9).
     pub owner_link_key_envelope: String,
+    /// The link key's revision: a re-key names it (`KeptLink`).
+    pub key_revision: i32,
+    /// A password-protected link: its URL secret and password for the
+    /// owner (purpose 15); the URL is built from this secret, not the link
+    /// key (docs/plans/drive-link-password.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_secret_envelope: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
@@ -257,10 +264,13 @@ pub async fn access(
         Option<OffsetDateTime>,
         OffsetDateTime,
         Option<String>,
+        i32,
+        Option<String>,
     );
     let links: Vec<LinkRow> = sqlx::query_as(
         "SELECT id, token, kutup_b64(owner_link_key_envelope), expires_at, created_at,
-                kutup_target_blocked(share_type, target_id)
+                kutup_target_blocked(share_type, target_id), key_revision,
+                kutup_b64(owner_secret_envelope)
            FROM drive_public_shares
           WHERE target_id = $1 AND share_type = 'collection' AND owner_removed_at IS NULL
           ORDER BY created_at",
@@ -329,11 +339,22 @@ pub async fn access(
         public_links: links
             .into_iter()
             .map(
-                |(id, token, owner_link_key_envelope, expires_at, created_at, blocked_reason)| {
+                |(
+                    id,
+                    token,
+                    owner_link_key_envelope,
+                    expires_at,
+                    created_at,
+                    blocked_reason,
+                    key_revision,
+                    owner_secret_envelope,
+                )| {
                     AccessLink {
                         id,
                         token,
                         owner_link_key_envelope,
+                        key_revision,
+                        owner_secret_envelope,
                         expires_at,
                         created_at,
                         blocked_reason,
@@ -387,6 +408,15 @@ pub struct KeptMember {
 pub struct KeptLink {
     pub id: Uuid,
     pub collection_key_envelope: String,
+    /// The link key's revision the envelope is sealed under (absent: 1). A
+    /// password change since raises it, and the re-key is refused.
+    #[serde(default = "crate::handlers::folder_access::first_key_revision")]
+    pub key_revision: i32,
+}
+
+/// A link's first key revision.
+pub(crate) fn first_key_revision() -> i32 {
+    1
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -779,15 +809,21 @@ pub async fn rotate(
     .execute(&mut *tx)
     .await?;
     for link in &req.public_links {
-        sqlx::query(
+        // Sealed under the link key of the revision it names, or refused: a
+        // password changed since (docs/plans/drive-link-password.md).
+        let updated = sqlx::query(
             "UPDATE drive_public_shares SET collection_key_envelope = kutup_unb64($2), collection_key_epoch = $3
-             WHERE id = $1",
+             WHERE id = $1 AND key_revision = $4",
         )
         .bind(link.id)
         .bind(&link.collection_key_envelope)
         .bind(next)
+        .bind(link.key_revision)
         .execute(&mut *tx)
         .await?;
+        if updated.rows_affected() == 0 {
+            return Err(AppError::conflict("the folder's links changed; reload"));
+        }
     }
     // A blocked link is kept, hidden from its owner: the block outlives it
     // until an operator lifts it (crate::public_sharing).

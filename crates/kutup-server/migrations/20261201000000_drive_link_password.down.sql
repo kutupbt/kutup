@@ -1,0 +1,10 @@
+ALTER TABLE drive_public_shares
+    DROP CONSTRAINT drive_public_shares_password,
+    DROP CONSTRAINT drive_public_shares_key_revision_check,
+    DROP COLUMN owner_secret_envelope,
+    DROP COLUMN password_link_key_envelope,
+    DROP COLUMN password_verifier,
+    DROP COLUMN password_memory,
+    DROP COLUMN password_operations,
+    DROP COLUMN password_salt,
+    DROP COLUMN key_revision;

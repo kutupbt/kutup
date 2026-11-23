@@ -322,6 +322,43 @@
     "sent": "Thank you. The administrators will look at it.",
     "failed": "The report could not be sent. Try again in a while."
   },
+  "linkSettings": {
+    "open": "Link settings",
+    "openFor": "Settings for this link",
+    "title": "Link settings",
+    "description": "Who opens the link, and until when.",
+    "expiry": "Expiry",
+    "expiryHint": "Turn this link off at the end of a chosen day",
+    "expiryDate": "Expiry date",
+    "expiryRange_one": "Choose a day from tomorrow to {{count}} day ahead.",
+    "expiryRange_other": "Choose a day from tomorrow to {{count}} days ahead.",
+    "password": "Require password",
+    "passwordHint": "Anyone with the link also needs this password",
+    "passwordField": "Link password",
+    "passwordPlaceholder": "Choose password",
+    "passwordTooLong_one": "At most {{count}} character",
+    "passwordTooLong_other": "At most {{count}} characters",
+    "save": "Save changes",
+    "saved": "Link settings saved",
+    "failed": "The settings could not be saved. Try again.",
+    "changed": "The link changed in the meantime. Close this, open it again and retry.",
+    "discardTitle": "Discard changes?",
+    "discardBody": "You will lose all unsaved changes.",
+    "discard": "Discard",
+    "keepEditing": "Keep editing",
+    "hasPassword": "Password",
+    "expires": "Expires {{date}}"
+  },
+  "linkPassword": {
+    "title": "This link is password protected",
+    "body": "Enter the password to decrypt and view what it shares.",
+    "label": "Password",
+    "placeholder": "Enter password",
+    "hint": "The link's owner has the password",
+    "continue": "Continue",
+    "wrong": "That password is not right.",
+    "locked": "Too many wrong passwords for this link. Try again in an hour."
+  },
   "identityCheck": {
     "changed": {
       "title": "{{name}}'s identity changed",

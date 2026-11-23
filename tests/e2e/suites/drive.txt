@@ -10,3 +10,4 @@ specs/50-drive-unique-names.spec.ts
 specs/53-delete-versions.spec.ts
 specs/70-public-links.spec.ts
 specs/71-drive-identity.spec.ts
+specs/200-drive-link-password.spec.ts

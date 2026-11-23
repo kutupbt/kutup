@@ -492,6 +492,18 @@ export interface CryptoWasmModule {
   /** A public link's key, sealed for its owner under their Drive root of `driveGeneration`. */
   sealOwnerLinkKey(linkKeyBase64: string, driveRootBase64: string, driveGeneration: number, linkId: string, ownerId: string): string
   openOwnerLinkKey(envelopeBase64: string, driveRootBase64: string, driveGeneration: number, linkId: string, ownerId: string): string
+  deriveLinkPassword(secretBase64: string, password: string, saltBase64: string, operations: number, memory: number, linkId: string): { proof: string; wrapKey: string }
+  protectLinkPassword(
+    secretBase64: string,
+    password: string,
+    linkKeyBase64: string,
+    linkId: string,
+    ownerId: string,
+    keyRevision: number,
+  ): { salt: string; operations: number; memory: number; verifier: string; linkKeyEnvelope: string }
+  openLinkPasswordKey(envelopeBase64: string, wrapKeyBase64: string, linkId: string, ownerId: string, keyRevision: number): string
+  sealOwnerLinkSecret(secretBase64: string, password: string, driveRootBase64: string, driveGeneration: number, linkId: string, ownerId: string): string
+  openOwnerLinkSecret(envelopeBase64: string, driveRootBase64: string, driveGeneration: number, linkId: string, ownerId: string): { secret: string; password: string }
   sealWhiteboardAsset(
     plaintextBase64: string,
     fileKeyBase64: string,

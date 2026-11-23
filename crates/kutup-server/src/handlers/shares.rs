@@ -128,12 +128,14 @@ pub async fn create_public_share(
     )?;
 
     let token = random_token(32);
-    // An hour to ten years; anything else is a mistake (and a large value
-    // would overflow the date arithmetic).
     let expires_at: Option<OffsetDateTime> = match req.expires_in_hours {
         None => None,
-        Some(h) if (1..=MAX_LINK_HOURS).contains(&h) => {
-            Some(OffsetDateTime::now_utc() + time::Duration::hours(h))
+        // Positive and at most the site's maximum (a large value would
+        // overflow the date arithmetic before it).
+        Some(h) if (1..=36_600 * 24).contains(&h) => {
+            let at = OffsetDateTime::now_utc() + time::Duration::hours(h);
+            crate::handlers::link_settings::check_expiry(&state, at).await?;
+            Some(at)
         }
         Some(_) => return Err(AppError::bad_request("expiresInHours out of range")),
     };
@@ -160,9 +162,6 @@ pub async fn create_public_share(
 
     Ok((StatusCode::CREATED, Json(json!({"id": id, "token": token}))).into_response())
 }
-
-/// The longest a public link may live: ten years, in hours.
-const MAX_LINK_HOURS: i64 = 10 * 366 * 24;
 
 /// Whether a shared folder is live (not trashed, not gone).
 async fn collection_live(state: &AppState, collection_id: Uuid) -> AppResult<bool> {
@@ -214,6 +213,15 @@ struct PublicShareResponse {
     owner_authority_public_key: String,
     #[serde(with = "time::serde::rfc3339::option")]
     expires_at: Option<OffsetDateTime>,
+    /// The link key's revision: a password-protected link's key envelope is
+    /// bound to it.
+    key_revision: i32,
+    /// A password-protected link opened with its proof: the link key sealed
+    /// under the password wrap key (purpose 14). The target's key
+    /// (`collectionKeyEnvelope`) is sealed under that link key, not the URL
+    /// secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    password_link_key_envelope: Option<String>,
     /// A link to one file: the file (its key wrap is `collectionKeyEnvelope`,
     /// at generation `collectionKeyEpoch`).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -240,6 +248,7 @@ struct PublicShareResponse {
 pub async fn get_public_share(
     State(state): State<AppState>,
     viewer: crate::middleware::Viewer,
+    proof: crate::link_password::LinkProof,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
@@ -254,11 +263,13 @@ pub async fn get_public_share(
         Option<OffsetDateTime>,
         String,
         String,
+        i32,
     );
     let row: Option<ShareRow> = sqlx::query_as(
         r#"SELECT p.id, p.share_type, p.target_id,
                   kutup_b64(p.collection_key_envelope), p.collection_key_epoch, p.owner_account_id,
-                  p.expires_at, kutup_b64(u.account_authority_public_key), u.username
+                  p.expires_at, kutup_b64(u.account_authority_public_key), u.username,
+                  p.key_revision
            FROM drive_public_shares p JOIN accounts u ON u.id = p.owner_account_id WHERE p.token = $1"#,
     )
     .bind(&token)
@@ -274,6 +285,7 @@ pub async fn get_public_share(
         expires_at,
         authority,
         owner_username,
+        key_revision,
     )) = row
     else {
         return Err(AppError::not_found("not found"));
@@ -283,6 +295,9 @@ pub async fn get_public_share(
             return Err(AppError::new(StatusCode::GONE, "link expired"));
         }
     }
+    // A password-protected link shows nothing without its proof; with it,
+    // the link key sealed under the password (docs/plans/drive-link-password.md).
+    let unlocked = crate::link_password::unlock(&state.pool, &token, &proof).await?;
     // Dark while its folder (or file) is in the trash, like the downloads.
     if !target_live(&state, &share_type, target_id).await? {
         return Err(AppError::not_found("not found"));
@@ -316,6 +331,8 @@ pub async fn get_public_share(
         owner_account: format!("{owner_username}@{}", state.config.chat_server_name),
         owner_authority_public_key: authority,
         expires_at,
+        key_revision,
+        password_link_key_envelope: unlocked.map(|u| u.link_key_envelope),
         file,
         collection_kind,
         name_envelope,
@@ -337,6 +354,7 @@ pub async fn get_public_share(
 pub async fn public_share_epochs(
     State(state): State<AppState>,
     viewer: crate::middleware::Viewer,
+    proof: crate::link_password::LinkProof,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
@@ -353,6 +371,8 @@ pub async fn public_share_epochs(
     if expires_at.is_some_and(|exp| OffsetDateTime::now_utc() > exp) {
         return Err(AppError::new(StatusCode::GONE, "link expired"));
     }
+    // A password-protected link shows nothing without its proof.
+    crate::link_password::unlock(&state.pool, &token, &proof).await?;
     if !collection_live(&state, target_id).await? {
         return Err(AppError::not_found("not found"));
     }
@@ -394,6 +414,7 @@ struct PublicFileRow {
 pub async fn list_public_share_files(
     State(state): State<AppState>,
     viewer: crate::middleware::Viewer,
+    proof: crate::link_password::LinkProof,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
@@ -412,6 +433,8 @@ pub async fn list_public_share_files(
             return Err(AppError::new(StatusCode::GONE, "link expired"));
         }
     }
+    // A password-protected link shows nothing without its proof.
+    crate::link_password::unlock(&state.pool, &token, &proof).await?;
     if share_type != "collection" {
         return Err(AppError::bad_request("not a collection share"));
     }
@@ -705,6 +728,7 @@ pub struct PublicAlbumItem {
 pub async fn public_album_items(
     State(state): State<AppState>,
     viewer: crate::middleware::Viewer,
+    proof: crate::link_password::LinkProof,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
@@ -721,6 +745,8 @@ pub async fn public_album_items(
     if expires_at.is_some_and(|exp| OffsetDateTime::now_utc() > exp) {
         return Err(AppError::new(StatusCode::GONE, "link expired"));
     }
+    // A password-protected link shows nothing without its proof.
+    crate::link_password::unlock(&state.pool, &token, &proof).await?;
     let is_album: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM drive_collections WHERE id = $1 AND kind = 'album' AND deleted_at IS NULL)",
     )

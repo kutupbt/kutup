@@ -322,6 +322,43 @@
     "sent": "Teşekkürler. Yöneticiler inceleyecek.",
     "failed": "Bildirim gönderilemedi. Biraz sonra yeniden deneyin."
   },
+  "linkSettings": {
+    "open": "Bağlantı ayarları",
+    "openFor": "Bu bağlantının ayarları",
+    "title": "Bağlantı ayarları",
+    "description": "Bağlantıyı kim, ne zamana kadar açabilir.",
+    "expiry": "Son kullanma",
+    "expiryHint": "Bu bağlantıyı seçilen günün sonunda kapat",
+    "expiryDate": "Son kullanma tarihi",
+    "expiryRange_one": "Yarından itibaren en çok {{count}} gün sonrasını seçin.",
+    "expiryRange_other": "Yarından itibaren en çok {{count}} gün sonrasını seçin.",
+    "password": "Parola iste",
+    "passwordHint": "Bağlantıya sahip olan herkes bu parolaya da ihtiyaç duyar",
+    "passwordField": "Bağlantı parolası",
+    "passwordPlaceholder": "Parola seçin",
+    "passwordTooLong_one": "En çok {{count}} karakter",
+    "passwordTooLong_other": "En çok {{count}} karakter",
+    "save": "Değişiklikleri kaydet",
+    "saved": "Bağlantı ayarları kaydedildi",
+    "failed": "Ayarlar kaydedilemedi. Yeniden deneyin.",
+    "changed": "Bağlantı bu arada değişti. Bunu kapatıp yeniden açın ve tekrar deneyin.",
+    "discardTitle": "Değişiklikler atılsın mı?",
+    "discardBody": "Kaydedilmemiş tüm değişiklikler kaybolacak.",
+    "discard": "At",
+    "keepEditing": "Düzenlemeye devam et",
+    "hasPassword": "Parola",
+    "expires": "Son kullanma {{date}}"
+  },
+  "linkPassword": {
+    "title": "Bu bağlantı parola korumalı",
+    "body": "Paylaşılanın şifresini çözüp görmek için parolayı girin.",
+    "label": "Parola",
+    "placeholder": "Parolayı girin",
+    "hint": "Parola bağlantının sahibindedir",
+    "continue": "Devam",
+    "wrong": "Bu parola doğru değil.",
+    "locked": "Bu bağlantı için çok fazla yanlış parola girildi. Bir saat sonra yeniden deneyin."
+  },
   "identityCheck": {
     "changed": {
       "title": "{{name}} kişisinin kimliği değişti",

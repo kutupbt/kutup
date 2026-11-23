@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Link2, Server, User } from 'lucide-react'
+import { Check, ChevronDown, Link2, Server, Settings2, User } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -17,7 +17,7 @@ import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { isAxiosError } from 'axios'
 import { AccessChanged, RecipientChanged } from '@kutup/drive-core/access'
-import { CannotShareWithSelf, OnlyOwnersShareAcross, fileLinkUrl, useCreateFileLink, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useSetFileRole, useShareFile, type FileAccessMember, type ShareRole } from '@kutup/drive-core/fileShares'
+import { CannotShareWithSelf, OnlyOwnersShareAcross, fileLinkUrl, useCreateFileLink, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useSetFileRole, useShareFile, type FileAccessMember, type FileLink, type ShareRole } from '@kutup/drive-core/fileShares'
 import { isTargetBlocked, sharingOffScope, usePublicSharing } from '@kutup/drive-core/publicSharing'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
@@ -25,6 +25,7 @@ import { personOf, usePeople } from '@kutup/drive-core/people'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { IdentityNotConfirmed, KeysPendingUpgrade, MembersPendingUpgrade, RecipientRenamed } from '@kutup/drive-core/identityPins'
 import { IdentityShareWarning, RecipientRenamedNotice, VerifyPersonButton } from './IdentityWarning'
+import { LinkSettingsDialog } from './LinkSettingsDialog'
 import { PendingUpgradeConfirm } from './PendingUpgradeConfirm'
 
 export type FileShareTarget = { folder: Folder; file: DriveFile; role: ShareRole }
@@ -187,6 +188,8 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   const sharingOff = usePublicSharing().data ?? null
   const identity = useDriveIdentity()
   const [newLink, setNewLink] = useState<string | null>(null)
+  // The link whose settings (expiry, password) are open.
+  const [settings, setSettings] = useState<FileLink | null>(null)
 
   if (access.isPending) return <LoadingPanel label={t('fileShare.loading')} />
   if (access.isError || !access.data) return <Alert variant="error">{t('fileShare.loadFailed')}</Alert>
@@ -342,6 +345,8 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                       {[
                         t('fileShare.linkCreated', { date: new Date(link.createdAt).toLocaleDateString() }),
                         link.keyGeneration < access.data.keyGeneration ? t('fileShare.updating') : null,
+                        link.expiresAt ? t('linkSettings.expires', { date: new Date(link.expiresAt).toLocaleDateString() }) : null,
+                        link.ownerSecretEnvelope ? t('linkSettings.hasPassword') : null,
                         link.blockedReason ? t(`publicSharing.blocked.${link.blockedReason}`) : null,
                       ]
                         .filter(Boolean)
@@ -355,6 +360,17 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                     onClick={() => identity.data && void fileLinkUrl(link, identity.data, target.file.name).then(copy, () => toast.error(t('common.tryAgain')))}
                   >
                     {t('fileShare.copy')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={remove.isPending || !target.file.fileKey}
+                    onClick={() => setSettings(link)}
+                    aria-label={t('linkSettings.openFor')}
+                    title={t('linkSettings.open')}
+                    data-testid="link-settings-open"
+                  >
+                    <Settings2 aria-hidden />
                   </Button>
                   <Button
                     size="sm"
@@ -402,6 +418,11 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                   : t('fileShare.linkFailed')}
             </Alert>
           ) : null}
+          <LinkSettingsDialog
+            link={settings}
+            target={target.file.fileKey ? { kind: 'file', id: target.file.id, key: target.file.fileKey, generation: target.file.keyGeneration } : null}
+            onClose={() => setSettings(null)}
+          />
         </div>
       ) : null}
       {upgrade ? (

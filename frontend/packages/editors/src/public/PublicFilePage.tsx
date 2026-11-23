@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Download } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { fetchAsset } from '@kutup/collab/whiteboardAssets'
 import { editorKindFor, extensionOf, opensInOffice } from '@kutup/drive-core/editorKind'
+import { PublicLinkPassword } from '@kutup/drive-ui/PublicLinkPassword'
 import { PublicNotice } from '@kutup/drive-ui/PublicNotice'
 import { loadAppDirectory } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
@@ -46,10 +47,12 @@ const MAX_OPEN_BYTES = 100 * 1024 * 1024
  */
 export function PublicFilePage() {
   const { token = '', fid } = useParams()
+  // A protected link's password, once typed; each try is a new attempt.
+  const [password, setPassword] = useState<{ value: string; attempt: number } | null>(null)
   const share = useQuery({
-    queryKey: ['public-share', token],
+    queryKey: ['public-share', token, password?.attempt ?? 0],
     // The app origins first: the editor's sandbox and Drive's address come from them.
-    queryFn: async () => (await loadAppDirectory(), loadShare(token)),
+    queryFn: async () => (await loadAppDirectory(), loadShare(token, password?.value)),
     retry: false,
   })
   const file = share.data ? pick(share.data, fid) : undefined
@@ -64,7 +67,18 @@ export function PublicFilePage() {
     }
   }, [toDrive, token])
 
-  if (share.isError) return <Failure failure={publicFailure(share.error)} />
+  const failure = share.isError ? publicFailure(share.error) : null
+  if (failure === 'passwordRequired' || failure === 'passwordWrong' || failure === 'passwordLocked') {
+    return (
+      <Chrome>
+        <PublicLinkPassword
+          refusal={failure === 'passwordWrong' ? 'wrong' : failure === 'passwordLocked' ? 'locked' : null}
+          onSubmit={(value) => setPassword((last) => ({ value, attempt: (last?.attempt ?? 0) + 1 }))}
+        />
+      </Chrome>
+    )
+  }
+  if (failure) return <Failure failure={failure} />
   if (!share.data || toDrive) return <Opening />
   if (!file) return <Failure failure="notFound" />
   return <PublicDocument token={token} share={share.data} file={file} />
@@ -84,8 +98,8 @@ function Opening() {
   )
 }
 
-function Failure({ failure }: { failure: ReturnType<typeof publicFailure> }) {
-  const { t } = useTranslation()
+/** The page's frame before a document shows: the logo, language and theme. */
+function Chrome({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-svh flex-col bg-background">
       <header className="flex h-14 items-center gap-3 border-b border-border px-4 md:px-6">
@@ -95,12 +109,21 @@ function Failure({ failure }: { failure: ReturnType<typeof publicFailure> }) {
           <ThemeToggle onChrome={false} />
         </span>
       </header>
+      {children}
+    </div>
+  )
+}
+
+function Failure({ failure }: { failure: ReturnType<typeof publicFailure> }) {
+  const { t } = useTranslation()
+  return (
+    <Chrome>
       <div className="mx-auto w-full max-w-lg p-6">
         <Alert variant="error" title={t(`publicFile.failure.${failure}.title`)}>
           {t(`publicFile.failure.${failure}.description`)}
         </Alert>
       </div>
-    </div>
+    </Chrome>
   )
 }
 

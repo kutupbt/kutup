@@ -519,6 +519,11 @@ pub static REGISTRATION_CODE_FAILURES: LazyLock<RateLimiter> =
 /// may report, without an account; a person reports a few, a script many.
 pub static REPORT: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::registered(Limit::Reports));
+/// Wrong public link passwords: 10 / hour / IP
+/// (`RATE_LIMIT_LINK_PASSWORD_ADDRESS_FAILURES_PER_HOUR`); each link also
+/// keeps its own count in the database (`crate::link_password`).
+pub static LINK_PASSWORD_ADDRESS_FAILURES: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::registered(Limit::LinkPasswordAddressFailures));
 /// Feedback: 10 / hour / account (`RATE_LIMIT_FEEDBACK_PER_HOUR`). A person
 /// sends a few; more is someone filling the administrators' inbox.
 pub static FEEDBACK: LazyLock<RateLimiter> =
@@ -979,6 +984,7 @@ pub fn spawn_cleanup() {
             LOGIN.cleanup();
             REGISTRATION_CODE_CHECK.cleanup();
             REGISTRATION_CODE_FAILURES.cleanup();
+            LINK_PASSWORD_ADDRESS_FAILURES.cleanup();
             FORK.cleanup();
             CALL_LINK.cleanup();
             CALL_LINK_POLL.cleanup();
