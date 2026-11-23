@@ -8,16 +8,26 @@ import type { Session } from '@kutup/session/store'
 // whose metadata opens only under the id it names, and a settings record a
 // stand-in that opens only under its own id.
 
+// A stand-in key: its fingerprint and key ID come from the share it opened.
+const keyFor = (lock: { passphraseShare: string; keyGeneration: number }, owner?: { signingPublicKey: string }) => ({
+  fingerprint: lock.passphraseShare,
+  keyId: `kid-${lock.keyGeneration}`,
+  generation: lock.keyGeneration,
+  owner: owner?.signingPublicKey,
+  openMetadata: (metadata: { dataPacket: string; signature: string }, calendarId: string, signers: string[]) => {
+    if (metadata.dataPacket !== calendarId) throw new Error('another calendar')
+    // Signed by the owner, and checked against some keys of theirs.
+    return { name: `name of ${calendarId}`, description: '', verified: metadata.signature === 'owner' && signers.length > 0 }
+  },
+  openEvent: (_event: unknown, signers: string[]) => ({ fields: {}, verified: signers.length > 0, generation: lock.keyGeneration }),
+  free: () => undefined,
+})
 vi.mock('@kutup/crypto/calendar', () => ({
-  unlockCalendar: (_account: unknown, lock: { passphraseShare: string }) =>
-    Promise.resolve({
-      fingerprint: lock.passphraseShare,
-      openMetadata: (metadata: { dataPacket: string; signature: string }, calendarId: string) => {
-        if (metadata.dataPacket !== calendarId) throw new Error('another calendar')
-        return { name: `name of ${calendarId}`, description: '', verified: metadata.signature === 'owner' }
-      },
-      free: () => undefined,
-    }),
+  unlockCalendar: (_account: unknown, lock: { passphraseShare: string; keyGeneration: number }) => Promise.resolve(keyFor(lock)),
+  // Opens only a share its owner's (verified) key signed.
+  unlockSharedCalendar: (_account: unknown, owner: { signingPublicKey: string }, lock: { passphraseShare: string; keyGeneration: number }) =>
+    owner.signingPublicKey === 'bo-signing' ? Promise.resolve(keyFor(lock, owner)) : Promise.reject(new Error('not the owner’s share')),
+  calendarEventKeyId: (event: { kid?: string }) => Promise.resolve(event.kid ?? 'none'),
   createCalendar: () =>
     Promise.resolve({ publicKey: 'P', lockedSecretKey: 'L', fingerprint: 'f', passphraseShare: 'f', metadata: { keyPacket: 'k', dataPacket: 'd', signature: 's' } }),
   localToUtc: () => Promise.resolve(''),
@@ -25,6 +35,11 @@ vi.mock('@kutup/crypto/calendar', () => ({
   sealCalendarMetadata: () => ({}),
 }))
 vi.mock('@kutup/mail-core/api', () => ({ useMailAccount: vi.fn() }))
+// Bo's address keys belong to Bo's account (u2); anyone else's to another.
+vi.mock('@kutup/mail-core/keys', () => ({
+  addressKeys: (address: string) =>
+    Promise.resolve({ address, accountRef: { server: 'kutup.test', accountId: address === 'bo@kutup.test' ? 'u2' : 'someone' }, all: [`${address}-key`] }),
+}))
 vi.mock('@kutup/crypto/scopeRecords', () => ({
   scopeRecordId: (_key: unknown, scope: string, plain: Uint8Array) => Promise.resolve(`${scope}:${Array.from(plain, (b) => b.toString(16).padStart(2, '0')).join('')}`),
   sealScopeRecord: (_keys: unknown, _binding: string, _scope: string, id: string, revision: number, value: unknown) =>
@@ -96,7 +111,9 @@ import {
   loadCalendars,
   loadEvents,
   openEvent,
+  OwnerIdentityChanged,
   saveEvent,
+  setOwnerCheck,
   updateCalendar,
   type Calendar,
   type EventRow,
@@ -111,6 +128,8 @@ const account = {
   publicKey: 'A',
   isOwnAddress: () => true,
 } as unknown as MailAccount
+/** The same account, for calendars others own and events others wrote: only ada@ is its own. */
+const notOwner = { ...account, isOwnAddress: (address: string) => address === 'ada@kutup.test' } as unknown as MailAccount
 
 let fingerprints = 0
 /** Calendar ids as UUIDs (the settings record id hashes their bytes). */
@@ -178,12 +197,52 @@ describe('reading the calendars', () => {
     expect(unreadable).toBe(2)
   })
 
-  it('opens no calendar of another account (sharing comes in E3)', async () => {
-    http.rows = [row(1, { ownerId: 'u2' })]
+  it('opens a calendar shared with the account through its owner, checked against the pins', async () => {
+    const bo = { accountId: 'u2', address: 'bo@kutup.test', incarnationId: 'inc', signingPublicKey: 'bo-signing' }
+    const check = vi.fn((_s: Session, owner: typeof bo) => Promise.resolve({ account: `aci:${owner.accountId}@kutup.test`, incarnationId: owner.incarnationId, signingPublicKey: owner.signingPublicKey }))
+    setOwnerCheck(check)
+    http.rows = [{ ...row(1, { ownerId: 'u2' }), owner: bo }]
     settings(1, 1)
-    const { calendars, unreadable } = await loadCalendars(session, account)
+    const { calendars, unreadable } = await loadCalendars(session, notOwner)
+    expect(unreadable).toBe(0)
+    expect(check).toHaveBeenCalledWith(session, bo)
+    expect(calendars[0]).toMatchObject({ owned: false, owner: bo, name: `name of ${uuid(1)}` })
+  })
+
+  it('never opens a shared calendar without its owner, nor one named by someone else', async () => {
+    setOwnerCheck((_s, owner) => Promise.resolve({ account: 'aci:x@kutup.test', incarnationId: owner.incarnationId, signingPublicKey: owner.signingPublicKey }))
+    // No owner listed; an owner other than the row's; a name signed with
+    // the keys of an address that is not the owner's account.
+    http.rows = [
+      row(1, { ownerId: 'u2' }),
+      { ...row(2, { ownerId: 'u2' }), owner: { accountId: 'u3', address: 'bo@kutup.test', incarnationId: 'i', signingPublicKey: 'bo-signing' } },
+      { ...row(3, { ownerId: 'u2' }), owner: { accountId: 'u2', address: 'eve@kutup.test', incarnationId: 'i', signingPublicKey: 'bo-signing' } },
+    ]
+    for (const n of [1, 2, 3]) settings(n, 1)
+    const { calendars, unreadable } = await loadCalendars(session, notOwner)
     expect(calendars).toHaveLength(0)
-    expect(unreadable).toBe(1)
+    expect(unreadable).toBe(3)
+  })
+
+  it('lists a shared calendar whose owner changed identity apart, to be confirmed, and opens it not', async () => {
+    setOwnerCheck((_s, owner) => Promise.reject(new OwnerIdentityChanged('', owner.address)))
+    http.rows = [{ ...row(1, { ownerId: 'u2' }), owner: { accountId: 'u2', address: 'bo@kutup.test', incarnationId: 'i', signingPublicKey: 'bo-signing' } }]
+    settings(1, 1)
+    const { calendars, unreadable, ownerChanged } = await loadCalendars(session, notOwner)
+    expect(calendars).toHaveLength(0)
+    expect(unreadable).toBe(0)
+    expect(ownerChanged.map((c) => [c.calendarId, c.ownerAddress])).toEqual([[uuid(1), 'bo@kutup.test']])
+  })
+
+  it('unlocks every key generation, and the newest is the one it writes with', async () => {
+    const base = row(1)
+    const key = (g: number) => ({ keyGeneration: g, publicKey: 'P', fingerprint: `g${g}`, lockedSecretKey: 'L', passphraseShare: `g${g}` })
+    http.rows = [{ ...base, keys: [key(2), key(1), key(3)] }]
+    settings(1, 1)
+    const { calendars } = await loadCalendars(session, account)
+    expect(calendars[0].keyGeneration).toBe(3)
+    expect([...calendars[0].keyring.keys()].sort()).toEqual(['kid-1', 'kid-2', 'kid-3'])
+    expect(calendars[0].unlocked.keyId).toBe('kid-3')
   })
 
   it('refuses a key that is not the one listed', async () => {
@@ -232,7 +291,7 @@ describe('writing calendars', () => {
     expect(http.post.mock.calls[0][1]).not.toHaveProperty('head')
     expect(http.post.mock.calls[0][1]).not.toHaveProperty('color')
     const filed = head.records.get(`calendarSettings:${id.replace(/-/g, '')}`)
-    expect(JSON.parse(filed!.envelope).value).toEqual({ color: '#8080ff', display: true })
+    expect(JSON.parse(filed!.envelope).value).toEqual({ color: '#8080ff', display: true, roster: '' })
     http.post.mockRejectedValueOnce(new Error('calendarLimit'))
     await expect(createCalendar(session, account, 'Ev', '#8080ff')).rejects.toThrow('calendarLimit')
     expect(head.records.size).toBe(1)
@@ -282,7 +341,7 @@ function fields(start: EventFields['start'], end: EventFields['end']): EventFiel
 
 /** A calendar whose key opens every event as `opened`, signed. */
 function calendarOpening(opened: EventFields): Calendar {
-  return { id: 'c1', revision: 1, unlocked: { openEvent: () => ({ fields: opened, verified: true }) } } as unknown as Calendar
+  return { id: 'c1', revision: 1, keyring: new Map(), unlocked: { openEvent: () => ({ fields: opened, verified: true }) } } as unknown as Calendar
 }
 
 function eventRow(startUtc: string, endUtc: string, fullDay: boolean): EventRow {
@@ -309,6 +368,25 @@ describe('opening events', () => {
     expect(day).toMatchObject({ endUtc: '2026-11-01T00:00:00Z', fullDay: true, verified: true })
     const moment = await openEvent(account, calendarOpening(fields({ utc: '2026-10-29T09:00:00Z' }, null)), eventRow('2026-10-29T09:00:00Z', '2026-10-29T09:00:00Z', false))
     expect(moment).toMatchObject({ endUtc: '2026-10-29T09:00:00Z', verified: true })
+  })
+})
+
+describe('opening events of a calendar with several key generations', () => {
+  it('opens each with the generation its key packets name, and checks another author against their address keys', async () => {
+    const make = (g: number) => ({
+      keyId: `kid-${g}`,
+      openEvent: (_e: unknown, signers: string[]) => ({ fields: fields({ utc: '2026-10-29T09:00:00Z' }, { utc: '2026-10-29T10:00:00Z' }), verified: signers.includes('bo@kutup.test-key'), generation: g }),
+    })
+    const older = make(1)
+    const newest = make(2)
+    const calendar = { id: 'c1', revision: 1, keyring: new Map([['kid-1', older], ['kid-2', newest]]), unlocked: newest } as unknown as Calendar
+    const spy = vi.spyOn(older, 'openEvent')
+    const row = { ...eventRow('2026-10-29T09:00:00Z', '2026-10-29T10:00:00Z', false), authorAddress: 'bo@kutup.test', event: { kid: 'kid-1' } as unknown as EventRow['event'] }
+    const opened = await openEvent(notOwner, calendar, row)
+    expect(spy).toHaveBeenCalledWith(row.event, ['bo@kutup.test-key'])
+    expect(opened.verified).toBe(true)
+    // No author named: never verified.
+    expect((await openEvent(notOwner, calendar, { ...row, authorAddress: null })).verified).toBe(false)
   })
 })
 

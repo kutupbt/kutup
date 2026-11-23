@@ -13,6 +13,7 @@ use kutup_crypto::calendar::{
     SealedMetadataV1, UnlockedCalendarKey, FIRST_KEY_GENERATION,
 };
 use kutup_crypto::calendar_event::{self, EventFieldsV1};
+use kutup_crypto::calendar_link;
 use kutup_crypto::calendar_recurrence;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -359,4 +360,550 @@ pub fn calendar_occurrences(
 pub fn calendar_range_end(fields: JsValue) -> Result<Option<String>, JsValue> {
     let fields: EventFieldsV1 = from_js(fields, "event fields")?;
     calendar_recurrence::range_end_v1(&fields).map_err(crypto_error)
+}
+
+// ---------------------------------------------------------------- sharing (E3)
+//
+// docs/plans/calendar-e3.md: members get each live key generation's
+// passphrase on their account key, signed by the owner; removing one makes a
+// new generation; links carry a secret that opens each generation's
+// passphrase. The passphrases never leave WASM: these take the owner's own
+// shares and hand back only what the server stores.
+
+fn decode_b64(text: &str, what: &str) -> Result<Vec<u8>, JsValue> {
+    decode_canonical_base64(text, what)
+}
+
+/// A member the passphrase is shared with, as their verified key binding
+/// names them.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MemberIn {
+    account: String,
+    incarnation_id: String,
+    /// Their account X-Wing Drive public key (base64).
+    xwing_public_key: String,
+}
+
+/// The owner as a member checks their share, verified.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnerIn {
+    account: String,
+    incarnation_id: String,
+    /// Their account signing public key (base64).
+    signing_public_key: String,
+}
+
+fn own_passphrase(
+    identity: &kutup_crypto::identity::AccountIdentityKeysV1,
+    owner: &AccountRef,
+    calendar_id: &str,
+    generation: u32,
+    own_share_base64: &str,
+) -> Result<Passphrase, JsValue> {
+    let share = CalendarShareEnvelopeV1::decode_b64(own_share_base64).map_err(crypto_error)?;
+    calendar::open_own_passphrase(&share, calendar_id, generation, owner, identity)
+        .map_err(crypto_error)
+}
+
+fn share_with(
+    passphrase: &Passphrase,
+    identity: &kutup_crypto::identity::AccountIdentityKeysV1,
+    owner: &AccountRef,
+    calendar_id: &str,
+    generation: u32,
+    member: &MemberIn,
+) -> Result<String, JsValue> {
+    let account = account_of(&member.account)?;
+    let xwing = decode_b64(&member.xwing_public_key, "member key")?;
+    calendar::seal_passphrase(
+        passphrase,
+        calendar_id,
+        generation,
+        owner,
+        identity,
+        &calendar::CalendarMember {
+            account: &account,
+            incarnation_id: &member.incarnation_id,
+            xwing_public_key: &xwing,
+        },
+    )
+    .and_then(|share| share.encode_b64())
+    .map_err(crypto_error)
+}
+
+/// The owner shares generation `key_generation`'s passphrase (opened from
+/// their own share) with `member` (`{ account, incarnationId,
+/// xwingPublicKey }`, checked against the member's verified key binding by the
+/// caller): the member's share, base64.
+#[wasm_bindgen(js_name = shareCalendarPassphrase)]
+pub fn share_calendar_passphrase(
+    identity_root_base64: &str,
+    owner_account: &str,
+    calendar_id: &str,
+    key_generation: u32,
+    own_share_base64: &str,
+    member: JsValue,
+) -> Result<String, JsValue> {
+    let identity = account_keys(identity_root_base64)?;
+    let owner = account_of(owner_account)?;
+    let member: MemberIn = from_js(member, "member")?;
+    let passphrase = own_passphrase(
+        &identity,
+        &owner,
+        calendar_id,
+        key_generation,
+        own_share_base64,
+    )?;
+    share_with(
+        &passphrase,
+        &identity,
+        &owner,
+        calendar_id,
+        key_generation,
+        &member,
+    )
+}
+
+/// A member opens their share of a calendar someone else owns (`owner`:
+/// `{ account, incarnationId, signingPublicKey }`, verified), refused unless
+/// that owner signed it for this member, calendar and generation; and
+/// unlocks that generation's key.
+#[wasm_bindgen(js_name = unlockSharedCalendar)]
+pub fn unlock_shared_calendar(
+    identity_root_base64: &str,
+    member_account: &str,
+    owner: JsValue,
+    calendar_id: &str,
+    key_generation: u32,
+    passphrase_share_base64: &str,
+    locked_secret_key_base64: &str,
+) -> Result<UnlockedCalendarJs, JsValue> {
+    let identity = account_keys(identity_root_base64)?;
+    let member = account_of(member_account)?;
+    let owner: OwnerIn = from_js(owner, "owner")?;
+    let owner_account = account_of(&owner.account)?;
+    let signing = decode_b64(&owner.signing_public_key, "owner key")?;
+    let share =
+        CalendarShareEnvelopeV1::decode_b64(passphrase_share_base64).map_err(crypto_error)?;
+    let passphrase = calendar::open_passphrase(
+        &share,
+        calendar_id,
+        key_generation,
+        &calendar::CalendarOwner {
+            account: &owner_account,
+            incarnation_id: &owner.incarnation_id,
+            signing_public_key: &signing,
+        },
+        &member,
+        &identity,
+    )
+    .map_err(crypto_error)?;
+    let locked = decode_b64(locked_secret_key_base64, "calendar key")?;
+    let key = calendar::unlock_calendar_key(&locked, &passphrase).map_err(crypto_error)?;
+    Ok(UnlockedCalendarJs { key })
+}
+
+/// The key ID (hex) an event's key packets are to: which generation's
+/// unlocked key opens it.
+#[wasm_bindgen(js_name = calendarEventKeyId)]
+pub fn calendar_event_key_id(event: JsValue) -> Result<String, JsValue> {
+    let event: SealedEventV1 = from_js(event, "event")?;
+    let event = event.to_event().map_err(crypto_error)?;
+    Ok(hex::encode(
+        calendar::event_key_id(&event).map_err(crypto_error)?,
+    ))
+}
+
+/// The key ID (hex) one key packet (base64) is to.
+#[wasm_bindgen(js_name = calendarKeyPacketKeyId)]
+pub fn calendar_key_packet_key_id(key_packet_base64: &str) -> Result<String, JsValue> {
+    let packet = decode_b64(key_packet_base64, "key packet")?;
+    Ok(hex::encode(
+        calendar::key_packet_key_id(&packet).map_err(crypto_error)?,
+    ))
+}
+
+#[wasm_bindgen(js_class = UnlockedCalendar)]
+impl UnlockedCalendarJs {
+    /// A key packet (base64) `older` opens, sealed again to this key
+    /// (compaction: an event moves to the newest generation).
+    #[wasm_bindgen(js_name = rewrapKeyPacket)]
+    pub fn rewrap_key_packet(
+        &self,
+        older: &UnlockedCalendarJs,
+        key_packet_base64: &str,
+    ) -> Result<String, JsValue> {
+        let packet = decode_b64(key_packet_base64, "key packet")?;
+        self.key
+            .rewrap_key_packet(&older.key, &packet)
+            .map(|packet| STANDARD.encode(packet))
+            .map_err(crypto_error)
+    }
+
+    /// The key ID (hex) key packets to this key name.
+    #[wasm_bindgen(getter, js_name = keyId)]
+    pub fn key_id(&self) -> Result<String, JsValue> {
+        Ok(hex::encode(self.key.key_id().map_err(crypto_error)?))
+    }
+
+    /// Seals a link's optional purpose (`SealedMetadataV1`) to this
+    /// calendar's key, bound to the calendar and the link, signed by the
+    /// owner's address key.
+    #[wasm_bindgen(js_name = sealLinkPurpose)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn seal_link_purpose(
+        &self,
+        master_keys_base64: &str,
+        binding: &str,
+        address: &str,
+        envelope_base64: &str,
+        fingerprint_hex: &str,
+        calendar_id: &str,
+        link_id: &str,
+        purpose: &str,
+    ) -> Result<JsValue, JsValue> {
+        let author_secret = open_mail_secret(
+            master_keys_base64,
+            binding,
+            address,
+            envelope_base64,
+            fingerprint_hex,
+        )?;
+        let sealed = self
+            .key
+            .seal_link_purpose(calendar_id, link_id, purpose, &author_secret)
+            .map_err(crypto_error)?;
+        to_js(&SealedMetadataV1::of(&sealed))
+    }
+
+    /// Opens a link's purpose: `{ purpose, verified }`, refused unless it
+    /// names `calendar_id` and `link_id`.
+    #[wasm_bindgen(js_name = openLinkPurpose)]
+    pub fn open_link_purpose(
+        &self,
+        sealed: JsValue,
+        calendar_id: &str,
+        link_id: &str,
+        author_public_keys_base64: Vec<String>,
+    ) -> Result<JsValue, JsValue> {
+        let sealed: SealedMetadataV1 = from_js(sealed, "link purpose")?;
+        let authors = public_keys(&author_public_keys_base64)?;
+        let authors: Vec<&[u8]> = authors.iter().map(Vec::as_slice).collect();
+        let (purpose, verified) = self
+            .key
+            .open_link_purpose(
+                &sealed.to_sealed().map_err(crypto_error)?,
+                calendar_id,
+                link_id,
+                &authors,
+            )
+            .map_err(crypto_error)?;
+        to_js(&OpenedPurpose { purpose, verified })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenedPurpose {
+    purpose: String,
+    verified: bool,
+}
+
+/// A link the owner holds: its id and its secret, sealed to the owner's own
+/// account key (`CalendarLinkSecretEnvelopeV1`, base64).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LinkIn {
+    link_id: String,
+    secret: String,
+}
+
+/// What a rotation hands back for one link: the new generation's
+/// passphrase for it (its secret stays the owner's, unchanged).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkOut {
+    link_id: String,
+    passphrase: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemberShare {
+    account: String,
+    share: String,
+}
+
+/// A new key generation (docs/plans/calendar-e3.md §2): what
+/// `POST …/keys/rotate` stores, in one request.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Rotated {
+    key_generation: u32,
+    public_key: String,
+    locked_secret_key: String,
+    fingerprint: String,
+    /// The owner's own share of the new passphrase.
+    own_share: String,
+    member_shares: Vec<MemberShare>,
+    metadata: SealedMetadataV1,
+    links: Vec<LinkOut>,
+}
+
+/// What a rotation takes: who stays, the calendar's names, and its links.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RotationIn {
+    /// The members who keep the calendar (the owner not among them).
+    members: Vec<MemberIn>,
+    names: Names,
+    links: Vec<LinkIn>,
+}
+
+/// Makes calendar `calendar_id`'s next key generation after
+/// `key_generation` (whose own share and link secrets the owner holds): a
+/// new key and passphrase; the owner's own share and one for each member
+/// who stays; the name re-sealed to the new key, signed by the address
+/// key; and each keyed link's passphrase for the new generation.
+/// Older generations stay as they are, for older events.
+#[wasm_bindgen(js_name = rotateCalendar)]
+#[allow(clippy::too_many_arguments)]
+pub fn rotate_calendar(
+    master_keys_base64: &str,
+    binding: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    identity_root_base64: &str,
+    owner_account: &str,
+    calendar_id: &str,
+    key_generation: u32,
+    own_share_base64: &str,
+    rotation: JsValue,
+    created_at_secs: u32,
+) -> Result<JsValue, JsValue> {
+    let author_secret = open_mail_secret(
+        master_keys_base64,
+        binding,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    let identity = account_keys(identity_root_base64)?;
+    let owner = account_of(owner_account)?;
+    let rotation: RotationIn = from_js(rotation, "rotation")?;
+    // The owner's own share of the generation rotated from: the rotation
+    // is the owner's, from where it stands.
+    own_passphrase(
+        &identity,
+        &owner,
+        calendar_id,
+        key_generation,
+        own_share_base64,
+    )?;
+    let generation = calendar::next_key_generation(key_generation).map_err(crypto_error)?;
+    let passphrase = Passphrase::generate();
+    let key =
+        calendar::generate_calendar_key(&passphrase, created_at_secs).map_err(crypto_error)?;
+    let own_share =
+        calendar::seal_own_passphrase(&passphrase, calendar_id, generation, &owner, &identity)
+            .and_then(|share| share.encode_b64())
+            .map_err(crypto_error)?;
+    let member_shares = rotation
+        .members
+        .iter()
+        .map(|member| {
+            Ok(MemberShare {
+                account: member.account.clone(),
+                share: share_with(
+                    &passphrase,
+                    &identity,
+                    &owner,
+                    calendar_id,
+                    generation,
+                    member,
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, JsValue>>()?;
+    let metadata = key
+        .unlocked
+        .seal_metadata_keeping(
+            calendar_id,
+            &rotation.names.name,
+            &rotation.names.description,
+            &rotation.names.rest.unwrap_or_default(),
+            &author_secret,
+        )
+        .map_err(crypto_error)?;
+    let links = rotation
+        .links
+        .iter()
+        .map(|link| {
+            let secret = owner_link_secret(&identity, &owner, &link.link_id, &link.secret)?;
+            Ok(LinkOut {
+                link_id: link.link_id.clone(),
+                passphrase: calendar_link::encode(
+                    &calendar_link::seal_link_passphrase(
+                        &secret,
+                        calendar_id,
+                        &link.link_id,
+                        generation,
+                        &passphrase,
+                    )
+                    .map_err(crypto_error)?,
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>, JsValue>>()?;
+    to_js(&Rotated {
+        key_generation: generation,
+        public_key: STANDARD.encode(&key.public_key),
+        locked_secret_key: STANDARD.encode(&key.locked_secret_key),
+        fingerprint: hex::encode(key.fingerprint),
+        own_share,
+        member_shares,
+        metadata: SealedMetadataV1::of(&metadata),
+        links,
+    })
+}
+
+/// One generation's own share, for a new link.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GenerationShare {
+    key_generation: u32,
+    share: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerationSealed {
+    key_generation: u32,
+    sealed: String,
+}
+
+/// A new full link.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NewLink {
+    /// For the URL only (its fragment, or the query of a link for other
+    /// calendar apps); never stored.
+    url_secret: String,
+    /// The secret sealed to the owner's own account key (never to the
+    /// calendar's passphrase, which the members hold).
+    secret: String,
+    /// Each live generation's passphrase under the link secret.
+    passphrases: Vec<GenerationSealed>,
+    /// What the link's page shows the server (base64url); the server keeps
+    /// its hash.
+    access_proof: String,
+}
+
+/// A link's secret from the owner's own envelope.
+fn owner_link_secret(
+    identity: &kutup_crypto::identity::AccountIdentityKeysV1,
+    owner: &AccountRef,
+    link_id: &str,
+    envelope_base64: &str,
+) -> Result<calendar_link::LinkSecret, JsValue> {
+    let envelope = calendar_link::CalendarLinkSecretEnvelopeV1::decode_b64(envelope_base64)
+        .map_err(crypto_error)?;
+    calendar_link::open_owner_link_secret(&envelope, link_id, owner, identity).map_err(crypto_error)
+}
+
+/// Makes a full link `link_id` for calendar `calendar_id`, from the owner's
+/// own share of each live generation (`[{ keyGeneration, share }]`).
+#[wasm_bindgen(js_name = createCalendarLink)]
+pub fn create_calendar_link(
+    identity_root_base64: &str,
+    owner_account: &str,
+    calendar_id: &str,
+    link_id: &str,
+    own_shares: JsValue,
+) -> Result<JsValue, JsValue> {
+    let identity = account_keys(identity_root_base64)?;
+    let owner = account_of(owner_account)?;
+    let shares: Vec<GenerationShare> = from_js(own_shares, "own shares")?;
+    if shares.is_empty() {
+        return Err(js_error("a link needs at least one key generation"));
+    }
+    let secret = calendar_link::LinkSecret::generate();
+    let mut passphrases = Vec::new();
+    for share in &shares {
+        let passphrase = own_passphrase(
+            &identity,
+            &owner,
+            calendar_id,
+            share.key_generation,
+            &share.share,
+        )?;
+        passphrases.push(GenerationSealed {
+            key_generation: share.key_generation,
+            sealed: calendar_link::encode(
+                &calendar_link::seal_link_passphrase(
+                    &secret,
+                    calendar_id,
+                    link_id,
+                    share.key_generation,
+                    &passphrase,
+                )
+                .map_err(crypto_error)?,
+            ),
+        });
+    }
+    to_js(&NewLink {
+        url_secret: secret.to_url(),
+        secret: calendar_link::seal_owner_link_secret(&secret, link_id, &owner, &identity)
+            .and_then(|envelope| envelope.encode_b64())
+            .map_err(crypto_error)?,
+        passphrases,
+        access_proof: calendar_link::link_access_proof_text(&secret, link_id)
+            .map_err(crypto_error)?,
+    })
+}
+
+/// The owner shows a link's URL again: its secret, opened from the owner's
+/// own envelope.
+#[wasm_bindgen(js_name = calendarLinkUrlSecret)]
+pub fn calendar_link_url_secret(
+    identity_root_base64: &str,
+    owner_account: &str,
+    link_id: &str,
+    sealed_secret_base64: &str,
+) -> Result<String, JsValue> {
+    let identity = account_keys(identity_root_base64)?;
+    let owner = account_of(owner_account)?;
+    Ok(owner_link_secret(&identity, &owner, link_id, sealed_secret_base64)?.to_url())
+}
+
+/// What a keyed link's page shows the server for link `link_id` (base64url),
+/// from the URL's secret.
+#[wasm_bindgen(js_name = calendarLinkAccessProof)]
+pub fn calendar_link_access_proof(url_secret: &str, link_id: &str) -> Result<String, JsValue> {
+    let secret = calendar_link::LinkSecret::from_url(url_secret).map_err(crypto_error)?;
+    calendar_link::link_access_proof_text(&secret, link_id).map_err(crypto_error)
+}
+
+/// A link's viewer unlocks one generation's key from the URL's secret and
+/// what the link's page serves.
+#[wasm_bindgen(js_name = openCalendarLink)]
+pub fn open_calendar_link(
+    url_secret: &str,
+    calendar_id: &str,
+    link_id: &str,
+    key_generation: u32,
+    sealed_passphrase_base64: &str,
+    locked_secret_key_base64: &str,
+) -> Result<UnlockedCalendarJs, JsValue> {
+    let secret = calendar_link::LinkSecret::from_url(url_secret).map_err(crypto_error)?;
+    let sealed = calendar_link::decode(sealed_passphrase_base64).map_err(crypto_error)?;
+    let passphrase =
+        calendar_link::open_link_passphrase(&secret, calendar_id, link_id, key_generation, &sealed)
+            .map_err(crypto_error)?;
+    let locked = decode_b64(locked_secret_key_base64, "calendar key")?;
+    let key = calendar::unlock_calendar_key(&locked, &passphrase).map_err(crypto_error)?;
+    Ok(UnlockedCalendarJs { key })
 }

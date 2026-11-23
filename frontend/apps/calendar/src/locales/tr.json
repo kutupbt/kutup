@@ -32,7 +32,18 @@
     "edit": "{{name}} düzenle",
     "noMailKeys": "Posta adresinizin henüz anahtarı yok; takvimler için gerekir. Posta'yı bir kez açıp geri gelin.",
     "none": "Henüz takvim yok.",
-    "loadFailed": "Takvimleriniz yüklenemedi."
+    "loadFailed": "Takvimleriniz yüklenemedi.",
+    "keys": {
+      "count_one": "Bu takvimin tutabileceği {{cap}} anahtar kuşağından {{count}} tanesi.",
+      "count_other": "Bu takvimin tutabileceği {{cap}} anahtar kuşağından {{count}} tanesi.",
+      "countBare_one": "{{count}} anahtar kuşağı.",
+      "countBare_other": "{{count}} anahtar kuşağı.",
+      "nearCap": "Bu takvim tutabileceği en çok anahtar kuşağına yaklaştı: eski anahtarları toplayın, yoksa kimse çıkarılamaz.",
+      "compact": "Eski anahtarları topla",
+      "failed": "Eski anahtarlar toplanamadı. Yeniden deneyin.",
+      "done_one": "{{count}} eski anahtar kuşağı kaldırıldı",
+      "done_other": "{{count}} eski anahtar kuşağı kaldırıldı"
+    }
   },
   "events": {
     "new": "Yeni etkinlik",
@@ -152,6 +163,225 @@
       "allowed": "Takvim açıkken hatırlatıcılar masaüstü bildirimi olarak görünür.",
       "push": "Takvim kapalıyken de hatırlat",
       "pushHint": "Hatırlatıcı yalnızca etkinliğin ne zaman başladığını söyler; başlığı Takvim açılınca görünür."
+    }
+  },
+  "sharing": {
+    "title": "{{name}} paylaş",
+    "description": "Paylaştığınız kişiler takvimin anahtarını kendi hesaplarına mühürlenmiş olarak alır: yalnızca onlar okuyabilir. Bağlantılar başka herkes içindir.",
+    "open": "{{name}} paylaş",
+    "tabs": {
+      "people": "Kişiler",
+      "links": "Bağlantılar"
+    },
+    "addPeople": "Kişi ekle",
+    "addressPlaceholder": "ad@ornek.com",
+    "presetLabel": "Neler yapabilir",
+    "presetOf": "{{address}} neler yapabilir",
+    "share": "Paylaş",
+    "presetHint": "Kişilerin neler yapabileceğini istediğiniz zaman değiştirebilir ya da kaldırabilirsiniz.",
+    "preset": {
+      "edit": "Etkinlik ayrıntılarını düzenleyebilir",
+      "view": "Tüm etkinlik ayrıntılarını görebilir",
+      "other": "Özel erişim"
+    },
+    "members": "Paylaşılanlar",
+    "nobody": "Henüz kimseyle paylaşılmadı.",
+    "status": {
+      "sent": "Davet gönderildi",
+      "declined": "Reddedildi"
+    },
+    "invited": "{{address}} adresine davet gönderildi",
+    "presetChanged": "{{address}} için erişim değişti",
+    "revoke": "{{address}} davetini geri al",
+    "revoked": "Davet geri alındı",
+    "deleteInvitation": "{{address}} tarafından reddedilen daveti sil",
+    "invitationDeleted": "Davet silindi",
+    "remove": "{{address}} kişisini çıkar",
+    "removeTitle": "{{address}} çıkarılsın mı?",
+    "removeDescription": "Daha önce görebildiklerini korur ama yenilerini göremez: takvim, kalan herkesle paylaşılan yeni bir anahtar alır.",
+    "removeSubmit": "Çıkar",
+    "removeAnyway": "Çıkar ve yeni anahtarı yine de onunla paylaş",
+    "removeDoubt": {
+      "changed": "{{address}} kalıyor ve kimliği, onunla son paylaştığınızdan beri değişti. Yeni anahtar, Kutup'un şimdi bulduğu hesaba gider.",
+      "invalid": "{{address}} kalıyor ama anahtarları hesabınca imzalanmamış. Yeni anahtar, sunucusunun listelediği anahtarlara gider.",
+      "someoneElse": "{{address}} artık başka birine çıkıyor. Yeni anahtar, bu adres şimdi kimdeyse ona gider."
+    },
+    "removed": "{{address}} çıkarıldı",
+    "leave": "Takvimden ayrıl",
+    "leaveTitle": "{{name}} takviminden ayrılınsın mı?",
+    "leaveDescription": "Artık görmezsiniz. Sahibi sizi yeniden davet edebilir.",
+    "left": "{{name}} takviminden ayrıldınız",
+    "sharedBy": "{{address}} sizinle paylaştı.",
+    "errors": {
+      "notFound": "{{address}} adresinde bir Kutup hesabı yok. Adresi denetleyin.",
+      "self": "Bu takvim zaten sizin.",
+      "otherServer": "{{address}} başka bir sunucuda. Takvimler şimdilik bu sunucudaki kişilerle paylaşılıyor; bunun yerine bir bağlantı paylaşın.",
+      "already": "{{address}} bu takvime zaten sahip ya da bir daveti var.",
+      "tooMany_one": "Bir takvim {{count}} kişiyle paylaşılabilir.",
+      "tooMany_other": "Bir takvim {{count}} kişiyle paylaşılabilir.",
+      "inviteFailed": "Davet gönderilmedi.",
+      "loadFailed": "Paylaşım yüklenemedi.",
+      "saveFailed": "Olmadı. Yeniden deneyin.",
+      "removeFailed": "Çıkarılmadı."
+    },
+    "links": {
+      "description": "Bağlantıya sahip herkes, Kutup hesabı olmadan takvimi görebilir. Çalışmasını durdurmak için bağlantıyı silin.",
+      "none": "Henüz bağlantı yok.",
+      "create": "Bağlantı oluştur",
+      "createTitle": "Bağlantı oluştur",
+      "createDescription": "Bağlantının ne göstereceğini seçin. İstediğiniz zaman silebilirsiniz.",
+      "createSubmit": "Oluştur",
+      "createFailed": "Bağlantı oluşturulmadı.",
+      "kindLabel": "Bağlantının gösterdiği",
+      "kind": {
+        "busy": {
+          "name": "Yalnızca meşgul zamanlar",
+          "hint": "Yalnızca ne zaman meşgul olduğunuz: başlık, yer ya da açıklama yok.",
+          "after": "Bu bağlantıya sahip herkes yalnızca ne zaman meşgul olduğunuzu görür."
+        },
+        "full": {
+          "name": "Tüm etkinlik ayrıntıları",
+          "hint": "Takvimin anahtarı bağlantıda, # işaretinden sonradır ve sunucuya hiç ulaşmaz: etkinlikleri tarayıcıda açar.",
+          "after": "Bu bağlantıya sahip herkes her etkinliği görür. Kutup sunucusu okuyamaz."
+        },
+        "query": {
+          "name": "Tüm etkinlik ayrıntıları, başka takvim uygulamaları için",
+          "hint": "Bir takvim adresine abone olan uygulamalar için. Anahtar her çekişte sunucuya gider.",
+          "after": "Bu adrese sahip takvim uygulamaları her etkinliği görür; sunucu her çekişte okur.",
+          "warningTitle": "Sunucu bu takvimi okur",
+          "warning": "Bu tür bağlantıda sunucu, bir uygulama takvimi her çektiğinde onu açar ve o sırada etkinliklerinizi görür. Yalnızca buna ihtiyaç duyan uygulamalar için kullanın."
+        }
+      },
+      "url": {
+        "page": "Bağlantı",
+        "ics": "Takvim uygulamaları için adres"
+      },
+      "copy": {
+        "page": "Bağlantıyı kopyala",
+        "ics": "Takvim uygulamaları için adresi kopyala"
+      },
+      "copied": "Kopyalandı",
+      "copyFailed": "Kopyalanamadı: seçip kendiniz kopyalayın.",
+      "created": "{{date}} oluşturuldu",
+      "show": "Kopyala",
+      "showFailed": "Bağlantı açılamadı.",
+      "delete": "Bağlantıyı sil",
+      "deleteTitle": "Bu bağlantı silinsin mi?",
+      "deleteDescription": "Ona sahip herkes için çalışmayı bırakır.",
+      "deleted": "Bağlantı silindi",
+      "full_one": "Bir takvimin {{count}} bağlantısı olabilir.",
+      "full_other": "Bir takvimin {{count}} bağlantısı olabilir.",
+      "done": "Tamam",
+      "label": "Etiket (isteğe bağlı)",
+      "labelPlaceholder": "Etiket ekle",
+      "labelHint": "Etiketi yalnızca siz görebilirsiniz."
+    },
+    "invitations": {
+      "title": "Sizinle paylaşılanlar",
+      "from": "{{address}} gönderdi",
+      "fromLong": "{{address}} sizi takvimine davet etti.",
+      "joinTitle": "{{name}} takvimine katıl",
+      "preset": {
+        "edit": "Etkinliklerini görebilir ve düzenleyebilirsiniz.",
+        "view": "Etkinliklerini görebilirsiniz."
+      },
+      "color": "Renk",
+      "join": "Takvime katıl",
+      "joined": "{{name}} takvimine katıldınız",
+      "decline": "Reddet",
+      "declined": "Davet reddedildi",
+      "unreadable": "Bu davet açılamadı.",
+      "openAnyway": "Yine de aç",
+      "doubt": {
+        "changed": {
+          "title": "{{address}} kimliği değişti",
+          "body": "Bunu gönderen hesap, daha önce {{address}} olarak tanıdığınız hesap değil. Yalnızca nedenini biliyorsanız katılın (hesabını yeniden kurduysa)."
+        },
+        "invalid": {
+          "title": "{{address}} anahtarları imzalı değil",
+          "body": "Anahtarları hesabınca imzalanmamış; Kutup bunu kimin gönderdiğini söyleyemez."
+        },
+        "someoneElse": {
+          "title": "{{address}} artık başka biri",
+          "body": "Bu adres daha önce tanıdığınız birinindi; davet başka birinden geliyor."
+        }
+      }
+    },
+    "ownerChanged": {
+      "row": "{{address}} takvimi kapalı",
+      "title": "{{address}} kimliği değişti",
+      "body": "{{address}} tarafından sizinle paylaşılan bir takvim kapalı kalıyor: adresin arkasındaki hesap, daha önce tanıdığınız hesap değil. Yeni kimliğe yalnızca neden değiştiğini biliyorsanız güvenin.",
+      "keepClosed": "Kapalı kalsın",
+      "trust": "Yeni kimliğe güven"
+    },
+    "recipients": {
+      "title": "Yeni anahtarı alacaklar",
+      "onlyYou": "Yalnızca siz: başka kimse kalmıyor.",
+      "state": {
+        "verified": "Doğrulandı",
+        "known": "Önceki gibi",
+        "new": "İlk kez",
+        "changed": "Kimliği değişti",
+        "invalid": "Anahtarları imzasız",
+        "someoneElse": "Artık başka biri"
+      }
+    },
+    "replaceLinks": {
+      "intro_one": "Bu takvimin anahtarını taşıyan {{count}} bağlantısı var:",
+      "intro_other": "Bu takvimin anahtarını taşıyan {{count}} bağlantısı var:",
+      "label": "Bağlantıları da yenile",
+      "hint": "Silinip yeni anahtarlarla yeniden oluşturulurlar; çıkarılan kişinin onları verdiği herkes erişimini kaybeder. Yeni adresleri siz alırsınız.",
+      "doneTitle": "Yeni bağlantılar",
+      "doneDescription": "Eski bağlantılar artık çalışmıyor. Takvimi görmeye devam etmesi gerekenlere bunları verin.",
+      "notRemade": "Anahtar değişti ve eski bağlantılar kaldırıldı, ancak bunlar yeniden oluşturulamadı. Bağlantılar bölümünden yeniden oluşturun:"
+    },
+    "due": {
+      "banner": "Anahtar değişikliği bekliyor — gözden geçirin",
+      "title": "{{name}} takviminin anahtarını değiştir",
+      "description": "Bu takvimin anahtarına sahip biri artık takvimde değil. Yeni anahtar takvimi hâlâ görenlerin hepsine gider:",
+      "doubt": "Buradaki herkes daha önce tanıdığınız biri değil. Devam etmeden listeyi kontrol edin: yeni anahtar tam olarak bu kişilere gider.",
+      "failed": "Anahtar değiştirilmedi.",
+      "done": "{{name}} takviminin anahtarı değiştirildi",
+      "confirm": "Anahtarı değiştir"
+    }
+  },
+  "busy": {
+    "share": "Meşgul olduğumda başkalarına göster",
+    "shareHint": "Kuruluşunuzdaki kişiler bu takvimden ne zaman meşgul olduğunuzu görebilir: yalnızca zamanlar, ne ya da nerede asla."
+  },
+  "publicLink": {
+    "opening": "Takvim açılıyor…",
+    "busyTitle": "Meşgul zamanlar",
+    "fullNote": "Bağlantıyla paylaşıldı. Takvim bu tarayıcıda açıldı: Kutup sunucusu okuyamaz.",
+    "busyNote": "Bağlantıyla paylaşıldı: yalnızca sahibinin ne zaman meşgul olduğu.",
+    "weeks": "Haftalar",
+    "previous": "Önceki hafta",
+    "next": "Sonraki hafta",
+    "today": "Bugün",
+    "allDay": "Tüm gün",
+    "busy": "Meşgul",
+    "untitled": "(başlıksız)",
+    "free": "Bir şey yok",
+    "unreadable_one": "{{count}} etkinlik açılamadı.",
+    "unreadable_other": "{{count}} etkinlik açılamadı.",
+    "forApps": {
+      "title": "Bu bağlantı takvim uygulamaları için",
+      "body": "Takvim adreslerine abone olan bir takvim uygulamasına ekleyin; burada açılmaz."
+    },
+    "errors": {
+      "gone": {
+        "title": "Bu bağlantı artık çalışmıyor",
+        "body": "Sahibi sildi ya da hiç var olmadı. Ondan yenisini isteyin."
+      },
+      "incomplete": {
+        "title": "Bu bağlantı eksik",
+        "body": "# işaretinden sonraki bölüm eksik ve takvim onsuz açılamaz. Bağlantının tamamını yeniden kopyalayın."
+      },
+      "unreadable": {
+        "title": "Bu takvim açılamıyor",
+        "body": "Bağlantı yolda değişmiş olabilir. Tamamını yeniden kopyalayın ya da sahibinden yenisini isteyin."
+      },
+      "events": "Etkinlikler yüklenemedi. Yeniden deneyin."
     }
   }
 }

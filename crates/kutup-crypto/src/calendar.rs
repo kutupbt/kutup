@@ -125,7 +125,7 @@ impl Passphrase {
     }
 
     /// The passphrase whose bytes a share carries.
-    fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != PASSPHRASE_BYTES {
             return Err(CryptoError::InvalidInput(
                 "a passphrase is 32 random bytes".into(),
@@ -135,7 +135,7 @@ impl Passphrase {
     }
 
     /// The 32 bytes a share carries.
-    fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+    pub(crate) fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         Zeroizing::new(
             STANDARD
                 .decode(self.0.as_bytes())
@@ -180,6 +180,13 @@ impl UnlockedCalendarKey {
     }
 
     /// The public key, derived from the secret.
+    /// The key ID of the encryption subkey, as key packets to this key name
+    /// it: a client holding several key generations opens an event with the
+    /// one its key packets name ([`event_key_id`]).
+    pub fn key_id(&self) -> Result<[u8; 8]> {
+        encryption_key_id(&self.public)
+    }
+
     pub fn public_key(&self) -> &[u8] {
         &self.public
     }
@@ -278,9 +285,78 @@ impl UnlockedCalendarKey {
         Ok((metadata, verified))
     }
 
+    /// A link's optional purpose (docs/plans/calendar-e3.md §3, Proton's
+    /// link label), sealed to this calendar's key and bound to the calendar
+    /// and the link, signed by the owner's address key: the server holds the
+    /// calendar's public key, so without the signature it could write one.
+    pub fn seal_link_purpose(
+        &self,
+        calendar_id: &str,
+        link_id: &str,
+        purpose: &str,
+        author_secret_key: &[u8],
+    ) -> Result<SealedMetadata> {
+        let sealed = LinkPurposeV1 {
+            version: LINK_PURPOSE_VERSION,
+            calendar_id: calendar_id.to_owned(),
+            link_id: link_id.to_owned(),
+            purpose: purpose.to_owned(),
+        };
+        sealed.check()?;
+        let json = serde_json::to_vec(&sealed).map_err(backend)?;
+        let key = SessionKey::generate();
+        Ok(SealedMetadata {
+            key_packet: key_packet_to(&key, &self.public)?,
+            data_packet: encrypt_data_packet(&key, &json)?,
+            signature: sign_detached(author_secret_key, &json)?,
+        })
+    }
+
+    /// Opens a link's purpose: refused unless it names `calendar_id` and
+    /// `link_id`; `verified` says whether one of the given address keys (the
+    /// owner's) signed it. A purpose sealed under an older key generation
+    /// opens with that generation's key.
+    pub fn open_link_purpose(
+        &self,
+        sealed: &SealedMetadata,
+        calendar_id: &str,
+        link_id: &str,
+        author_public_keys: &[&[u8]],
+    ) -> Result<(String, bool)> {
+        let key = open_key_packet(&sealed.key_packet, &self.secret)?;
+        let json = decrypt_data_packet(&key, &sealed.data_packet)?;
+        crate::format::check_json_version("calendar link purpose", &json, LINK_PURPOSE_VERSION)?;
+        let opened: LinkPurposeV1 = serde_json::from_slice(&json)
+            .map_err(|_| CryptoError::InvalidInput("a link purpose does not parse".into()))?;
+        opened.check()?;
+        if opened.calendar_id != calendar_id || opened.link_id != link_id {
+            return Err(CryptoError::InvalidInput(
+                "the purpose is another link's".into(),
+            ));
+        }
+        Ok((
+            opened.purpose,
+            signed_by(&sealed.signature, &json, author_public_keys),
+        ))
+    }
+
     /// Opens a key packet to this calendar's key.
     pub fn open_key_packet(&self, key_packet: &[u8]) -> Result<SessionKey> {
         open_key_packet(key_packet, &self.secret)
+    }
+
+    /// A key packet `older` (an older generation of this calendar) opens,
+    /// sealed again to this key: the same session key, so the parts it
+    /// opens (and their signatures) stay as they are. How a calendar's
+    /// events move to its newest generation before older ones are pruned
+    /// (docs/plans/calendar-e3.md, "Compaction").
+    pub fn rewrap_key_packet(
+        &self,
+        older: &UnlockedCalendarKey,
+        key_packet: &[u8],
+    ) -> Result<Vec<u8>> {
+        let session_key = older.open_key_packet(key_packet)?;
+        key_packet_to(&session_key, &self.public)
     }
 
     /// The unlocked secret, for opening key packets in this crate's tests.
@@ -681,6 +757,27 @@ pub fn key_packet_key_id(key_packet: &[u8]) -> Result<[u8; 8]> {
     crate::mail_key::key_packet_key_id(key_packet)
 }
 
+/// The key ID an event's key packets are to (both name the same key, as
+/// [`check_sealed_shape`] checks): which key generation opens it.
+pub fn event_key_id(event: &SealedEvent) -> Result<[u8; 8]> {
+    let shared = key_packet_key_id(&event.shared_key_packet)?;
+    if key_packet_key_id(&event.calendar_key_packet)? != shared {
+        return Err(CryptoError::InvalidInput(
+            "an event's key packets name two keys".into(),
+        ));
+    }
+    Ok(shared)
+}
+
+/// The key generation after `generation` (docs/plans/calendar-e3.md §2):
+/// a removed member's rotation makes it.
+pub fn next_key_generation(generation: u32) -> Result<u32> {
+    generation
+        .checked_add(1)
+        .filter(|g| *g > FIRST_KEY_GENERATION)
+        .ok_or_else(|| CryptoError::InvalidInput("no key generation after this one".into()))
+}
+
 /// A public key's encryption subkey's key ID, to compare with
 /// [`key_packet_key_id`].
 pub fn encryption_key_id(public_key: &[u8]) -> Result<[u8; 8]> {
@@ -931,6 +1028,40 @@ impl CalendarMetadataV1 {
     }
 }
 
+/// A link purpose's format version.
+const LINK_PURPOSE_VERSION: u16 = 1;
+/// The longest link purpose, in characters (Proton's label limit).
+pub const MAX_LINK_PURPOSE_CHARS: usize = 100;
+
+/// A link's purpose as sealed.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LinkPurposeV1 {
+    #[serde(rename = "v")]
+    version: u16,
+    calendar_id: String,
+    link_id: String,
+    purpose: String,
+}
+
+impl LinkPurposeV1 {
+    fn check(&self) -> Result<()> {
+        if self.calendar_id.is_empty()
+            || self.calendar_id.len() > 64
+            || self.link_id.is_empty()
+            || self.link_id.len() > 64
+            || self.purpose.trim().is_empty()
+            || self.purpose.chars().count() > MAX_LINK_PURPOSE_CHARS
+            || self.purpose.chars().any(char::is_control)
+        {
+            return Err(CryptoError::InvalidInput(
+                "a link purpose is invalid".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// The longest name and description, in characters (Proton's).
 pub const MAX_CALENDAR_NAME_CHARS: usize = 100;
 pub const MAX_CALENDAR_DESCRIPTION_CHARS: usize = 255;
@@ -1119,6 +1250,28 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_rewrapped_key_packet_opens_with_the_newer_key_only() {
+        let (old_pass, new_pass) = (Passphrase::generate(), Passphrase::generate());
+        let old = generate_calendar_key(&old_pass, 1_790_000_000)
+            .unwrap()
+            .unlocked;
+        let new = generate_calendar_key(&new_pass, 1_790_000_100)
+            .unwrap()
+            .unlocked;
+        let session = SessionKey::generate();
+        let packet = key_packet_to(&session, old.public_key()).unwrap();
+        let moved = new.rewrap_key_packet(&old, &packet).unwrap();
+        assert_eq!(key_packet_key_id(&moved).unwrap(), new.key_id().unwrap());
+        assert_eq!(
+            new.open_key_packet(&moved).unwrap().as_bytes(),
+            session.as_bytes()
+        );
+        assert!(old.open_key_packet(&moved).is_err());
+        // A packet the older key can't open is refused.
+        assert!(old.rewrap_key_packet(&new, &packet).is_err());
+    }
+
     use super::*;
     use crate::mail_key::generate_address_key;
 

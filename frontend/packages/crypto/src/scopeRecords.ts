@@ -27,6 +27,8 @@ export interface CalendarSettingsRecord {
   /** `#rrggbb`, lowercase. */
   color: string
   display: boolean
+  /** The owner's roster of key recipients (keyed 8-character tags, concatenated; docs/plans/calendar-e3.md, "Roster"). */
+  roster?: string
   [field: string]: unknown
 }
 

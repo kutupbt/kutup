@@ -131,6 +131,10 @@ name = "calendar_vectors"
 required-features = ["calendar"]
 
 [[test]]
+name = "calendar_sharing_vectors"
+required-features = ["calendar", "test-vectors"]
+
+[[test]]
 name = "calendar_recurrence_vectors"
 required-features = ["calendar"]
 

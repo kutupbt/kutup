@@ -11,11 +11,14 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  calendarEventKeyId,
   createCalendar as makeCalendar,
   localToUtc,
   sealCalendarEvent,
   sealCalendarMetadata,
   unlockCalendar,
+  unlockSharedCalendar,
+  type CalendarOwner,
   type CalendarTime,
   type EventFields,
   type SealedEvent,
@@ -25,6 +28,7 @@ import {
 } from '@kutup/crypto/calendar'
 import { OlderThanSeenError, revisionGuard } from '@kutup/crypto/revisionGuard'
 import { useMailAccount, type MailAccount } from '@kutup/mail-core/api'
+import { addressKeys } from '@kutup/mail-core/keys'
 import { openScopeRecord, scopeRecordId, sealScopeRecord, type CalendarSettingsRecord } from '@kutup/crypto/scopeRecords'
 import { accountHead, HeadBlockedError } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
@@ -49,7 +53,7 @@ const DELETED = Number.MAX_SAFE_INTEGER
 const MAX_EVENT_PAGES = 1000
 
 /** Proton's permission bits (`CALENDAR_PERMISSIONS`). */
-export const PERMISSION = { superOwner: 1, owner: 2, write: 16, read: 32 } as const
+export const PERMISSION = { superOwner: 1, owner: 2, write: 16, read: 32, availability: 64 } as const
 
 /**
  * A reminder (Proton's notification): on this member's devices or by email,
@@ -83,8 +87,49 @@ export interface CalendarRow {
   permissions: number
   /** This member's defaults (Proton's DefaultPartDayNotifications and DefaultFullDayNotifications). */
   defaultReminders: DefaultReminders
+  /**
+   * This member shows others when they're busy from this calendar
+   * (docs/plans/calendar-e3.md §4): readable, as the server answers busy
+   * times from it. Absent before E3b: off.
+   */
+  shareBusy?: boolean
+  /**
+   * The owner's: someone who held the key no longer may (left, or read an
+   * invitation that then went), and the owner's app rotates it.
+   */
+  rotationDue?: boolean
   createdAt: string
   updatedAt: string
+  /**
+   * A calendar someone else owns (docs/plans/calendar-e3.md §1): who, as the
+   * server says; the member checks it against its pins before trusting it.
+   */
+  owner?: CalendarOwnerRow
+  /**
+   * Every live key generation with this member's share of it, oldest first
+   * (§2): older events open with their own generation's key. Without it the
+   * row's own key is the only one.
+   */
+  keys?: CalendarKeyRow[]
+}
+
+/** A calendar's owner as the server lists them to a member. */
+export interface CalendarOwnerRow {
+  accountId: string
+  /** Their current address, which the pins and their address keys are looked up by. */
+  address: string
+  incarnationId: string
+  /** Their account signing key (base64), which signed the member's shares. */
+  signingPublicKey: string
+}
+
+/** One key generation of a calendar, with the caller's share of its passphrase. */
+export interface CalendarKeyRow {
+  keyGeneration: number
+  publicKey: string
+  fingerprint: string
+  lockedSecretKey: string
+  passphraseShare: string
 }
 
 /** A calendar, opened. */
@@ -102,9 +147,54 @@ export interface Calendar {
   /** The settings' version and a newer client's fields, sealed again on a change. */
   settingsRest?: Record<string, unknown>
   defaultReminders: DefaultReminders
+  /** Others may see when this member is busy from this calendar (times only; the owner's only). */
+  shareBusy: boolean
+  /** The owner's app rotates the key (docs/plans/calendar-e3.md, T1). */
+  rotationDue: boolean
   unlocked: UnlockedCalendar
+  /** Every generation's unlocked key by its key ID: an event opens with the one its key packets name. */
+  keyring: Map<string, UnlockedCalendar>
+  /** The newest key generation (`unlocked`'s). */
+  keyGeneration: number
+  /** How many key generations this member holds (the owner: all the calendar keeps). */
+  keyGenerations: number
+  /** The account owns it (else it is shared with it, and `owner` says by whom). */
+  owned: boolean
+  owner?: CalendarOwnerRow
   /** The sealed metadata's version and a newer client's fields, sealed again on a rename. */
   metadataRest?: Record<string, unknown>
+  /**
+   * The owner's roster: the tags of everyone it gave the key to, from its own
+   * sealed settings record (the server can't change it); null when there is
+   * none, or it can't be read now.
+   */
+  roster: string[] | null
+}
+
+/**
+ * Checks a shared calendar's owner against this account's identity pins
+ * (Drive's: docs/plans/drive-identity-pins.md) and answers their verified
+ * keys; the app installs it ({@link setOwnerCheck}), since the pins live in
+ * Drive's package. A changed identity throws {@link OwnerIdentityChanged}.
+ */
+export type OwnerCheck = (session: Session, owner: CalendarOwnerRow) => Promise<CalendarOwner>
+
+let ownerCheck: OwnerCheck | null = null
+
+/** Installs the owner check shared calendars open through. */
+export function setOwnerCheck(check: OwnerCheck): void {
+  ownerCheck = check
+}
+
+/** A shared calendar's owner no longer matches the identity this account pinned: shown, not opened, until confirmed. */
+export class OwnerIdentityChanged extends Error {
+  constructor(
+    readonly calendarId: string,
+    readonly ownerAddress: string,
+  ) {
+    super(`the identity of ${ownerAddress} changed`)
+    this.name = 'OwnerIdentityChanged'
+  }
 }
 
 /** An event as the server stores it. */
@@ -156,23 +246,17 @@ async function calendarAccount(session: Session): Promise<CalendarAccount> {
   return { identityRoot: session.roots.identityRoot, account: await ownAccount(session) }
 }
 
-async function unlock(session: Session, row: CalendarRow): Promise<UnlockedCalendar> {
-  const cacheKey = `${row.id}/${row.fingerprint}/${row.keyGeneration}/${row.passphraseShare}`
+/** One generation's key, unlocked from this member's share (the owner's account signature checked). */
+async function unlockOne(session: Session, calendarId: string, key: CalendarKeyRow, owner: CalendarOwner | null): Promise<UnlockedCalendar> {
+  const cacheKey = `${calendarId}/${key.fingerprint}/${key.keyGeneration}/${key.passphraseShare}`
   let found = unlocked.get(cacheKey)
   if (!found) {
     found = (async () => {
-      if (row.ownerAccountId !== session.accountId) {
-        // Shared calendars come in E3, with their owners' verified keys.
-        throw new Error('a calendar of another account')
-      }
-      const opened = await unlockCalendar(await calendarAccount(session), {
-        calendarId: row.id,
-        keyGeneration: row.keyGeneration,
-        passphraseShare: row.passphraseShare,
-        lockedSecretKey: row.lockedSecretKey,
-      })
+      const lock = { calendarId, keyGeneration: key.keyGeneration, passphraseShare: key.passphraseShare, lockedSecretKey: key.lockedSecretKey }
+      const member = await calendarAccount(session)
+      const opened = owner ? await unlockSharedCalendar(member, owner, lock) : await unlockCalendar(member, lock)
       // The key unlocked is the one listed, or the listing is not the calendar's.
-      if (opened.fingerprint !== row.fingerprint.toLowerCase()) {
+      if (opened.fingerprint !== key.fingerprint.toLowerCase()) {
         opened.free()
         throw new Error('the calendar key is not the one listed')
       }
@@ -182,6 +266,33 @@ async function unlock(session: Session, row: CalendarRow): Promise<UnlockedCalen
     unlocked.set(cacheKey, found)
   }
   return found
+}
+
+/** A calendar's keys, newest last, every one unlocked: the row's own when it lists no generations. */
+async function unlock(session: Session, row: CalendarRow): Promise<{ newest: UnlockedCalendar; generation: number; keyring: Map<string, UnlockedCalendar> }> {
+  const owned = row.ownerAccountId === session.accountId
+  let owner: CalendarOwner | null = null
+  if (!owned) {
+    if (!row.owner || row.owner.accountId !== row.ownerAccountId) throw new Error('a shared calendar without its owner')
+    if (!ownerCheck) throw new Error('shared calendars need the owner check')
+    owner = await ownerCheck(session, row.owner)
+  }
+  const keys = row.keys?.length
+    ? [...row.keys].sort((a, b) => a.keyGeneration - b.keyGeneration)
+    : [{ keyGeneration: row.keyGeneration, publicKey: row.publicKey, fingerprint: row.fingerprint, lockedSecretKey: row.lockedSecretKey, passphraseShare: row.passphraseShare }]
+  const opened = await Promise.all(keys.map((key) => unlockOne(session, row.id, key, owner)))
+  const keyring = new Map(opened.map((key) => [key.keyId, key]))
+  return { newest: opened[opened.length - 1], generation: keys[keys.length - 1].keyGeneration, keyring }
+}
+
+/** The keys an author's signature may be under: the account's own, or their address's checked keys. */
+async function authorKeys(account: MailAccount, address: string | null, owner?: CalendarOwnerRow): Promise<string[]> {
+  if (address === null) return []
+  if (account.isOwnAddress(address)) return account.ownPublicKeys
+  const keys = await addressKeys(address)
+  // A shared calendar's name is its owner's: their address, their account.
+  if (owner && keys.accountRef?.accountId !== owner.accountId) return []
+  return keys.all
 }
 
 /** The settings record id of a calendar (its 16 UUID bytes, hashed under the object-id key). */
@@ -243,11 +354,16 @@ function fallbackColor(calendarId: string): string {
  * while the app is blocked: a calendar this browser saw deleted is refused,
  * as the head would.
  */
-export async function loadCalendars(session: Session, account: MailAccount): Promise<{ calendars: Calendar[]; unreadable: number }> {
+export async function loadCalendars(
+  session: Session,
+  account: MailAccount,
+): Promise<{ calendars: Calendar[]; unreadable: number; ownerChanged: OwnerIdentityChanged[] }> {
   const settings = await loadSettings(session)
   const { data } = await api.get<{ calendars: CalendarRow[] }>('/calendar/calendars')
+  if (settings) await settleTombstones(session, new Set(data.calendars.map((row) => row.id)))
   const guard = revisionGuard(session)
   let unreadable = 0
+  const ownerChanged: OwnerIdentityChanged[] = []
   const calendars: Calendar[] = []
   for (const row of data.calendars) {
     try {
@@ -256,8 +372,10 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
       if (settings && !own) throw new Error('the calendar has no settings the head vouches for')
       if (own) await guard.accept(GUARD_SCOPE, row.id, own.revision)
       else if ((await guard.seen(GUARD_SCOPE, row.id)) === DELETED) throw new OlderThanSeenError(GUARD_SCOPE, 0, DELETED)
-      const key = await unlock(session, row)
-      const metadata = key.openMetadata(row.metadata, row.id, account.ownPublicKeys)
+      const keys = await unlock(session, row)
+      const owned = row.ownerAccountId === session.accountId
+      const signers = owned ? account.ownPublicKeys : await authorKeys(account, row.owner!.address, row.owner)
+      const metadata = keys.newest.openMetadata(row.metadata, row.id, signers)
       // A name its owner didn't sign is never shown: the calendar counts
       // as unreadable.
       if (!metadata.verified) throw new Error('the calendar name is not signed by its owner')
@@ -272,15 +390,113 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
         settingsId: id,
         settingsRest: own ? settingsRest(own.value) : undefined,
         defaultReminders: row.defaultReminders,
-        unlocked: key,
+        shareBusy: row.shareBusy ?? false,
+        rotationDue: owned && (row.rotationDue ?? false),
+        unlocked: keys.newest,
+        keyring: keys.keyring,
+        keyGeneration: keys.generation,
+        keyGenerations: keys.keyring.size,
+        owned,
+        owner: owned ? undefined : row.owner,
         metadataRest: metadata.rest,
+        roster: owned && typeof own?.value.roster === 'string' ? splitRoster(own.value.roster) : null,
       })
     } catch (error) {
       if (error instanceof OlderThanSeenError) throw error
-      unreadable++
+      if (error instanceof OwnerIdentityChanged) ownerChanged.push(new OwnerIdentityChanged(row.id, error.ownerAddress))
+      else unreadable++
     }
   }
-  return { calendars, unreadable }
+  return { calendars, unreadable, ownerChanged }
+}
+
+/** A calendar this account stopped being a member of (docs/plans/calendar-e3.md §1). */
+interface Tombstone {
+  calendarId: string
+  reason: 'removed' | 'left' | 'deleted'
+}
+
+/**
+ * Reads what the server says once: calendars this account was removed
+ * from, left on another device, or whose owner deleted them. Their
+ * settings records go (the calendar is never accepted back under them),
+ * then the tombstones. Best effort: the next listing tries again.
+ */
+async function settleTombstones(session: Session, listed: Set<string>): Promise<void> {
+  let tombstones: Tombstone[]
+  try {
+    tombstones = (await api.get<{ tombstones: Tombstone[] }>('/calendar/tombstones')).data.tombstones ?? []
+  } catch {
+    return
+  }
+  for (const tombstone of tombstones) {
+    // Back as a member since (invited again): nothing to drop.
+    if (listed.has(tombstone.calendarId)) continue
+    try {
+      await forgetCalendarSettings(session, tombstone.calendarId)
+      await api.delete(`/calendar/tombstones/${encodeURIComponent(tombstone.calendarId)}`)
+    } catch {
+      // Tried again on the next listing.
+    }
+  }
+}
+
+/** One roster tag's length (`ROSTER_TAG_CHARS` in kutup-crypto's calendar settings). */
+const ROSTER_TAG = 8
+
+function splitRoster(roster: string): string[] {
+  const tags: string[] = []
+  for (let at = 0; at + ROSTER_TAG <= roster.length; at += ROSTER_TAG) tags.push(roster.slice(at, at + ROSTER_TAG))
+  return tags
+}
+
+function uuidBytes(id: string): Uint8Array {
+  const hex = id.replace(/-/g, '')
+  const bytes = new Uint8Array(16)
+  for (let i = 0; i < 16; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  return bytes
+}
+
+/**
+ * A key recipient's roster tag: the first 6 bytes of the account's keyed
+ * hash (`hashed_object` under the object-id key) of the calendar id and the
+ * account id. Only this account's devices can compute it; the 32-byte input
+ * never meets a record id's 16.
+ */
+export async function rosterTag(session: Session, calendarId: string, accountId: string): Promise<string> {
+  const input = new Uint8Array(32)
+  input.set(uuidBytes(calendarId), 0)
+  input.set(uuidBytes(accountId), 16)
+  return (await scopeRecordId(session.roots.objectIdKey, SETTINGS_SCOPE, input)).slice(0, ROSTER_TAG)
+}
+
+/**
+ * Changes the owner's roster of a calendar in its sealed settings record,
+ * read and written under the head (another device's change is read first).
+ * `edit` gets the tags now (null when there is no roster) and answers the
+ * new ones, or null for none. A roster too long for the record is dropped:
+ * without one, every key change is reviewed.
+ */
+export async function editRoster(session: Session, calendarId: string, edit: (tags: string[] | null) => string[] | null): Promise<void> {
+  const id = await settingsId(session, calendarId)
+  const written = await (await accountHead(session)).recordsWrite(SETTINGS_SCOPE, async (copy) => {
+    const stored = copy.records.get(id)
+    if (!stored) throw new Error('the calendar has no settings record')
+    const opened = await openScopeRecord<CalendarSettingsRecord>(session.masterKeys, session.envelopeBinding, SETTINGS_SCOPE, id, stored.envelope)
+    const now = typeof opened.value.roster === 'string' ? splitRoster(opened.value.roster) : null
+    const next = edit(now)
+    const rest: CalendarSettingsRecord = { ...opened.value }
+    delete rest.roster
+    const revision = stored.revision + 1
+    let envelope: string
+    try {
+      envelope = await sealScopeRecord(session.masterKeys, session.envelopeBinding, SETTINGS_SCOPE, id, revision, next ? { ...rest, roster: [...new Set(next)].join('') } : rest)
+    } catch {
+      envelope = await sealScopeRecord(session.masterKeys, session.envelopeBinding, SETTINGS_SCOPE, id, revision, rest)
+    }
+    return { puts: [{ id, revision, envelope }], deletes: [], done: revision }
+  })
+  if (written) await revisionGuard(session).accept(GUARD_SCOPE, calendarId, written)
 }
 
 /** Writes a calendar's settings record at the next revision (a newer client's fields kept). */
@@ -293,6 +509,31 @@ async function writeSettings(session: Session, id: string, value: CalendarSettin
     return { puts: [{ id, revision, envelope }], deletes: [], done: revision }
   })
   return written ?? 0
+}
+
+/**
+ * Files the member's own settings record for a calendar shared with it,
+ * before the invitation is accepted (a calendar listed without its record is
+ * not one the head vouches for). Answers the record id, to remove it again
+ * when the accept fails.
+ */
+export async function fileSharedCalendarSettings(session: Session, calendarId: string, color: string): Promise<string> {
+  const id = await settingsId(session, calendarId)
+  const revision = await writeSettings(session, id, { color, display: true })
+  // A fresh accept, which the user chose after opening the owner's signed
+  // invitation: whatever this browser remembers of an earlier membership
+  // (left, so marked deleted) starts over with this record.
+  const guard = revisionGuard(session)
+  await guard.reset(GUARD_SCOPE, calendarId)
+  await guard.accept(GUARD_SCOPE, calendarId, revision)
+  return id
+}
+
+/** Drops the member's settings record of a calendar it left (or never joined). */
+export async function forgetCalendarSettings(session: Session, calendarId: string, deleted = false): Promise<void> {
+  const id = await settingsId(session, calendarId)
+  if (deleted) await revisionGuard(session).accept(GUARD_SCOPE, calendarId, DELETED)
+  await removeSettings(session, id)
 }
 
 /** Removes a calendar's settings record, if there is one. */
@@ -320,7 +561,8 @@ export async function createCalendar(session: Session, account: MailAccount, nam
   // The fingerprint is the server's to read from the key, not to be told.
   const body = { publicKey: made.publicKey, lockedSecretKey: made.lockedSecretKey, passphraseShare: made.passphraseShare, metadata: made.metadata }
   const record = await settingsId(session, id)
-  const revision = await writeSettings(session, record, { color, display: true })
+  // A new calendar's roster: nobody but its owner yet.
+  const revision = await writeSettings(session, record, { color, display: true, roster: '' })
   try {
     await api.post('/calendar/calendars', { id, ...body })
   } catch (error) {
@@ -347,6 +589,8 @@ export interface CalendarChange {
   display?: boolean
   /** This member's defaults (Proton's event defaults). */
   defaultReminders?: DefaultReminders
+  /** Show others when this member is busy from this calendar. */
+  shareBusy?: boolean
 }
 
 /**
@@ -373,8 +617,8 @@ export async function updateCalendar(session: Session, account: MailAccount, cal
     )
     await revisionGuard(session).accept(GUARD_SCOPE, calendar.id, revision)
   }
-  if (metadata || change.defaultReminders) {
-    await api.put(`/calendar/calendars/${calendar.id}`, { metadata, defaultReminders: change.defaultReminders })
+  if (metadata || change.defaultReminders || change.shareBusy !== undefined) {
+    await api.put(`/calendar/calendars/${calendar.id}`, { metadata, defaultReminders: change.defaultReminders, shareBusy: change.shareBusy })
   }
 }
 
@@ -421,9 +665,13 @@ export async function timesOf(fields: EventFields): Promise<{ startUtc: string; 
  * server times differ is shown as unverified.
  */
 export async function openEvent(account: MailAccount, calendar: Calendar, row: EventRow): Promise<CalendarEvent> {
-  const opened = calendar.unlocked.openEvent(row.event, account.ownPublicKeys)
+  // The generation its key packets name: older events keep their own key.
+  const key = calendar.keyring.get(await calendarEventKeyId(row.event)) ?? calendar.unlocked
+  const signers = await authorKeys(account, row.authorAddress).catch(() => [])
+  const opened = key.openEvent(row.event, signers)
   const times = await timesOf(opened.fields)
-  const ownAuthor = row.authorAddress !== null && account.isOwnAddress(row.authorAddress)
+  // Signed by the address the server names as the author, with its checked keys.
+  const knownAuthor = signers.length > 0
   const asServed = sameInstant(times.startUtc, row.startUtc) && sameInstant(times.endUtc, row.endUtc) && times.fullDay === row.fullDay
   return {
     id: row.id,
@@ -432,7 +680,7 @@ export async function openEvent(account: MailAccount, calendar: Calendar, row: E
     ...times,
     revision: row.revision,
     reminders: row.reminders ?? null,
-    verified: opened.verified && ownAuthor && asServed,
+    verified: opened.verified && knownAuthor && asServed,
   }
 }
 

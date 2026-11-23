@@ -32,7 +32,18 @@
     "edit": "Edit {{name}}",
     "noMailKeys": "Your mail address has no key yet, and calendars need one. Open Mail once, then come back.",
     "none": "No calendars yet.",
-    "loadFailed": "Your calendars couldn't be loaded."
+    "loadFailed": "Your calendars couldn't be loaded.",
+    "keys": {
+      "count_one": "{{count}} key generation of {{cap}} this calendar may keep.",
+      "count_other": "{{count}} key generations of {{cap}} this calendar may keep.",
+      "countBare_one": "{{count}} key generation.",
+      "countBare_other": "{{count}} key generations.",
+      "nearCap": "This calendar is near the most key generations it may keep: tidy them up, or nobody can be removed from it.",
+      "compact": "Tidy up old keys",
+      "failed": "The old keys couldn't be tidied up. Try again.",
+      "done_one": "{{count}} old key generation removed",
+      "done_other": "{{count}} old key generations removed"
+    }
   },
   "events": {
     "new": "New event",
@@ -152,6 +163,225 @@
       "allowed": "Reminders show as desktop notifications while Calendar is open.",
       "push": "Remind me when Calendar is closed",
       "pushHint": "The reminder says only when an event starts; its title shows once Calendar opens."
+    }
+  },
+  "sharing": {
+    "title": "Share {{name}}",
+    "description": "People you share with get the calendar's key, sealed to their account: only they can read it. Links are for anyone else.",
+    "open": "Share {{name}}",
+    "tabs": {
+      "people": "People",
+      "links": "Links"
+    },
+    "addPeople": "Add people",
+    "addressPlaceholder": "name@example.com",
+    "presetLabel": "What they can do",
+    "presetOf": "What {{address}} can do",
+    "share": "Share",
+    "presetHint": "You can change or remove what people can do at any time.",
+    "preset": {
+      "edit": "Edit event details",
+      "view": "See all event details",
+      "other": "Custom access"
+    },
+    "members": "Shared with",
+    "nobody": "Not shared with anyone yet.",
+    "status": {
+      "sent": "Invitation sent",
+      "declined": "Declined"
+    },
+    "invited": "Invitation sent to {{address}}",
+    "presetChanged": "Access changed for {{address}}",
+    "revoke": "Revoke the invitation to {{address}}",
+    "revoked": "Invitation revoked",
+    "deleteInvitation": "Delete the declined invitation of {{address}}",
+    "invitationDeleted": "Invitation deleted",
+    "remove": "Remove {{address}}",
+    "removeTitle": "Remove {{address}}?",
+    "removeDescription": "They keep what they could already see, but nothing new: the calendar gets a new key, shared with everyone who stays.",
+    "removeSubmit": "Remove",
+    "removeAnyway": "Remove, and share the new key with them anyway",
+    "removeDoubt": {
+      "changed": "{{address}} stays, and their identity changed since you last shared with them. The new key would go to the account Kutup finds now.",
+      "invalid": "{{address}} stays, but their keys aren't signed by their account. The new key would go to the keys their server lists.",
+      "someoneElse": "{{address}} now leads to someone else. The new key would go to whoever has that address now."
+    },
+    "removed": "{{address}} was removed",
+    "leave": "Leave calendar",
+    "leaveTitle": "Leave {{name}}?",
+    "leaveDescription": "You won't see it any more. Its owner can invite you again.",
+    "left": "You left {{name}}",
+    "sharedBy": "Shared with you by {{address}}.",
+    "errors": {
+      "notFound": "There's no Kutup account at {{address}}. Check the address.",
+      "self": "This calendar is already yours.",
+      "otherServer": "{{address}} is on another server. Calendars are shared with people on this server for now; share a link instead.",
+      "already": "{{address}} already has this calendar, or an invitation to it.",
+      "tooMany_one": "A calendar can be shared with {{count}} person.",
+      "tooMany_other": "A calendar can be shared with {{count}} people.",
+      "inviteFailed": "The invitation wasn't sent.",
+      "loadFailed": "Sharing couldn't be loaded.",
+      "saveFailed": "That didn't work. Try again.",
+      "removeFailed": "They weren't removed."
+    },
+    "links": {
+      "description": "Anyone with a link can see the calendar, without a Kutup account. Delete a link to stop it working.",
+      "none": "No links yet.",
+      "create": "Create link",
+      "createTitle": "Create a link",
+      "createDescription": "Choose what the link shows. You can delete it at any time.",
+      "createSubmit": "Create",
+      "createFailed": "The link wasn't created.",
+      "kindLabel": "What the link shows",
+      "kind": {
+        "busy": {
+          "name": "Busy times only",
+          "hint": "When you're busy, nothing more: no titles, places or descriptions.",
+          "after": "Anyone with this link sees when you're busy, nothing more."
+        },
+        "full": {
+          "name": "All event details",
+          "hint": "The calendar's key is in the link, after the #, which never reaches the server: it opens the events in the browser.",
+          "after": "Anyone with this link sees every event. Kutup's server can't read it."
+        },
+        "query": {
+          "name": "All event details, for other calendar apps",
+          "hint": "For apps that subscribe to a calendar address. The key goes to the server with every fetch.",
+          "after": "Calendar apps with this address see every event, read by the server on each fetch.",
+          "warningTitle": "The server reads this calendar",
+          "warning": "With this kind of link, the server opens the calendar each time an app fetches it, so it sees your events then. Use it only for apps that need it."
+        }
+      },
+      "url": {
+        "page": "Link",
+        "ics": "Address for calendar apps"
+      },
+      "copy": {
+        "page": "Copy the link",
+        "ics": "Copy the address for calendar apps"
+      },
+      "copied": "Copied",
+      "copyFailed": "It couldn't be copied: select it and copy it yourself.",
+      "created": "Created {{date}}",
+      "show": "Copy",
+      "showFailed": "The link couldn't be opened.",
+      "delete": "Delete link",
+      "deleteTitle": "Delete this link?",
+      "deleteDescription": "It stops working for everyone who has it.",
+      "deleted": "Link deleted",
+      "full_one": "A calendar can have {{count}} link.",
+      "full_other": "A calendar can have {{count}} links.",
+      "done": "Done",
+      "label": "Label (optional)",
+      "labelPlaceholder": "Add a label",
+      "labelHint": "Only you can see the label."
+    },
+    "invitations": {
+      "title": "Shared with you",
+      "from": "From {{address}}",
+      "fromLong": "{{address}} invited you to their calendar.",
+      "joinTitle": "Join {{name}}",
+      "preset": {
+        "edit": "You can see and edit its events.",
+        "view": "You can see its events."
+      },
+      "color": "Colour",
+      "join": "Join calendar",
+      "joined": "You joined {{name}}",
+      "decline": "Decline",
+      "declined": "Invitation declined",
+      "unreadable": "This invitation couldn't be opened.",
+      "openAnyway": "Open it anyway",
+      "doubt": {
+        "changed": {
+          "title": "{{address}}'s identity changed",
+          "body": "The account that sent this isn't the one you met before as {{address}}. Join only if you know why (they set their account up again)."
+        },
+        "invalid": {
+          "title": "{{address}}'s keys aren't signed",
+          "body": "Their keys aren't signed by their account, so Kutup can't tell who sent this."
+        },
+        "someoneElse": {
+          "title": "{{address}} is someone else now",
+          "body": "This address belonged to someone you met before; the invitation comes from someone else."
+        }
+      }
+    },
+    "ownerChanged": {
+      "row": "{{address}}'s calendar is closed",
+      "title": "{{address}}'s identity changed",
+      "body": "A calendar shared with you by {{address}} stays closed: the account behind the address is not the one you met before. Trust the new one only if you know why it changed.",
+      "keepClosed": "Keep it closed",
+      "trust": "Trust the new identity"
+    },
+    "recipients": {
+      "title": "The new key goes to",
+      "onlyYou": "Only you: nobody else stays.",
+      "state": {
+        "verified": "Verified",
+        "known": "As before",
+        "new": "First time",
+        "changed": "Identity changed",
+        "invalid": "Keys not signed",
+        "someoneElse": "Someone else now"
+      }
+    },
+    "replaceLinks": {
+      "intro_one": "This calendar has {{count}} link with its key:",
+      "intro_other": "This calendar has {{count}} links with its key:",
+      "label": "Also replace links",
+      "hint": "They are deleted and made again under new keys, so anyone the removed person gave them to loses access. You get the new addresses.",
+      "doneTitle": "New links",
+      "doneDescription": "The old links no longer work. Give these to whoever should keep seeing the calendar.",
+      "notRemade": "The key changed and the old links were removed, but these couldn't be made again. Make them again from Links:"
+    },
+    "due": {
+      "banner": "Key change pending — review",
+      "title": "Change the key of {{name}}",
+      "description": "Someone who had this calendar's key no longer has the calendar. A new key goes to everyone who still has it:",
+      "doubt": "Not everyone here is someone you already know. Check the list before you go on: the new key goes to exactly these people.",
+      "failed": "The key wasn't changed.",
+      "done": "The key of {{name}} was changed",
+      "confirm": "Change the key"
+    }
+  },
+  "busy": {
+    "share": "Show others when I'm busy",
+    "shareHint": "People in your organization can see when you're busy from this calendar: times only, never what or where."
+  },
+  "publicLink": {
+    "opening": "Opening the calendar…",
+    "busyTitle": "Busy times",
+    "fullNote": "Shared by link. The calendar opened in this browser: Kutup's server can't read it.",
+    "busyNote": "Shared by link: when its owner is busy, nothing more.",
+    "weeks": "Weeks",
+    "previous": "Previous week",
+    "next": "Next week",
+    "today": "Today",
+    "allDay": "All day",
+    "busy": "Busy",
+    "untitled": "(no title)",
+    "free": "Nothing",
+    "unreadable_one": "{{count}} event couldn't be opened.",
+    "unreadable_other": "{{count}} events couldn't be opened.",
+    "forApps": {
+      "title": "This link is for calendar apps",
+      "body": "Add it to a calendar app that subscribes to calendar addresses; it doesn't open here."
+    },
+    "errors": {
+      "gone": {
+        "title": "This link doesn't work any more",
+        "body": "Its owner deleted it, or it never existed. Ask them for a new one."
+      },
+      "incomplete": {
+        "title": "This link is incomplete",
+        "body": "The part after the # is missing, and the calendar can't be opened without it. Copy the whole link again."
+      },
+      "unreadable": {
+        "title": "This calendar can't be opened",
+        "body": "The link may have been changed on the way. Copy the whole link again, or ask its owner for a new one."
+      },
+      "events": "The events couldn't be loaded. Try again."
     }
   }
 }

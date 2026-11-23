@@ -35,6 +35,8 @@ pub enum Per {
     LinkAndAddress,
     /// One open connection (a collaboration socket).
     Connection,
+    /// One public link (a calendar's).
+    Link,
     /// The whole server.
     Server,
 }
@@ -239,6 +241,9 @@ pub enum Limit {
     ForwardingOutsideAccount,
     // Calendar.
     CalendarWrites,
+    CalendarBusy,
+    CalendarLinkFetches,
+    CalendarLinkFetchesPerLink,
     // Calls and maps.
     CallLinks,
     CallLinkPolls,
@@ -1044,6 +1049,36 @@ pub static SPECS: &[Spec] = &[
         Account,
         Calendar,
         "Calendar changes: calendars made or changed and event syncs."
+    ),
+    spec!(
+        CalendarBusy,
+        "calendar.rate.busy",
+        None,
+        60,
+        Events(MINUTE),
+        Account,
+        Calendar,
+        "Busy-times questions about other people."
+    ),
+    spec!(
+        CalendarLinkFetches,
+        "calendar.rate.link_fetches",
+        Some("RATE_LIMIT_CALENDAR_LINK_PER_MIN"),
+        30,
+        Events(MINUTE),
+        Address,
+        Calendar,
+        "Fetches of public calendar links, which need no account."
+    ),
+    spec!(
+        CalendarLinkFetchesPerLink,
+        "calendar.rate.link_fetches_per_link",
+        Some("RATE_LIMIT_CALENDAR_LINK_EACH_PER_MIN"),
+        60,
+        Events(MINUTE),
+        Link,
+        Calendar,
+        "Fetches of one public calendar link, from every address together."
     ),
     spec!(
         CallLinks,

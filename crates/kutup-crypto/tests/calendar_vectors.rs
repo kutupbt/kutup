@@ -421,6 +421,11 @@ fn calendar_vectors_open() {
         shared.dtend.unwrap().instant().unwrap().to_string(),
         v.end_utc
     );
+    // Its key packets name this generation's key (E3: which key opens it).
+    assert_eq!(
+        kutup_crypto::calendar::event_key_id(&event).unwrap(),
+        unlocked.key_id().unwrap()
+    );
     let opened = unlocked.open_event(&event, &[&owner_public]).unwrap();
     assert!(opened.verified);
     assert_eq!(

@@ -146,11 +146,15 @@ async fn recompute_for(
            FROM calendar_members m
            LEFT JOIN calendar_event_reminders r ON r.event_id = $2 AND r.account_id = m.account_id
            LEFT JOIN calendar_account_settings s ON s.account_id = m.account_id
-          WHERE m.calendar_id = $1 AND ($3::uuid IS NULL OR m.account_id = $3)",
+          WHERE m.calendar_id = $1 AND ($3::uuid IS NULL OR m.account_id = $3)
+            AND (m.permissions & $4) <> 0",
     )
     .bind(calendar)
     .bind(event_id)
     .bind(only)
+    // A member shown busy times only (`AVAILABILITY`) gets no alarms
+    // (docs/plans/calendar-e3.md §1).
+    .bind(crate::handlers::calendar::READ)
     .fetch_all(&mut *conn)
     .await?;
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
