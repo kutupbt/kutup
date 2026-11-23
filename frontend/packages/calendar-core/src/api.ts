@@ -485,7 +485,8 @@ export async function editRoster(session: Session, calendarId: string, edit: (ta
     const opened = await openScopeRecord<CalendarSettingsRecord>(session.masterKeys, session.envelopeBinding, SETTINGS_SCOPE, id, stored.envelope)
     const now = typeof opened.value.roster === 'string' ? splitRoster(opened.value.roster) : null
     const next = edit(now)
-    const { roster: _old, ...rest } = opened.value
+    const rest: CalendarSettingsRecord = { ...opened.value }
+    delete rest.roster
     const revision = stored.revision + 1
     let envelope: string
     try {
