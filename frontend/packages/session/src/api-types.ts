@@ -331,6 +331,14 @@ export interface AdminSettings {
   calendarPushSubscriptionsPerAccount: number
   calendarWindowDays: number
   calendarEventsPage: number
+  /** Calendar sharing (docs/plans/calendar-e3.md). */
+  calendarMembersPerCalendar: number
+  calendarLinksPerCalendar: number
+  /** 1: links with the key in the address are allowed; 0: off. */
+  calendarQueryLinksAllowed: number
+  calendarInvitationDays: number
+  calendarBusyWindowDays: number
+  calendarKeyGenerations: number
   /** Every device of an account, of every app (site_settings::DEVICES_PER_ACCOUNT). */
   devicesPerAccount: number
   /** How long a new device's row waits to be listed (site_settings::DEVICE_LISTING_GRACE_SECONDS). */

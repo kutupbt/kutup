@@ -68,7 +68,7 @@ pub(crate) fn limited(user_id: Uuid) -> AppResult<()> {
     }
 }
 
-fn b64(value: &str, what: &str) -> AppResult<Vec<u8>> {
+pub(crate) fn b64(value: &str, what: &str) -> AppResult<Vec<u8>> {
     STANDARD
         .decode(value)
         .ok()
@@ -76,7 +76,7 @@ fn b64(value: &str, what: &str) -> AppResult<Vec<u8>> {
         .ok_or_else(|| AppError::bad_request(format!("{what} is not canonical base64")))
 }
 
-fn crypto(error: kutup_crypto::error::CryptoError) -> AppError {
+pub(crate) fn crypto(error: kutup_crypto::error::CryptoError) -> AppError {
     match error {
         kutup_crypto::error::CryptoError::AuthFailed => {
             AppError::bad_request("a signature or key packet does not verify")
@@ -106,10 +106,43 @@ pub struct CalendarView {
     /// The member's default reminders for the calendar's events (Proton's
     /// DefaultPartDayNotifications and DefaultFullDayNotifications).
     pub default_reminders: DefaultReminders,
+    /// This member shows others when they're busy from this calendar
+    /// (docs/plans/calendar-e3.md §4).
+    pub share_busy: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
+    /// The owner, on a calendar someone else owns: who signed the member's
+    /// shares, which the member checks against its pins (E3 §1).
+    pub owner: Option<CalendarOwnerView>,
+    /// Every key generation the member holds a share of, oldest first (§2):
+    /// older events open with their own generation's key.
+    pub keys: Vec<CalendarKeyView>,
+}
+
+/// A calendar's owner as a member is told: checked against its pins.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarOwnerView {
+    pub account_id: Uuid,
+    /// Their address now (`username@server`).
+    pub address: String,
+    /// Their account incarnation (hex).
+    pub incarnation_id: String,
+    /// Their account signing key (base64), which signs the shares.
+    pub signing_public_key: String,
+}
+
+/// One key generation with the caller's share of its passphrase.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarKeyView {
+    pub key_generation: i32,
+    pub public_key: String,
+    pub fingerprint: String,
+    pub locked_secret_key: String,
+    pub passphrase_share: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -140,6 +173,7 @@ struct ViewRow {
     permissions: i32,
     default_reminders_timed: serde_json::Value,
     default_reminders_all_day: serde_json::Value,
+    share_busy: bool,
     created_at: time::OffsetDateTime,
     updated_at: time::OffsetDateTime,
 }
@@ -149,14 +183,14 @@ struct ViewRow {
 /// A calendar row's key suite (`calendars.suite`): 1 is the current
 /// Ed25519/X25519 calendar key; a post-quantum key is a new value
 /// (docs/plans/calendar.md, M2).
-const CALENDAR_SUITE: i16 = 1;
+pub(crate) const CALENDAR_SUITE: i16 = 1;
 
 const VIEW: &str =
     "SELECT c.id, c.owner_account_id, k.public_key, k.fingerprint, k.locked_secret_key,
         c.key_generation, s.share AS passphrase_share,
         c.metadata_key_packet, c.metadata_data_packet, c.metadata_signature,
         m.permissions, m.default_reminders_timed, m.default_reminders_all_day,
-        c.created_at, c.updated_at
+        m.share_busy, c.created_at, c.updated_at
    FROM calendar_members m
    JOIN calendars c ON c.id = m.calendar_id
    JOIN calendar_keys k ON k.calendar_id = c.id AND k.key_generation = c.key_generation
@@ -165,6 +199,9 @@ const VIEW: &str =
 
 fn view(row: ViewRow) -> CalendarView {
     CalendarView {
+        share_busy: row.share_busy,
+        owner: None,
+        keys: Vec::new(),
         id: row.id,
         owner_account_id: row.owner_id,
         public_key: STANDARD.encode(row.public_key),
@@ -195,8 +232,112 @@ async fn fetch(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<CalendarV
     .bind(id)
     .fetch_optional(&state.pool)
     .await?;
-    row.map(view)
-        .ok_or_else(|| AppError::not_found("not found"))
+    let mut view = row
+        .map(view)
+        .ok_or_else(|| AppError::not_found("not found"))?;
+    complete(state, user_id, std::slice::from_mut(&mut view)).await?;
+    Ok(view)
+}
+
+/// Fills each calendar's key generations (the caller's shares) and, on
+/// one someone else owns, its owner.
+pub(crate) async fn complete(
+    state: &AppState,
+    user_id: Uuid,
+    views: &mut [CalendarView],
+) -> AppResult<()> {
+    if views.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<Uuid> = views.iter().map(|view| view.id).collect();
+    let keys = keys_of(&state.pool, user_id, &ids).await?;
+    let owners: Vec<Uuid> = views
+        .iter()
+        .filter(|view| view.owner_account_id != user_id)
+        .map(|view| view.owner_account_id)
+        .collect();
+    let owners = owners_of(state, &owners).await?;
+    for view in views {
+        view.keys = keys
+            .iter()
+            .filter(|(calendar, _)| *calendar == view.id)
+            .map(|(_, key)| key.clone())
+            .collect();
+        if view.owner_account_id != user_id {
+            view.owner = owners
+                .iter()
+                .find(|owner| owner.account_id == view.owner_account_id)
+                .cloned();
+        }
+    }
+    Ok(())
+}
+
+/// The caller's shares of each calendar's key generations, oldest first.
+pub(crate) async fn keys_of<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    user_id: Uuid,
+    calendars: &[Uuid],
+) -> AppResult<Vec<(Uuid, CalendarKeyView)>> {
+    type Row = (Uuid, i32, Vec<u8>, String, Vec<u8>, Vec<u8>);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT k.calendar_id, k.key_generation, k.public_key, k.fingerprint,
+                k.locked_secret_key, s.share
+           FROM calendar_keys k
+           JOIN calendar_member_shares s
+             ON s.calendar_id = k.calendar_id AND s.key_generation = k.key_generation
+          WHERE s.account_id = $1 AND k.calendar_id = ANY($2)
+          ORDER BY k.calendar_id, k.key_generation",
+    )
+    .bind(user_id)
+    .bind(calendars)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(calendar, generation, public_key, fingerprint, locked, share)| {
+                (
+                    calendar,
+                    CalendarKeyView {
+                        key_generation: generation,
+                        public_key: STANDARD.encode(public_key),
+                        fingerprint,
+                        locked_secret_key: STANDARD.encode(locked),
+                        passphrase_share: STANDARD.encode(share),
+                    },
+                )
+            },
+        )
+        .collect())
+}
+
+/// Owners as their calendars' members are told about them.
+pub(crate) async fn owners_of(
+    state: &AppState,
+    accounts: &[Uuid],
+) -> AppResult<Vec<CalendarOwnerView>> {
+    if accounts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<(Uuid, String, String, String)> = sqlx::query_as(
+        "SELECT id, username, encode(account_incarnation_id, 'hex'),
+                COALESCE(kutup_b64(drive_signing_public_key), '')
+           FROM accounts WHERE id = ANY($1)",
+    )
+    .bind(accounts)
+    .fetch_all(&state.pool)
+    .await?;
+    let domain = &state.config.chat_server_name;
+    Ok(rows
+        .into_iter()
+        .map(|(id, username, incarnation, signing)| CalendarOwnerView {
+            account_id: id,
+            address: format!("{username}@{domain}"),
+            incarnation_id: incarnation,
+            signing_public_key: signing,
+        })
+        .collect())
 }
 
 /// `GET /api/v1/calendar/calendars` — the caller's calendars.
@@ -218,14 +359,14 @@ pub async fn list(
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(CalendarList {
-        calendars: rows.into_iter().map(view).collect(),
-    }))
+    let mut calendars: Vec<CalendarView> = rows.into_iter().map(view).collect();
+    complete(&state, user_id, &mut calendars).await?;
+    Ok(Json(CalendarList { calendars }))
 }
 
 /// The longest passphrase share taken, in base64: two accounts on the
 /// longest server names (the column holds 2048 bytes).
-const MAX_SHARE_B64: usize = 2048 / 3 * 4 + 4;
+pub(crate) const MAX_SHARE_B64: usize = 2048 / 3 * 4 + 4;
 
 /// The caller's active address `address_id` and its keys that may still
 /// verify (Mail's `FLAG_NOT_COMPROMISED`): what an author's parts are
@@ -430,6 +571,8 @@ pub struct CalendarUpdate {
     pub metadata: Option<SealedMetadataV1>,
     /// The member's own default reminders.
     pub default_reminders: Option<DefaultReminders>,
+    /// Show others when this member is busy from this calendar (times only).
+    pub share_busy: Option<bool>,
 }
 
 /// `PUT /api/v1/calendar/calendars/{id}`
@@ -534,6 +677,16 @@ pub async fn update(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
+    if let Some(share_busy) = input.share_busy {
+        sqlx::query(
+            "UPDATE calendar_members SET share_busy = $3 WHERE calendar_id = $1 AND account_id = $2",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(share_busy)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(Json(fetch(&state, user_id, id).await?))
 }
@@ -576,6 +729,18 @@ pub async fn delete(
     if permissions & SUPER_OWNER == 0 {
         return Err(AppError::forbidden("only the owner deletes a calendar"));
     }
+    // Every other member is told, once (docs/plans/calendar-e3.md §1).
+    sqlx::query(
+        "INSERT INTO calendar_member_tombstones (calendar_id, account_id, reason)
+         SELECT calendar_id, account_id, 'deleted' FROM calendar_members
+          WHERE calendar_id = $1 AND account_id <> $2
+         ON CONFLICT (calendar_id, account_id)
+            DO UPDATE SET reason = EXCLUDED.reason, created_at = now()",
+    )
+    .bind(id)
+    .bind(owner)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("DELETE FROM calendars WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)
@@ -641,7 +806,7 @@ pub struct EventPage {
 }
 
 #[derive(sqlx::FromRow)]
-struct EventRow {
+pub(crate) struct EventRow {
     id: Uuid,
     calendar_id: Uuid,
     uid: String,
@@ -668,7 +833,7 @@ struct EventRow {
 
 /// The events as their caller sees them, with the caller's own reminders:
 /// the caller's id is bind parameter `$caller`.
-fn event_view_sql(caller: u8) -> String {
+pub(crate) fn event_view_sql(caller: u8) -> String {
     format!(
         "SELECT e.id, e.calendar_id, se.uid, a.address AS author_address,
         e.shared_key_packet, e.calendar_key_packet,
@@ -685,7 +850,7 @@ fn event_view_sql(caller: u8) -> String {
     )
 }
 
-fn event_view(row: EventRow) -> EventView {
+pub(crate) fn event_view(row: EventRow) -> EventView {
     use kutup_crypto::calendar::EventPartV1;
     EventView {
         id: row.id,
@@ -731,7 +896,7 @@ fn event_view(row: EventRow) -> EventView {
 
 /// The caller's permissions on a calendar, or 404 (a calendar the caller
 /// isn't a member of doesn't exist for it).
-async fn member_permissions(
+pub(crate) async fn member_permissions(
     conn: &mut sqlx::PgConnection,
     user_id: Uuid,
     calendar: Uuid,
@@ -758,7 +923,7 @@ pub struct EventsQuery {
     pub limit: Option<i64>,
 }
 
-fn instant(value: &str, what: &str) -> AppResult<time::OffsetDateTime> {
+pub(crate) fn instant(value: &str, what: &str) -> AppResult<time::OffsetDateTime> {
     time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
         .map_err(|_| AppError::bad_request(format!("{what} is not an RFC 3339 time")))
 }
@@ -1020,7 +1185,7 @@ fn to_time(time: &EventTime) -> AppResult<time::OffsetDateTime> {
         .map_err(|_| AppError::bad_request("a time is out of range"))
 }
 
-fn coded(error: AppError, code: &str) -> AppError {
+pub(crate) fn coded(error: AppError, code: &str) -> AppError {
     error.with_details(serde_json::json!({ "code": code }))
 }
 
@@ -1039,6 +1204,16 @@ fn check_event(
     max_count: i64,
 ) -> AppResult<Checked> {
     let event = event.to_event().map_err(crypto)?;
+    // Written under the newest key generation only: one under an older key
+    // is a member's client that missed a rotation (or a removed member's).
+    if cal::event_key_id(&event).map_err(crypto)?
+        != cal::encryption_key_id(calendar_public_key).map_err(crypto)?
+    {
+        return Err(coded(
+            AppError::conflict("the event is not to the calendar's newest key; reload it"),
+            "keyRotated",
+        ));
+    }
     cal::check_sealed_shape(&event, calendar_public_key).map_err(crypto)?;
     let authors: Vec<&[u8]> = author_keys.iter().map(Vec::as_slice).collect();
     let (shared, calendar) = cal::check_signed_parts(&event, &authors).map_err(crypto)?;
@@ -1184,7 +1359,10 @@ pub async fn sync(
             "a sync carries 1 to {batch} changes"
         )));
     }
-    let (public_key, owner): (Vec<u8>, Uuid) = {
+    // The newest key generation: an event is written under it only, so a
+    // removed member's stale client can't keep writing under an old key
+    // (docs/plans/calendar-e3.md, "Decisions").
+    let (public_key, owner, generation): (Vec<u8>, Uuid, i32) = {
         let mut conn = state.pool.acquire().await?;
         if member_permissions(&mut conn, user_id, id).await? & WRITE == 0 {
             return Err(AppError::forbidden(
@@ -1192,7 +1370,7 @@ pub async fn sync(
             ));
         }
         sqlx::query_as(
-            "SELECT k.public_key, c.owner_account_id FROM calendars c
+            "SELECT k.public_key, c.owner_account_id, c.key_generation FROM calendars c
                JOIN calendar_keys k ON k.calendar_id = c.id AND k.key_generation = c.key_generation
               WHERE c.id = $1",
         )
@@ -1216,7 +1394,7 @@ pub async fn sync(
             owner,
             user_id,
             input.address_id,
-            &public_key,
+            (&public_key, generation),
             &author_keys,
             max_events,
             max_count,
@@ -1274,7 +1452,7 @@ async fn apply(
     owner: Uuid,
     user_id: Uuid,
     address_id: Uuid,
-    public_key: &[u8],
+    (public_key, generation): (&[u8], i32),
     author_keys: &[Vec<u8>],
     max_events: i64,
     max_count: i64,
@@ -1295,8 +1473,8 @@ async fn apply(
     // The calendar row orders the calendar's writes (the count, the UID),
     // and under it the caller is still a member who may write: a calendar
     // deleted or a member removed since the sync began is 404 or 403.
-    let permissions: Option<i32> = sqlx::query_scalar(
-        "SELECT m.permissions FROM calendars c
+    let permissions: Option<(i32, i32)> = sqlx::query_as(
+        "SELECT m.permissions, c.key_generation FROM calendars c
            JOIN calendar_members m ON m.calendar_id = c.id AND m.account_id = $2
           WHERE c.id = $1
           FOR UPDATE OF c",
@@ -1307,9 +1485,17 @@ async fn apply(
     .await?;
     match permissions {
         None => return Err(AppError::not_found("not found")),
-        Some(permissions) if permissions & WRITE == 0 => {
+        Some((permissions, _)) if permissions & WRITE == 0 => {
             return Err(AppError::forbidden(
                 "you may not change this calendar's events",
+            ))
+        }
+        // The key rotated since the parts were checked: they are to an old
+        // generation's key.
+        Some((_, newest)) if checked.is_some() && newest != generation => {
+            return Err(coded(
+                AppError::conflict("the calendar's key changed; reload it"),
+                "keyRotated",
             ))
         }
         Some(_) => {}

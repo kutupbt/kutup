@@ -2982,6 +2982,108 @@ permissions are checked again in each change's transaction, so a member
 removed mid-sync writes nothing further. Everything is charged to the
 calendar owner's storage pool.
 
+An event written under any key but the calendar's newest generation is
+`409 keyRotated` (sharing, below): a removed member's stale client never
+writes under an old key.
+
+### Sharing (docs/plans/calendar-e3.md)
+
+Only the owner shares, with accounts of this server, as one of Proton's two
+presets: edit (`WRITE | READ | AVAILABILITY`, 112) or view (`READ |
+AVAILABILITY`, 96); anything else is `400 invalidPermissions`. The server
+never holds a passphrase: each key generation's is shared on account keys
+(`CalendarShareEnvelopeV1`), and every share is checked against its binding
+(calendar, generation, owner, member, incarnations) and the owner's account
+signature before it is stored (`400 shareNotBound`). A calendar view carries
+`shareBusy`, `keys` (every generation the caller holds a share of: `{
+keyGeneration, publicKey, fingerprint, lockedSecretKey, passphraseShare }`,
+oldest first) and, on a calendar someone else owns, `owner` (`{ accountId,
+address, incarnationId, signingPublicKey }`, checked by the client against
+its pins). `PUT /calendars/{id}` takes `shareBusy` too.
+
+- `GET /api/v1/calendar/calendars/{id}/keys` → `{ keys }`, the caller's.
+- `GET /api/v1/calendar/calendars/{id}/members` → `{ members: [{ accountId,
+  address, permissions, addedAt }], invitations: [{ id, accountId, address,
+  permissions, state: pending | declined, createdAt, expiresAt }] }`, the
+  owner's only (the owner is not listed).
+- `POST /api/v1/calendar/calendars/{id}/invitations { accountId,
+  incarnationId, permissions, shares: [{ keyGeneration, share }] }`: one
+  share of every live generation (`400 sharesIncomplete`); `409
+  alreadyShared`, `409 memberLimit` (`calendarMembersPerCalendar`, 49,
+  pending invitations counted), `409 identityChanged` when the incarnation
+  is no longer the account's. An invitation lives
+  `calendarInvitationDays` (7) and is swept after. A pending invitation's
+  shares are stored beside the members' (`calendar_member_shares`, keyed by
+  calendar, account and generation), so a rotation gives it the new
+  generation too.
+- `DELETE /api/v1/calendar/calendars/{id}/invitations/{invitationId}`.
+- `PATCH /api/v1/calendar/calendars/{id}/members/{accountId} { permissions }`:
+  the other preset; the member's alarms are worked out again (a member
+  without `READ` gets none).
+- `DELETE /api/v1/calendar/calendars/{id}/members/me`: a member leaves; an
+  owner is `400`.
+- `POST /api/v1/calendar/calendars/{id}/keys/rotate { removeAccountId,
+  fromKeyGeneration, keyGeneration, publicKey, lockedSecretKey, ownShare,
+  memberShares: [{ accountId, share }], metadata, links: [{ id, passphrase,
+  secret }] }`: removes a member and makes the next key generation in one
+  transaction. `memberShares` names every member who stays and every
+  pending invitation (`400 sharesIncomplete`), `links` every full and query
+  link (`400 linksIncomplete`); `409 keyGenerationBehind` when
+  `fromKeyGeneration` is not the newest, `409 keyGenerationLimit` at
+  `calendarKeyGenerations` (50). The removed member's shares, alarms and
+  reminders go; it keeps what it could already read.
+- `GET /api/v1/calendar/invitations` → `{ invitations: [{ id, calendarId,
+  owner, permissions, metadata, keys, createdAt, expiresAt }] }`, the
+  caller's pending ones; `POST …/invitations/{id}/accept` (after the client
+  files its `calendarSettings` record; `409 sharesIncomplete` if a
+  generation's share is missing) and `…/decline` (the owner sees it
+  declined, its shares go).
+- `GET /api/v1/calendar/tombstones` → `{ tombstones: [{ calendarId, reason:
+  removed | left | deleted, createdAt }] }`: told once; the client drops the
+  calendar's settings record, then `DELETE
+  /api/v1/calendar/tombstones/{calendarId}`.
+- `GET /api/v1/calendar/busy?address=&start=&end=` → `{ busy: [{ startUtc,
+  endUtc, fullDay }] }`: the person's busy blocks from their calendars with
+  `shareBusy`, from the readable times (transparent and cancelled events
+  left out, series expanded), answered only to the person or a member of
+  their organization (Proton's rule); anyone else gets an empty list. The
+  window is at most `calendarBusyWindowDays` (31; `400 busyWindowTooLong`);
+  `calendar.rate.busy` (60 a minute per account).
+
+### Links
+
+Three kinds, at most `calendarLinksPerCalendar` (5) a calendar, made and
+deleted by the owner while public sharing is on (`403 sharingOff`):
+
+- `full`: the page `https://calendar.<domain>/l/{id}#<secret>`; the secret
+  stays in the fragment. The link holds every generation's passphrase sealed
+  under a key derived from the secret, and the members' copy of the secret
+  sealed under the newest passphrase.
+- `query`: the feed `…/calendar/links/{id}/calendar.ics?key=<secret>` for
+  other calendar apps; the server opens the calendar with the key on each
+  fetch. Off when `calendarQueryLinksAllowed` is 0 (`403 queryLinksOff`).
+  Neither the server's request log nor nginx's access log carries the
+  query of a link's path.
+- `busy`: page and feed of busy blocks only, no key.
+
+`GET /api/v1/calendar/calendars/{id}/links` → `{ links: [{ id, kind,
+secret: { keyGeneration, sealed } | null, purpose?, createdAt }] }`; `POST`
+the same with `{ id, kind, secret?, passphrases?: [{ keyGeneration, sealed
+}], purpose? }` (`409 linkLimit`); `DELETE …/links/{linkId}`.
+
+Without an account (`calendar.rate.link_fetches`, 120 a minute per address,
+and `…link_fetches_per_link`, 600 a minute per link; `410 sharingOff` while
+sharing is off for the site or the owner):
+
+- `GET /api/v1/calendar/links/{id}` → `{ calendarId, kind, metadata?, keys?:
+  [{ keyGeneration, fingerprint, lockedSecretKey, passphrase }] }`;
+- `GET …/links/{id}/events?start=&end=&afterStart=&afterId=` → `{ events:
+  [{ id, event, startUtc, endUtc, fullDay }], next }` (keyed links);
+- `GET …/links/{id}/busy?start=&end=` → `{ busy }`;
+- `GET …/links/{id}/calendar.ics[?key=]`: a busy link's blocks (a month back
+  to a year ahead, `SUMMARY:Busy`) or a query link's events; a full link has
+  none. A wrong key answers `404`, as a link that isn't there.
+
 ## Maps
 
 Kutup stores no map data (docs/plans/maps.md). The administrator chooses the

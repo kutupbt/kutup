@@ -681,6 +681,7 @@ pub async fn get_public_settings(
         old_address_receive_days,
         pass_vault_max_bytes: crate::site_settings::pass_vault_max_bytes(&state.pool).await?,
         public_sharing: crate::public_sharing::site(&state.pool).await?,
+        calendar: calendar_settings(&state.pool, &user).await?,
     })
     .into_response();
     // A signed-in caller's answer holds its own limits: no shared cache.
@@ -695,6 +696,39 @@ pub async fn get_public_settings(
         );
     }
     Ok(response)
+}
+
+/// Calendar sharing's settings as `/auth/settings` publishes them: the
+/// caller's own limits when signed in, else the site's.
+async fn calendar_settings(
+    pool: &sqlx::PgPool,
+    user: &Option<AuthAccount>,
+) -> AppResult<crate::models::CalendarPublicSettings> {
+    use crate::site_settings::{
+        CALENDAR_BUSY_WINDOW_DAYS, CALENDAR_LINKS_PER_CALENDAR, CALENDAR_MEMBERS_PER_CALENDAR,
+        CALENDAR_QUERY_LINKS_ALLOWED,
+    };
+    let account = user
+        .as_ref()
+        .and_then(|user| uuid::Uuid::parse_str(&user.account_id).ok());
+    let (members, links) = match account {
+        Some(account) => (
+            CALENDAR_MEMBERS_PER_CALENDAR
+                .load_for(pool, account)
+                .await?,
+            CALENDAR_LINKS_PER_CALENDAR.load_for(pool, account).await?,
+        ),
+        None => (
+            CALENDAR_MEMBERS_PER_CALENDAR.load_site(pool).await?,
+            CALENDAR_LINKS_PER_CALENDAR.load_site(pool).await?,
+        ),
+    };
+    Ok(crate::models::CalendarPublicSettings {
+        query_links_allowed: CALENDAR_QUERY_LINKS_ALLOWED.load(pool).await? == 1,
+        members_per_calendar: members,
+        links_per_calendar: links,
+        busy_window_days: CALENDAR_BUSY_WINDOW_DAYS.load(pool).await?,
+    })
 }
 
 /// `POST /api/v1/auth/register` — mirrors `Register`.

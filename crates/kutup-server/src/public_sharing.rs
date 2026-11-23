@@ -195,6 +195,38 @@ pub async fn ensure_link_up(pool: &PgPool, token: &str, signed_in: bool) -> AppR
     Ok(())
 }
 
+/// The same answers for a calendar's link (docs/plans/calendar-e3.md §3),
+/// which has no token row of Drive's: its owner's account must be active,
+/// and sharing on for the site and the owner. A calendar link is never
+/// blocked or taken down one by one; deleting it is its owner's.
+pub async fn ensure_calendar_link_up(
+    pool: &PgPool,
+    owner: uuid::Uuid,
+    signed_in: bool,
+) -> AppResult<()> {
+    let (active, account_sharing): (bool, Option<i64>) = sqlx::query_as(
+        "SELECT u.state = 'active',
+                (SELECT value FROM account_entitlements WHERE account_id = u.id AND key = $2)
+           FROM accounts u WHERE u.id = $1",
+    )
+    .bind(owner)
+    .bind(crate::entitlements::PUBLIC_SHARING)
+    .fetch_one(pool)
+    .await?;
+    let site = site(pool).await?;
+    if site == PublicSharing::SignedIn && !signed_in {
+        return Err(sign_in_required());
+    }
+    if !active {
+        return Err(crate::handlers::link_reports::link_removed());
+    }
+    if site == PublicSharing::Off || account_switch(account_sharing) == "off" {
+        return Err(AppError::new(StatusCode::GONE, "public sharing is off")
+            .with_details(json!({ "code": "sharingOff" })));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

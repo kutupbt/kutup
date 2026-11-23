@@ -75,6 +75,20 @@ pub struct SettingsResponse {
     /// Who may open public links: `on`, `off` or `signedIn` (the share
     /// dialogs say why links are off).
     pub public_sharing: crate::public_sharing::PublicSharing,
+    /// Calendar sharing's limits and switches (docs/plans/calendar-e3.md):
+    /// a signed-in caller's own where it has one.
+    pub calendar: CalendarPublicSettings,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarPublicSettings {
+    /// Links with the key in the address are allowed.
+    pub query_links_allowed: bool,
+    pub members_per_calendar: i64,
+    pub links_per_calendar: i64,
+    /// The widest window one busy-times question asks, in days.
+    pub busy_window_days: i64,
 }
 
 /// What the feedback form offers besides sending to the administrators.

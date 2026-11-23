@@ -345,6 +345,7 @@ export async function loadCalendars(
 ): Promise<{ calendars: Calendar[]; unreadable: number; ownerChanged: OwnerIdentityChanged[] }> {
   const settings = await loadSettings(session)
   const { data } = await api.get<{ calendars: CalendarRow[] }>('/calendar/calendars')
+  if (settings) await settleTombstones(session, new Set(data.calendars.map((row) => row.id)))
   const guard = revisionGuard(session)
   let unreadable = 0
   const ownerChanged: OwnerIdentityChanged[] = []
@@ -389,6 +390,37 @@ export async function loadCalendars(
     }
   }
   return { calendars, unreadable, ownerChanged }
+}
+
+/** A calendar this account stopped being a member of (docs/plans/calendar-e3.md §1). */
+interface Tombstone {
+  calendarId: string
+  reason: 'removed' | 'left' | 'deleted'
+}
+
+/**
+ * Reads what the server says once: calendars this account was removed
+ * from, left on another device, or whose owner deleted them. Their
+ * settings records go (the calendar is never accepted back under them),
+ * then the tombstones. Best effort: the next listing tries again.
+ */
+async function settleTombstones(session: Session, listed: Set<string>): Promise<void> {
+  let tombstones: Tombstone[]
+  try {
+    tombstones = (await api.get<{ tombstones: Tombstone[] }>('/calendar/tombstones')).data.tombstones ?? []
+  } catch {
+    return
+  }
+  for (const tombstone of tombstones) {
+    // Back as a member since (invited again): nothing to drop.
+    if (listed.has(tombstone.calendarId)) continue
+    try {
+      await forgetCalendarSettings(session, tombstone.calendarId)
+      await api.delete(`/calendar/tombstones/${encodeURIComponent(tombstone.calendarId)}`)
+    } catch {
+      // Tried again on the next listing.
+    }
+  }
 }
 
 /** Writes a calendar's settings record at the next revision (a newer client's fields kept). */

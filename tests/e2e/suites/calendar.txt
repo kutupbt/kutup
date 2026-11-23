@@ -1,3 +1,9 @@
 specs/115-calendar.spec.ts
 specs/117-calendar-drag.spec.ts
 specs/118-calendar-reminders.spec.ts
+specs/201-calendar-share-accept.spec.ts
+specs/202-calendar-share-remove.spec.ts
+specs/203-calendar-link-full.spec.ts
+specs/204-calendar-link-busy-feed.spec.ts
+specs/205-calendar-share-decline-leave.spec.ts
+specs/206-calendar-busy-switch.spec.ts

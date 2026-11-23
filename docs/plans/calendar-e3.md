@@ -3,7 +3,8 @@
 Status: approved by the main session 2026-11-17 with the recommended answers to Q-1 to Q-5 (see "Decisions"). Plan by the third session. Phase E3 of
 [`calendar.md`](calendar.md), on its decisions D-1 to D-4 and the W4 key
 model (a calendar's passphrase shared on account keys,
-`CalendarShareEnvelopeV1`). Nothing is built. Code starts from `wipe/final`
+`CalendarShareEnvelopeV1`). Built on `post-wipe/calendar-e3` (E3a–E3e; see
+"as built" under §6). Code starts from `wipe/final`
 once it is green, and merges after the wipe.
 
 Copies Proton's web client (`WebClients`, read 2026-11-17):
@@ -332,6 +333,41 @@ differs, only that module changes.
     the limited member's grid waits for a preset that needs it.
   - The default for new calendars (a calendar settings record field) is not
     built.
+
+**E3b as built** (`post-wipe/calendar-e3`, 2026-11-23; no migration, the
+tables are the W7 baseline's):
+
+- **Pending invitees' shares (decided 2026-11-23):** an invitation's shares
+  live in `calendar_member_shares`, keyed by calendar, account and
+  generation, beside the members'. That table has no foreign key to
+  `calendar_members`, so a share can belong to an invitation; a rotation
+  gives pending invitees the new generation like members, an accept turns
+  the invitation into a member row without moving a share, and a decline,
+  revoke or expiry drops them.
+- Routes as above (`docs/api.md`, "Sharing" and "Links"), in
+  `handlers/calendar_sharing.rs` and `handlers/calendar_links.rs`; busy
+  blocks in `calendar_busy.rs`. Every envelope is checked against its
+  binding and the owner's signature; the rotation is one transaction, and
+  an event sync re-checks the newest generation under the calendar's lock
+  (`409 keyRotated`).
+- Settings (Server settings → Calendar): `calendar.members_per_calendar`
+  (49) and `calendar.links_per_calendar` (5), both per account (they limit
+  the owner); `calendar.query_links_allowed` (1; a whole-number setting, 0
+  or 1, as the registry has no switch type); `calendar.invitation_days`
+  (7); `calendar.busy_window_days` (31); `calendar.key_generations` (50: a
+  rotation past it is refused, nothing is pruned).
+- Rate limits: `calendar.rate.busy` (per account) and, for the public link
+  routes, `calendar.rate.link_fetches` (per address) and
+  `calendar.rate.link_fetches_per_link` (a new `link` subject).
+- Public links follow the site's and the owner's public-sharing switch
+  (`drive.public_sharing`, A11), as Drive's links do.
+- A busy link's feed covers a month back to a year ahead.
+- Tombstones: `GET /calendar/tombstones` and `DELETE …/{calendarId}`; the
+  app drops a listed tombstone's settings record when it lists calendars.
+- Logging: the server's request span and nginx's `kutup` log format leave
+  a calendar link's query out; unit tests check both.
+- Tests: `crates/kutup-server/tests/calendar_sharing_live.rs` (in the live
+  backup gate), browser specs 201–206.
 
 Each slice is its own PR from its own worktree (`feat/calendar-e3a…`),
 opened after the wipe.

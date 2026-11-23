@@ -1050,6 +1050,18 @@
         "calendarWindowDaysHint": "Bir etkinlik sorgusunun isteyebileceği en uzun süre.",
         "calendarEventsPage": "Sayfa başına etkinlik",
         "calendarEventsPageHint": "Bir etkinlik sorgusu sayfasının taşıyabileceği en çok etkinlik.",
+        "calendarMembersPerCalendar": "Takvim başına üye",
+        "calendarMembersPerCalendarHint": "Bir takvimin paylaşıldığı kişiler, bekleyen davetler dahil.",
+        "calendarLinksPerCalendar": "Takvim başına bağlantı",
+        "calendarLinksPerCalendarHint": "Bir takvimin sahip olabileceği herkese açık bağlantılar.",
+        "calendarQueryLinksAllowed": "Anahtarı adreste taşıyan bağlantılar (1 açık, 0 kapalı)",
+        "calendarQueryLinksAllowedHint": "Diğer takvim uygulamaları için akış bağlantıları: sunucu takvimi her alındığında okur.",
+        "calendarInvitationDays": "Davet süresi (gün)",
+        "calendarInvitationDaysHint": "Bir takvim davetinin kabul edilmeyi bekleyeceği süre.",
+        "calendarBusyWindowDays": "En uzun meşgul zaman aralığı (gün)",
+        "calendarBusyWindowDaysHint": "Bir meşgul zaman sorusunun isteyebileceği en uzun süre.",
+        "calendarKeyGenerations": "Takvim başına anahtar kuşağı",
+        "calendarKeyGenerationsHint": "Çıkarılan her üye yeni bir takvim anahtarı oluşturur; bu sayıdan sonra üye çıkarma reddedilir.",
         "calendarMaxCount": "Sayıyla en çok tekrar",
         "calendarMaxCountHint": "Yinelenen bir etkinliğin alabileceği en büyük COUNT (Proton'unki 49).",
         "calendarRemindersPerEvent": "Etkinlik başına hatırlatıcı",
@@ -1626,6 +1638,7 @@
         "recipient": "alıcı",
         "forwarding": "yönlendirme",
         "connection": "bağlantı",
+        "link": "paylaşım bağlantısı",
         "server": "sunucu"
       },
       "countsEvents": "{{per}} başına {{window}}",
@@ -1747,7 +1760,10 @@
         },
         "calendar": {
           "rate": {
-            "writes": "Takvim değişiklikleri"
+            "writes": "Takvim değişiklikleri",
+            "busy": "Meşgul zaman soruları",
+            "link_fetches": "Herkese açık takvim bağlantısı istekleri",
+            "link_fetches_per_link": "Bir takvim bağlantısının istekleri"
           }
         },
         "server": {
@@ -1865,7 +1881,10 @@
         },
         "calendar": {
           "rate": {
-            "writes": "Takvim değişiklikleri: oluşturulan veya değiştirilen takvimler ve etkinlik eşitlemeleri."
+            "writes": "Takvim değişiklikleri: oluşturulan veya değiştirilen takvimler ve etkinlik eşitlemeleri.",
+            "busy": "Başka kişilerin meşgul zamanları hakkındaki sorular.",
+            "link_fetches": "Hesap gerektirmeyen herkese açık takvim bağlantılarının istekleri.",
+            "link_fetches_per_link": "Bir herkese açık takvim bağlantısının tüm adreslerden gelen istekleri."
           }
         },
         "server": {

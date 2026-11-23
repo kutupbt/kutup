@@ -205,6 +205,11 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test calendar_live -- --nocapture --test-threads 1
 
+# Calendar sharing (docs/plans/calendar-e3.md): invitations and presets, the
+# rotation that removes a member, links and their feeds, busy times.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  cargo test -p kutup-server --test calendar_sharing_live -- --nocapture --test-threads 1
+
 # The collaboration log over HTTP (the CLI's way in): kept like a socket's
 # frame, and every bad frame refused alike on both paths.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \

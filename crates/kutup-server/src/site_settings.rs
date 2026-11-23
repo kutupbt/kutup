@@ -801,7 +801,68 @@ pub const CALENDAR_EVENTS_PAGE: NumericSetting = NumericSetting {
     unit: SettingUnit::Count,
     per_account: false,
 };
-pub const CALENDAR_SETTINGS: [NumericSetting; 17] = [
+/// Sharing (docs/plans/calendar-e3.md): the members one calendar takes
+/// (pending invitations count; Proton's 49), its links (Proton's 5), and
+/// whether links with the key in the address are allowed (1, as Proton; 0
+/// off: the server reads the calendar on each fetch of one).
+pub const CALENDAR_MEMBERS_PER_CALENDAR: NumericSetting = NumericSetting {
+    key: "calendar.members_per_calendar",
+    field: "calendarMembersPerCalendar",
+    default: 49,
+    min: 1,
+    max: 500,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+pub const CALENDAR_LINKS_PER_CALENDAR: NumericSetting = NumericSetting {
+    key: "calendar.links_per_calendar",
+    field: "calendarLinksPerCalendar",
+    default: 5,
+    min: 0,
+    max: 50,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+pub const CALENDAR_QUERY_LINKS_ALLOWED: NumericSetting = NumericSetting {
+    key: "calendar.query_links_allowed",
+    field: "calendarQueryLinksAllowed",
+    default: 1,
+    min: 0,
+    max: 1,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+/// How long an invitation waits to be accepted before it is swept.
+pub const CALENDAR_INVITATION_DAYS: NumericSetting = NumericSetting {
+    key: "calendar.invitation_days",
+    field: "calendarInvitationDays",
+    default: 7,
+    min: 1,
+    max: 365,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// The widest window one busy-times query asks, in days.
+pub const CALENDAR_BUSY_WINDOW_DAYS: NumericSetting = NumericSetting {
+    key: "calendar.busy_window_days",
+    field: "calendarBusyWindowDays",
+    default: 31,
+    min: 1,
+    max: 366,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// The key generations one calendar keeps (each removal makes one).
+pub const CALENDAR_KEY_GENERATIONS: NumericSetting = NumericSetting {
+    key: "calendar.key_generations",
+    field: "calendarKeyGenerations",
+    default: 50,
+    min: 2,
+    max: 1000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const CALENDAR_SETTINGS: [NumericSetting; 23] = [
     CALENDARS_PER_ACCOUNT,
     CALENDAR_EVENTS_PER_CALENDAR,
     CALENDAR_SYNC_BATCH,
@@ -819,6 +880,12 @@ pub const CALENDAR_SETTINGS: [NumericSetting; 17] = [
     CALENDAR_ALARMS_PAGE,
     CALENDAR_WINDOW_DAYS,
     CALENDAR_EVENTS_PAGE,
+    CALENDAR_MEMBERS_PER_CALENDAR,
+    CALENDAR_LINKS_PER_CALENDAR,
+    CALENDAR_QUERY_LINKS_ALLOWED,
+    CALENDAR_INVITATION_DAYS,
+    CALENDAR_BUSY_WINDOW_DAYS,
+    CALENDAR_KEY_GENERATIONS,
 ];
 
 /// How long a Chat link token, and the provisioning socket of the device
