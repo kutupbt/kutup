@@ -1,5 +1,5 @@
 // The account's addresses as Proton's "Identity and addresses" manages them
-// (docs/api.md, "PUT /api/mail/addresses/order" and after): their order,
+// (docs/api.md, "PUT /api/v1/mail/addresses/order" and after): their order,
 // whose first enabled address is the default, adding one on a verified
 // custom domain, generating its missing keys, and disabling, enabling and
 // deleting one. Disabling and enabling publish the address's next signed key

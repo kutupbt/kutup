@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 mod common;
 use common::*;
 
-const LIMIT: &str = "rename_checks";
+const LIMIT: &str = "account.rate.rename_checks";
 
 struct Admin<'a> {
     c: &'a Client,
@@ -23,7 +23,7 @@ impl Admin<'_> {
     fn put(&self, key: &str, value: Value) -> (StatusCode, Value) {
         let r = bearer(
             self.c
-                .put(format!("{}/api/admin/rate-limits/{key}", self.base)),
+                .put(format!("{}/api/v1/admin/rate-limits/{key}", self.base)),
             &self.token,
         )
         .json(&json!({ "value": value }))
@@ -35,7 +35,8 @@ impl Admin<'_> {
 
     fn listed(&self, key: &str) -> Value {
         let list: Value = bearer(
-            self.c.get(format!("{}/api/admin/rate-limits", self.base)),
+            self.c
+                .get(format!("{}/api/v1/admin/rate-limits", self.base)),
             &self.token,
         )
         .send()
@@ -64,7 +65,7 @@ impl Drop for Reset<'_> {
 fn check(c: &Client, base: &str, token: &str) -> StatusCode {
     bearer(
         c.get(format!(
-            "{base}/api/user/rename/check?name=free-{}",
+            "{base}/api/v1/account/rename/check?name=free-{}",
             &uuid()[..8]
         )),
         token,
@@ -135,16 +136,19 @@ fn administrators_set_rate_limits() {
 
     // Only administrators.
     let r = bearer(
-        c.put(format!("{base}/api/admin/rate-limits/{LIMIT}")),
+        c.put(format!("{base}/api/v1/admin/rate-limits/{LIMIT}")),
         &user.token,
     )
     .json(&json!({ "value": 1000 }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
-    let r = bearer(c.get(format!("{base}/api/admin/rate-limits")), &user.token)
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.get(format!("{base}/api/v1/admin/rate-limits")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
 
     // A reset returns to the first value.
@@ -161,7 +165,7 @@ fn administrators_set_rate_limits() {
     let account_put = |key: &str, value: Value| {
         let r = bearer(
             c.put(format!(
-                "{base}/api/admin/users/{own_id}/limits/rate_limit.{key}"
+                "{base}/api/v1/admin/accounts/{own_id}/entitlements/{key}"
             )),
             &admin.token,
         )
@@ -174,7 +178,7 @@ fn administrators_set_rate_limits() {
     // An account can't set its own, even more generous, value.
     let r = bearer(
         c.put(format!(
-            "{base}/api/admin/users/{own_id}/limits/rate_limit.{LIMIT}"
+            "{base}/api/v1/admin/accounts/{own_id}/entitlements/{LIMIT}"
         )),
         &own.token,
     )
@@ -191,7 +195,9 @@ fn administrators_set_rate_limits() {
     assert_eq!(check(&c, &base, &own.token), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(check(&c, &base, &user.token), StatusCode::OK);
     let listed: Value = bearer(
-        c.get(format!("{base}/api/admin/users/{own_id}/limits")),
+        c.get(format!(
+            "{base}/api/v1/admin/accounts/{own_id}/entitlements"
+        )),
         &admin.token,
     )
     .send()
@@ -199,11 +205,16 @@ fn administrators_set_rate_limits() {
     .json()
     .unwrap();
     let limits = listed["rateLimits"].as_array().unwrap();
-    assert!(limits.iter().all(|limit| limit["limit"] != "reports"));
+    assert!(limits
+        .iter()
+        .all(|limit| limit["limit"] != "drive.rate.reports"));
     assert!(limits
         .iter()
         .any(|limit| limit["limit"] == LIMIT && limit["source"] == "account"));
-    assert_eq!(account_put("reports", json!(5)).0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        account_put("drive.rate.reports", json!(5)).0,
+        StatusCode::BAD_REQUEST
+    );
     assert_eq!(account_put(LIMIT, json!(0)).0, StatusCode::BAD_REQUEST);
     let (status, taken_back) = account_put(LIMIT, Value::Null);
     assert_eq!(status, StatusCode::OK);
@@ -212,7 +223,7 @@ fn administrators_set_rate_limits() {
 
     // Audited.
     let activity: Value = bearer(
-        c.get(format!("{base}/api/admin/activity?limit=10")),
+        c.get(format!("{base}/api/v1/admin/activity?limit=10")),
         &admin.token,
     )
     .send()
@@ -224,7 +235,7 @@ fn administrators_set_rate_limits() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|e| e["action"] == "settings.rate_limit" && e["payload"]["key"] == LIMIT),
+            .any(|e| e["action"] == "settings.setRateLimit" && e["payload"]["key"] == LIMIT),
         "{activity}"
     );
     assert!(
@@ -232,7 +243,7 @@ fn administrators_set_rate_limits() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|e| e["action"] == "user.rate_limit" && e["targetUserId"] == own_id),
+            .any(|e| e["action"] == "account.setRateLimit" && e["targetAccountId"] == own_id),
         "{activity}"
     );
 }

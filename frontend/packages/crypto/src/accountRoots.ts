@@ -81,7 +81,7 @@ export async function sealAccountRoots(masterKey: Uint8Array, binding: string, r
 
 /**
  * The account's roots from its records (`accountRoots` of the sign-in's
- * answer, or `GET /api/account/roots`), opened with its master keys. The
+ * answer, or `GET /api/v1/account/roots`), opened with its master keys. The
  * newest identity root must derive `authorityPublicKey`, the account's
  * published authority; otherwise it throws ({@link isIdentityRootMismatch}).
  */

@@ -57,10 +57,10 @@ impl ProfileKeyEnvelopeV1 {
         profile_key: &[u8],
         parties: &ProfileKeyParties<'_>,
         sender_signing_key: &SigningKey,
-        recipient_hpke_public_key: &[u8],
+        recipient_xwing_public_key: &[u8],
     ) -> Result<Self> {
         if profile_key.len() != PROFILE_KEY_LEN
-            || recipient_hpke_public_key.len() != crate::hpke_xwing::PUBLIC_KEY_LEN
+            || recipient_xwing_public_key.len() != crate::hpke_xwing::PUBLIC_KEY_LEN
         {
             return Err(CryptoError::InvalidInput(
                 "profile key or recipient key has an invalid length".into(),
@@ -89,7 +89,7 @@ impl ProfileKeyEnvelopeV1 {
         let aad = envelope.header_bytes()?;
         let (encapsulated_key, ciphertext) = crate::primitives::hpke_seal(
             Suite::V1,
-            recipient_hpke_public_key,
+            recipient_xwing_public_key,
             HPKE_INFO,
             &aad,
             profile_key,
@@ -282,7 +282,7 @@ mod tests {
             &key,
             &parties,
             alice.drive_signing_key(),
-            &bob.drive_hpke_public_key(),
+            &bob.drive_xwing_public_key(),
         )
         .unwrap();
         let encoded = envelope.encode_b64().unwrap();
@@ -291,7 +291,7 @@ mod tests {
         let alice_signing = alice.drive_signing_key().verifying_key().to_array::<32>();
         assert_eq!(
             decoded
-                .open(&parties, &alice_signing, bob.drive_hpke_private_key())
+                .open(&parties, &alice_signing, bob.drive_xwing_private_key())
                 .unwrap(),
             key
         );
@@ -302,7 +302,7 @@ mod tests {
         ))
         .unwrap();
         assert!(decoded
-            .open(&parties, &alice_signing, carol.drive_hpke_private_key())
+            .open(&parties, &alice_signing, carol.drive_xwing_private_key())
             .is_err());
         let bob_signing = bob.drive_signing_key().verifying_key().to_array::<32>();
         assert!(decoded.verify(&parties, &bob_signing).is_err());
@@ -328,7 +328,7 @@ mod tests {
                 ..parties
             },
             alice.drive_signing_key(),
-            &bob.drive_hpke_public_key(),
+            &bob.drive_xwing_public_key(),
         )
         .is_err());
 

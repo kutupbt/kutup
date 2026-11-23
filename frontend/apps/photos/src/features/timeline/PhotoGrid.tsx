@@ -289,7 +289,7 @@ export function PhotoGrid({ photos, title, empty: emptyState, dropToUpload = tru
                     <PhotoTile
                       key={photo.id}
                       photo={photo}
-                      userId={session.userId}
+                      accountId={session.accountId}
                       size={tile}
                       selected={selected.has(photo.id)}
                       favourite={marks.favourites.has(photo.id)}

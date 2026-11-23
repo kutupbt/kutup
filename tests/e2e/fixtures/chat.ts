@@ -250,7 +250,7 @@ export async function sendAttachment(
   const delivery = delivered
     ? page.waitForResponse((response) => {
         const path = new URL(response.url()).pathname
-        return response.request().method() === 'POST' && path === '/api/chat/media/deliveries'
+        return response.request().method() === 'POST' && path === '/api/v1/chat/media/deliveries'
       })
     : null
   await page.getByTestId('chat-attachment-input').setInputFiles({

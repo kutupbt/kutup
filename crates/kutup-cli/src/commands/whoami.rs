@@ -29,7 +29,7 @@ pub fn run(profile: &str, json: bool) -> Result<()> {
         format_bytes(me.storage_used_bytes),
         format_bytes(me.storage_quota_bytes)
     );
-    println!("Admin:     {}", me.is_admin);
-    println!("2FA:       {}", me.totp_enabled);
+    println!("Role:      {}", me.role);
+    println!("2FA app:   {}", me.two_factor);
     Ok(())
 }

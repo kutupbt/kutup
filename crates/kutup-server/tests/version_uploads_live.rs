@@ -42,7 +42,7 @@ fn create_version(
         .map(|(k, v)| format!("{k} {}", b64(v.as_bytes())))
         .collect::<Vec<_>>()
         .join(",");
-    bearer(c.post(format!("{base}/api/uploads")), token)
+    bearer(c.post(format!("{base}/api/v1/drive/uploads")), token)
         .header("Tus-Resumable", "1.0.0")
         .header("Upload-Length", length.to_string())
         .header("Upload-Metadata", meta)
@@ -78,7 +78,10 @@ fn code(r: Response) -> String {
 
 fn listed(c: &Client, base: &str, token: &str, folder: &Folder, id: &str) -> Value {
     let list: Value = bearer(
-        c.get(format!("{base}/api/collections/{}/files", folder.id)),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{}/files",
+            folder.id
+        )),
         token,
     )
     .send()
@@ -140,7 +143,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         ],
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert_eq!(code(r), "version_conflict");
+    assert_eq!(code(r), "versionConflict");
     let r = create_version(&c, &base, &owner.token, &file.id, 1 << 50, &fields);
     assert_eq!(r.status(), StatusCode::PAYLOAD_TOO_LARGE);
     // A new file's fields are not a version's, its metadata comes with the
@@ -170,7 +173,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
     // The version's id is the revision the client chose, and the upload's:
     // clients address it by `versionId`.
     assert_eq!(version_id, version.revision);
-    assert_eq!(at, format!("/api/uploads/{version_id}"));
+    assert_eq!(at, format!("/api/v1/drive/uploads/{version_id}"));
     // One open version upload per file; the caller is told which is theirs.
     let r = create_version(&c, &base, &owner.token, &file.id, blob.len(), &fields);
     assert_eq!(r.status(), StatusCode::CONFLICT);
@@ -224,7 +227,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         &version.revision_content(),
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert_eq!(code(r), "revision_conflict");
+    assert_eq!(code(r), "revisionConflict");
     let r = commit(
         &c,
         &base,
@@ -246,7 +249,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
     assert_eq!(row["contentHash"], hash.as_str(), "{row}");
     assert_eq!(used(&c, &base, &owner.token), before + blob.len() as i64);
     let versions: Value = bearer(
-        c.get(format!("{base}/api/files/{}/versions", file.id)),
+        c.get(format!("{base}/api/v1/drive/files/{}/versions", file.id)),
         &owner.token,
     )
     .send()
@@ -276,10 +279,13 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         StatusCode::NO_CONTENT
     );
     let renamed = metadata(&file, 3, plain.len());
-    let r = bearer(c.put(format!("{base}/api/files/{}", file.id)), &owner.token)
-        .json(&json!({ "metadataEnvelope": renamed, "metadataRevision": 3 }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.put(format!("{base}/api/v1/drive/files/{}", file.id)),
+        &owner.token,
+    )
+    .json(&json!({ "metadataEnvelope": renamed, "metadataRevision": 3 }))
+    .send()
+    .unwrap();
     assert!(r.status().is_success(), "{}", r.status());
     let r = commit(
         &c,
@@ -292,7 +298,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         &small.revision_content(),
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert_eq!(code(r), "revision_conflict");
+    assert_eq!(code(r), "revisionConflict");
     let r = bearer(c.delete(format!("{base}{late}")), &owner.token)
         .header("Tus-Resumable", "1.0.0")
         .send()
@@ -323,10 +329,10 @@ fn upload_rows_are_a_file_or_a_version() {
         runtime.block_on(
             sqlx::query(
                 "INSERT INTO drive_uploads (account_id, collection_id, file_id, total_bytes,
-                    file_key_envelope, key_epoch, storage_path, s3_upload_id,
-                    name_hash, kind, key_generation)
-                 VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, $2, 1,
-                    gen_random_uuid()::text, 's', $1, $3, $4)",
+                    file_key_envelope, key_epoch, s3_upload_id,
+                    name_hash, kind, key_generation, blob_suite)
+                 VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, kutup_unb64($2), 1,
+                    's', decode($1, 'hex'), $3, $4, 2)",
             )
             .bind(name_hash)
             .bind(key_envelope)
@@ -338,12 +344,12 @@ fn upload_rows_are_a_file_or_a_version() {
     let hash = "cd".repeat(32);
     for (kind, name_hash, key_envelope, generation) in [
         ("version", Some(hash.as_str()), None, Some(1)),
-        ("version", None, Some("k"), Some(1)),
+        ("version", None, Some("AA=="), Some(1)),
         ("version", None, None, None),
-        ("file", None, Some("k"), None),
+        ("file", None, Some("AA=="), None),
         ("file", Some(hash.as_str()), None, None),
-        ("file", Some(hash.as_str()), Some("k"), Some(1)),
-        ("draft", Some(hash.as_str()), Some("k"), None),
+        ("file", Some(hash.as_str()), Some("AA=="), Some(1)),
+        ("draft", Some(hash.as_str()), Some("AA=="), None),
     ] {
         let error = insert(kind, name_hash, key_envelope, generation).unwrap_err();
         assert!(
@@ -411,7 +417,7 @@ fn a_version_over_tus_stands_at_the_log_head() {
     );
     assert!(r.status().is_success(), "commit: {}", r.status());
     let versions: Value = bearer(
-        c.get(format!("{base}/api/files/{}/versions", file.id)),
+        c.get(format!("{base}/api/v1/drive/files/{}/versions", file.id)),
         &owner.token,
     )
     .send()

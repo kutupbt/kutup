@@ -36,13 +36,13 @@ test('a note shared by link opens on Office, read-only, saying who shared it', a
   await noteLive(drive)
   await typeAtEnd(drive, 'Hello from a public note')
   // Saved as the note's state, which the link serves.
-  const saved = drive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/versions$/.test(new URL(r.url()).pathname))
+  const saved = drive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/v1\/drive\/files\/[^/]+\/versions$/.test(new URL(r.url()).pathname))
   await drive.keyboard.press('Control+s')
   expect((await saved).ok()).toBe(true)
 
   const link = await makeFileLink(drive)
   expect(link.startsWith(`${appOrigin('office')}/s/`)).toBe(true)
-  expect(link).toContain('#key=')
+  expect(link).toMatch(/#v1\.[A-Za-z0-9_-]{43}$/)
 
   // Anyone: no account in this browser.
   const visitor = await browser.newContext()
@@ -96,7 +96,7 @@ test("a folder's link lists in Drive and opens its documents on Office", async (
   await itemAction(drive, folder, 'Get public link')
   const dialog = drive.getByRole('dialog')
   const field = dialog.getByRole('textbox')
-  await expect(field).toHaveValue(/#key=/, { timeout: 30_000 })
+  await expect(field).toHaveValue(/#v1\./, { timeout: 30_000 })
   const link = await field.inputValue()
   expect(link.startsWith(`${appOrigin('drive')}/s/`)).toBe(true)
 
@@ -105,13 +105,13 @@ test("a folder's link lists in Drive and opens its documents on Office", async (
   await page.goto(link)
   await expectSharedBy(page, alice.username)
   await openItem(page, note)
-  await expect(page).toHaveURL(new RegExp(`^${appOrigin('office')}/s/[^/]+/[^/#]+#key=`), { timeout: 60_000 })
+  await expect(page).toHaveURL(new RegExp(`^${appOrigin('office')}/s/[^/]+/[^/#]+#v1\\.`), { timeout: 60_000 })
   await expectSharedBy(page, alice.username)
   await expect(page.locator('.prose')).toBeVisible({ timeout: 60_000 })
 
   // Back to the folder's list, the key going along.
   await page.getByRole('link', { name: 'Back to the shared folder' }).click()
-  await expect(page).toHaveURL(new RegExp(`^${appOrigin('drive')}/s/[^/#]+#key=`), { timeout: 60_000 })
+  await expect(page).toHaveURL(new RegExp(`^${appOrigin('drive')}/s/[^/#]+#v1\\.`), { timeout: 60_000 })
   await expect(item(page, note)).toBeVisible({ timeout: 60_000 })
 
   await visitor.close()

@@ -122,7 +122,7 @@ pub const RESERVED_LOCAL_PARTS: [&str; 5] = [
 /// An accepted recipient: whose mail it is and the key it is encrypted to.
 #[derive(Debug, Clone)]
 pub struct Recipient {
-    pub(crate) user_id: Uuid,
+    pub(crate) account_id: Uuid,
     pub(crate) address_id: Uuid,
     pub(crate) public_key: Vec<u8>,
     /// Taken by a custom domain's catch-all (its domain and the owner's
@@ -172,7 +172,7 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
             }
         },
     };
-    let (address_id, user_id, public_key, quota, used) = row.ok_or_else(unknown)?;
+    let (address_id, user_id, public_key, used) = row.ok_or_else(unknown)?;
     // An address whose keys are not stored yet (a new account, or a rename,
     // moments before its client uploads them): try again later, never a
     // permanent refusal.
@@ -180,11 +180,14 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
     let reserved = crate::storage_pool::reserved(&state.pool, user_id, Default::default())
         .await
         .map_err(|_| try_later())?;
+    let quota = crate::storage_pool::quota(&state.pool, user_id)
+        .await
+        .map_err(|_| try_later())?;
     if used.saturating_add(reserved) >= quota {
         return Err(full());
     }
     Ok(Recipient {
-        user_id,
+        account_id: user_id,
         address_id,
         public_key,
         caught,
@@ -200,8 +203,8 @@ enum CustomDomain {
     OverCap,
 }
 
-/// A recipient's address id, account, primary key (none yet), quota and use.
-type RecipientRow = (Uuid, Uuid, Option<Vec<u8>>, i64, i64);
+/// A recipient's address id, account, primary key (none yet) and use.
+type RecipientRow = (Uuid, Uuid, Option<Vec<u8>>, i64);
 
 /// An address on the server's own domain, in any folded spelling.
 async fn own_domain_row(
@@ -209,9 +212,9 @@ async fn own_domain_row(
     address: &str,
 ) -> Result<Option<RecipientRow>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT a.id, a.account_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
+        "SELECT a.id, a.account_id, k.public_key, u.storage_used_bytes
            FROM mail_addresses a
-           JOIN accounts u ON u.id = a.account_id AND u.is_active
+           JOIN accounts u ON u.id = a.account_id AND u.state = 'active'
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
           WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
             AND a.disabled_at IS NULL
@@ -263,10 +266,9 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     }
     let (domain_id, catch_all) = (held.id, held.catch_all_address_id);
     // An address of an enabled member of the domain's organization.
-    const SELECT: &str =
-        "SELECT a.id, a.account_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
+    const SELECT: &str = "SELECT a.id, a.account_id, k.public_key, u.storage_used_bytes
            FROM mail_addresses a
-           JOIN accounts u ON u.id = a.account_id AND u.is_active
+           JOIN accounts u ON u.id = a.account_id AND u.state = 'active'
            JOIN organization_members m ON m.account_id = a.account_id AND m.organization_id = $3
                                       AND m.state = 1
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary";
@@ -404,7 +406,7 @@ pub async fn store(state: &AppState, recipient: &Recipient, raw: &[u8]) -> Reply
     match store_inner(state, recipient, raw).await {
         Ok(reply) => reply,
         Err(error) => {
-            tracing::warn!(user = %recipient.user_id, error = %error, "mail: storing failed");
+            tracing::warn!(user = %recipient.account_id, error = %error, "mail: storing failed");
             try_later()
         }
     }
@@ -426,7 +428,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
     if let Some(message_id) = &readable.message_id {
         let opener = sealed::Opener::load(
             &state.pool,
-            crate::account_data::KeyOwner::Account(recipient.user_id),
+            crate::account_data::KeyOwner::Account(recipient.account_id),
         )
         .await?;
         let hashes = sealed::thread_hashes(opener.keys(), &[message_id.as_str()])?;
@@ -452,13 +454,13 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
     }
 
     let id = Uuid::new_v4();
-    let key = object_key(recipient.user_id, id);
+    let key = object_key(recipient.account_id, id);
     let size = i64::try_from(ciphertext.len())?;
-    let version = state
+    state
         .storage
-        .put_object_versioned(&key, ByteStream::from(ciphertext), size)
+        .upload(&key, ByteStream::from(ciphertext), size)
         .await?;
-    let answer = match record(state, recipient, id, &key, &version, size, &readable).await {
+    let answer = match record(state, recipient, id, &key, size, &readable).await {
         Ok(Some(stored)) => {
             // On to the address's forwardings, after its own copy is kept.
             if forwarding::forwards(&state.pool, recipient.address_id).await {
@@ -468,7 +470,6 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
                         address_id: recipient.address_id,
                         message_id: id,
                         object_key: key.clone(),
-                        object_version: version.clone(),
                         readable: readable.clone(),
                         may_forward: recipient.caught.is_none()
                             && forwarding::may_forward(&state.config.mail_forwarding_keys, raw),
@@ -480,7 +481,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
                 auto_reply::spawn(
                     state,
                     auto_reply::Delivered {
-                        user_id: recipient.user_id,
+                        account_id: recipient.account_id,
                         message: id,
                     },
                 );
@@ -491,7 +492,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
                 if let Some(original) = &bounce.original_message_id {
                     if let Err(error) = safety::record_bounce(
                         &state.pool,
-                        recipient.user_id,
+                        recipient.account_id,
                         original,
                         bounce.failures,
                     )
@@ -509,7 +510,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
     };
     // Nothing points at the object: remove it now rather than leave it to
     // the sweep.
-    if let Err(error) = state.storage.delete_stored(&key, &version).await {
+    if let Err(error) = state.storage.delete(&key).await {
         tracing::warn!(error = %error, "mail: unrecorded object left for the sweep");
     }
     answer
@@ -539,12 +540,11 @@ async fn record(
     recipient: &Recipient,
     id: Uuid,
     key: &str,
-    version: &str,
     size: i64,
     readable: &Readable,
 ) -> Result<Option<Reply>, Recorded> {
     let mut tx = state.pool.begin().await?;
-    let pool = crate::storage_pool::lock(&mut tx, recipient.user_id, Default::default()).await?;
+    let pool = crate::storage_pool::lock(&mut tx, recipient.account_id, Default::default()).await?;
     if !pool.fits(size, 0) {
         return Err(Recorded::Full);
     }
@@ -552,7 +552,7 @@ async fn record(
         &mut tx,
         NewMessage {
             id,
-            user_id: Some(recipient.user_id),
+            account_id: Some(recipient.account_id),
             address_id: recipient.address_id,
             thread_id: None,
             direction: "inbound",
@@ -560,13 +560,12 @@ async fn record(
             // Encrypted by its sender with OpenPGP: end to end; otherwise
             // it came in clear and is encrypted here (zero access).
             protection: if readable.pgp_encrypted {
-                "end_to_end"
+                "endToEnd"
             } else {
-                "zero_access"
+                "zeroAccess"
             },
             seen: false,
             object_key: key,
-            object_version: version,
             size,
             readable,
             bcc: &[],
@@ -590,7 +589,7 @@ pub(crate) struct NewMessage<'a> {
     pub id: Uuid,
     /// The account whose mailbox it is; none for a shared mailbox's message
     /// (then `group_id` is the mailbox).
-    pub user_id: Option<Uuid>,
+    pub account_id: Option<Uuid>,
     pub address_id: Uuid,
     /// The thread, when the caller knows it; otherwise the thread of an
     /// ancestor named in In-Reply-To or References, else a new one.
@@ -600,7 +599,6 @@ pub(crate) struct NewMessage<'a> {
     pub protection: &'static str,
     pub seen: bool,
     pub object_key: &'a str,
-    pub object_version: &'a str,
     pub size: i64,
     pub readable: &'a Readable,
     pub bcc: &'a [headers::Mailbox],
@@ -656,7 +654,7 @@ pub(crate) async fn insert_message(
     message: NewMessage<'_>,
 ) -> crate::error::AppResult<bool> {
     let readable = message.readable;
-    let key_owner = sealed::owner_of(message.user_id, message.group_id);
+    let key_owner = sealed::owner_of(message.account_id, message.group_id);
     let owner = key_owner.id();
     // The mailbox's key, made now if it has none, before the thread is
     // looked for under every key it has.
@@ -686,7 +684,7 @@ pub(crate) async fn insert_message(
     // (docs/plans/mail-filters.md, F3); a blocked message is not stored.
     let mut folder = message.folder;
     if let (Some(user_id), "inbound", "inbox" | "spam") =
-        (message.user_id, message.direction, folder)
+        (message.account_id, message.direction, folder)
     {
         match sender_rules::verdict(tx, user_id, from_address).await? {
             Some(sender_rules::Kind::Block) => return Ok(false),
@@ -698,20 +696,20 @@ pub(crate) async fn insert_message(
     let inserted: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO mail_messages
             (id, account_id, address_id, thread_id, direction, folder, seen, protection, object_key,
-             object_version, size_bytes, sent_at, headers, message_id_hash, in_reply_to_hash,
+             size_bytes, sent_at, headers, message_id_hash, in_reply_to_hash,
              references_hashes, search_tokens,
              attachment_count, external_recipients, group_id, key_packet, sent_by_account_id, unsubscribable,
              expires_at, notify_at, forwarded)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $19, $20, $21, $22, $23, $24,
-                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END, $25)
+                 $18, $19, $20, $21, $22, $23,
+                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END, $24)
          ON CONFLICT (address_id, message_id_hash)
              WHERE direction = 'inbound' AND message_id_hash IS NOT NULL
          DO NOTHING
          RETURNING id",
     )
     .bind(message.id)
-    .bind(message.user_id)
+    .bind(message.account_id)
     .bind(message.address_id)
     .bind(thread.unwrap_or(message.id))
     .bind(message.direction)
@@ -719,7 +717,6 @@ pub(crate) async fn insert_message(
     .bind(message.seen)
     .bind(message.protection)
     .bind(message.object_key)
-    .bind(message.object_version)
     .bind(message.size)
     .bind(sent_at)
     .bind(&sealed.headers)
@@ -744,7 +741,7 @@ pub(crate) async fn insert_message(
         return Ok(true);
     }
     // A shared mailbox's message is charged to its group.
-    let payer = match message.user_id {
+    let payer = match message.account_id {
         Some(_) => crate::storage_pool::Payer::Account(owner),
         None => crate::storage_pool::Payer::MailGroup(owner),
     };
@@ -753,7 +750,7 @@ pub(crate) async fn insert_message(
     // included) and its own sent copies; never on drafts, on mail filed as
     // spam, or on a shared mailbox's copy, which has no one owner yet
     // (docs/plans/mail-filters.md).
-    if let Some(user_id) = message.user_id.filter(|_| {
+    if let Some(user_id) = message.account_id.filter(|_| {
         (message.direction == "inbound" && folder == "inbox")
             || (message.direction == "outbound" && folder == "sent")
     }) {

@@ -114,7 +114,7 @@ function pgpOf(card: ICAL.Component, group: string): ContactEmailPgp | undefined
   if (sign !== undefined) pgp.sign = sign
   const scheme = value('x-pm-scheme')
   if (scheme === 'pgp-inline') pgp.scheme = 'inline'
-  else if (scheme === 'pgp-mime') pgp.scheme = 'pgp_mime'
+  else if (scheme === 'pgp-mime') pgp.scheme = 'pgpMime'
   return Object.keys(pgp).length ? pgp : undefined
 }
 
@@ -185,7 +185,7 @@ export function toVCard(draft: ContactDraft, uid: string, name: string): string 
         [keys.length ? 'x-pm-encrypt' : 'x-pm-encrypt-untrusted', pgp.encrypt === undefined ? undefined : String(pgp.encrypt)],
         // Encrypting signs anyway.
         ['x-pm-sign', pgp.encrypt === true ? 'true' : pgp.sign === undefined ? undefined : String(pgp.sign)],
-        ['x-pm-scheme', pgp.scheme === 'inline' ? 'pgp-inline' : pgp.scheme === 'pgp_mime' ? 'pgp-mime' : undefined],
+        ['x-pm-scheme', pgp.scheme === 'inline' ? 'pgp-inline' : pgp.scheme === 'pgpMime' ? 'pgp-mime' : undefined],
       ]
       for (const [name, value] of flags) {
         if (value === undefined) continue

@@ -53,15 +53,15 @@ export async function uploadDirectoryInto(opts: {
       const free = made.has(parent.id)
         ? await named(parent, freeName(name, namesIn([], subfolders(parent))))
         : await findAvailableName(inFolder(parent), name)
-      const created = await createOwnedCollectionV1(me, me.userId, free.name, parent.id)
+      const created = await createOwnedCollectionV1(me, me.accountId, free.name, parent.id)
       try {
-        await api.post('/collections', { ...created.payload, nameHash: free.hash })
+        await api.post('/drive/collections', { ...created.payload, nameHash: free.hash })
       } catch (error) {
         // Made meanwhile (another tab, or a listing not yet reloaded): look again.
         const taken = asNameTaken(error)
         if (!taken || attempt > 0) throw error
         if (taken.holder?.kind === 'folder') {
-          const { data } = await api.get<CollectionRowWithTimes>(`/collections/${taken.holder.id}`)
+          const { data } = await api.get<CollectionRowWithTimes>(`/drive/collections/${taken.holder.id}`)
           const holder = await openRow(data, me)
           if (holder.key && holder.source === 'owned') {
             children.set(parent.id, [...(children.get(parent.id) ?? []), holder])

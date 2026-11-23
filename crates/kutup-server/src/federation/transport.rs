@@ -973,13 +973,18 @@ fn has_feature(discovery: &FederationDiscoveryV2, feature: FederationFeature) ->
 }
 
 fn validate_request_spec(spec: &FederationRequestSpec) -> anyhow::Result<()> {
-    let valid_namespace = match spec.feature {
-        FederationFeature::ChatV2 => {
-            spec.path.starts_with("/api/fed/chat/")
-                || spec.path == "/api/fed/policies/sealed-sender"
-        }
-        FederationFeature::DriveV1 => spec.path.starts_with("/api/fed/drive/"),
-    };
+    // The account namespace (lookups by name, rename announces) concerns
+    // the account, so either feature's requests may use it, under that
+    // feature's policy (docs/plans/api-surface.md §3).
+    let account_namespace = spec.path.starts_with("/api/fed/v2/accounts/");
+    let valid_namespace = account_namespace
+        || match spec.feature {
+            FederationFeature::ChatV2 => {
+                spec.path.starts_with("/api/fed/v2/chat/")
+                    || spec.path == "/api/fed/v2/policies/sealed-sender"
+            }
+            FederationFeature::DriveV1 => spec.path.starts_with("/api/fed/v2/drive/"),
+        };
     if !valid_namespace || spec.path.contains(['?', '#']) || !spec.path.is_ascii() {
         anyhow::bail!("federation operation is outside its feature-owned endpoint namespace");
     }
@@ -1205,7 +1210,7 @@ mod tests {
         let mut spec = FederationRequestSpec {
             feature: FederationFeature::ChatV2,
             method: Method::GET,
-            path: "/api/fed/chat/users/alice/keys".into(),
+            path: "/api/fed/v2/chat/users/alice/keys".into(),
             query: None,
             content_type: "application/json".into(),
             body: vec![],
@@ -1214,15 +1219,13 @@ mod tests {
             response_limit: 1024,
         };
         validate_request_spec(&spec).unwrap();
-        spec.path = "/api/fed/policies/sealed-sender".into();
+        spec.path = "/api/fed/v2/policies/sealed-sender".into();
         validate_request_spec(&spec).unwrap();
-        spec.path = "/api/fed/policies/mls-ordering".into();
+        spec.path = "/api/fed/v2/policies/unknown".into();
         assert!(validate_request_spec(&spec).is_err());
-        spec.path = "/api/fed/policies/unknown".into();
+        spec.path = "/api/fed/v2/drive/users/alice".into();
         assert!(validate_request_spec(&spec).is_err());
-        spec.path = "/api/fed/drive/users/alice".into();
-        assert!(validate_request_spec(&spec).is_err());
-        spec.path = "https://internal.example/api/fed/chat/users/alice/keys".into();
+        spec.path = "https://internal.example/api/fed/v2/chat/users/alice/keys".into();
         assert!(validate_request_spec(&spec).is_err());
     }
 
@@ -1232,24 +1235,24 @@ mod tests {
     #[test]
     fn a_path_normalisation_would_change_is_refused() {
         let base = "https://peer.test";
-        assert!(operation_url(base, "/api/fed/chat/accounts/ada/renames", None).is_ok());
+        assert!(operation_url(base, "/api/fed/v2/chat/accounts/ada/renames", None).is_ok());
         for path in [
-            "/api/fed/chat/accounts/../../drive/accounts/x/renames",
-            "/api/fed/chat/./accounts/ada/renames",
-            "/api/fed/chat/accounts/a b/renames",
+            "/api/fed/v2/chat/accounts/../../drive/accounts/x/renames",
+            "/api/fed/v2/chat/./accounts/ada/renames",
+            "/api/fed/v2/chat/accounts/a b/renames",
         ] {
             assert!(operation_url(base, path, None).is_err(), "{path}");
         }
     }
 
-    /// Renames are served under both features' namespaces: each feature's
-    /// requests go out on a path the transport sends for it.
+    /// The account namespace (lookups, renames) is open to both features:
+    /// each feature's requests go out on it.
     #[test]
-    fn rename_paths_are_inside_each_features_namespace() {
+    fn account_paths_are_inside_each_features_namespace() {
         for feature in [FederationFeature::ChatV2, FederationFeature::DriveV1] {
             for path in [
-                crate::remote_renames::chains_path(feature, "alice"),
-                crate::remote_renames::announce_path(feature),
+                crate::remote_renames::LOOKUP_PATH.to_owned(),
+                crate::remote_renames::ANNOUNCE_PATH.to_owned(),
             ] {
                 let spec = FederationRequestSpec {
                     feature,
@@ -1271,11 +1274,11 @@ mod tests {
     fn delegated_base_prefix_is_part_of_the_signed_path() {
         let url = operation_url(
             "https://edge.example/base",
-            "/api/fed/chat/users/alice/keys",
+            "/api/fed/v2/chat/users/alice/keys",
             Some("tree=7"),
         )
         .unwrap();
-        assert_eq!(url.path(), "/base/api/fed/chat/users/alice/keys");
+        assert_eq!(url.path(), "/base/api/fed/v2/chat/users/alice/keys");
         assert_eq!(url.query(), Some("tree=7"));
         assert_eq!(canonical_authority(&url).unwrap(), "edge.example");
     }

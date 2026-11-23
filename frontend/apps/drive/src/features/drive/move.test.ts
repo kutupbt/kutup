@@ -13,7 +13,7 @@ function folder(id: string, parentId: string | null, over: Partial<Folder> = {})
     name: id,
     key,
     keyEpoch: 1,
-    ownerUserId: 'me',
+    ownerAccountId: 'me',
     ownerAuthorityPublicKey: '',
     epochStatementHash: '',
     nameRevision: 1,
@@ -33,10 +33,10 @@ const root = folder('root', null, { isRoot: true })
 const a = folder('a', 'root')
 const b = folder('b', 'a')
 const c = folder('c', 'root')
-const theirs = folder('theirs', null, { source: 'shared', ownerUserId: 'them', canManage: false })
-const theirsViewOnly = folder('view', null, { source: 'shared', ownerUserId: 'them', canManage: false, canUpload: false })
-const theirsOther = folder('theirs2', null, { source: 'shared', ownerUserId: 'them', canManage: false })
-const remote = folder('remote', null, { source: 'remote', remoteShareId: 's1', ownerUserId: 'far', canManage: false })
+const theirs = folder('theirs', null, { source: 'shared', ownerAccountId: 'them', canManage: false })
+const theirsViewOnly = folder('view', null, { source: 'shared', ownerAccountId: 'them', canManage: false, canUpload: false })
+const theirsOther = folder('theirs2', null, { source: 'shared', ownerAccountId: 'them', canManage: false })
+const remote = folder('remote', null, { source: 'remote', remoteShareId: 's1', ownerAccountId: 'far', canManage: false })
 const locked = folder('locked', 'root', { key: null })
 const all = [root, a, b, c, theirs, theirsViewOnly, theirsOther, remote, locked]
 const index = { byId: new Map(all.map((f) => [f.id, f])), root } as FolderIndex

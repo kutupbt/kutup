@@ -79,9 +79,9 @@ impl Purpose {
 /// A grant as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Grant {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub session_id: Option<Uuid>,
-    pub target_user_id: Option<Uuid>,
+    pub target_account_id: Option<Uuid>,
 }
 
 fn hash(token: &str) -> Option<Vec<u8>> {
@@ -140,9 +140,9 @@ pub async fn peek<'e, E: sqlx::PgExecutor<'e>>(
             Some((
                 *purpose,
                 Grant {
-                    user_id,
+                    account_id: user_id,
                     session_id,
-                    target_user_id,
+                    target_account_id: target_user_id,
                 },
             ))
         }),
@@ -175,9 +175,9 @@ pub async fn take<'e, E: sqlx::PgExecutor<'e>>(
             Some((
                 *purpose,
                 Grant {
-                    user_id,
+                    account_id: user_id,
                     session_id,
-                    target_user_id,
+                    target_account_id: target_user_id,
                 },
             ))
         }),
@@ -197,12 +197,12 @@ pub async fn take_for_session<'e, E: sqlx::PgExecutor<'e>>(
     executor: E,
     token: &str,
     purpose: Purpose,
-    user: &crate::middleware::AuthUser,
+    user: &crate::middleware::AuthAccount,
 ) -> crate::error::AppResult<()> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     match take(executor, token, &[purpose]).await? {
         Some((_, grant))
-            if grant.user_id == user_id && grant.session_id == Some(user.session.session_id) =>
+            if grant.account_id == user_id && grant.session_id == Some(user.session.session_id) =>
         {
             Ok(())
         }
@@ -291,17 +291,12 @@ mod tests {
             .await
             .unwrap();
         let user = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
-        )
-        .bind(user)
-        .bind(format!("expired{}", &user.simple().to_string()[..12]))
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(user)
+            .bind(format!("expired{}", &user.simple().to_string()[..12]))
+            .execute(&pool)
+            .await
+            .unwrap();
         let session = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO auth_sessions (id, account_id, client_type, refresh_token_hash, expires_at)
@@ -336,12 +331,13 @@ mod tests {
             .unwrap();
         }
         sweep(&pool).await.unwrap();
-        let events: Vec<(String, i32)> =
-            sqlx::query_as("SELECT kind, count FROM account_security_events WHERE account_id = $1")
-                .bind(user)
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let events: Vec<(String, i32)> = sqlx::query_as(
+            "SELECT kind, count FROM account_security_events WHERE subject_account_id = $1",
+        )
+        .bind(user)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
         assert_eq!(events, vec![("signInFailedPassword".to_owned(), 2)]);
         sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user)

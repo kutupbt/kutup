@@ -33,7 +33,7 @@ import { InfoPanel } from './InfoPanel'
 /** Originals up to this size open in the viewer; larger ones show their large thumbnail. */
 const MAX_IMAGE_BYTES = 50 * 1024 * 1024
 /** Kinds every browser draws; others (HEIC, RAW, TIFF) are tried and may fall back. */
-const INFO_KEY = 'kutup-photos-info'
+const INFO_KEY = 'kutup.photos.info'
 
 // The last few originals, decrypted, for going back and forth. A download
 // is shared by whoever wants it and stopped only once nobody has wanted it
@@ -451,7 +451,7 @@ export function PhotoViewer({ photos, index, onNavigate, onClose }: Props) {
                 {hidden ? <Eye /> : <EyeOff />}
                 {hidden ? t('selection.unhide') : t('selection.hide')}
               </DropdownMenuItem>
-              {mayTrash(photo, session.userId) ? (
+              {mayTrash(photo, session.accountId) ? (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onSelect={() => setTrashing(true)}>
@@ -490,7 +490,7 @@ export function PhotoViewer({ photos, index, onNavigate, onClose }: Props) {
         ) : null}
       </div>
       {info ? (
-        <InfoPanel photo={photo} onClose={toggleInfo} onEdit={mayWrite(photo.folder, photo.file, session.userId) ? () => setEditing(true) : undefined} />
+        <InfoPanel photo={photo} onClose={toggleInfo} onEdit={mayWrite(photo.folder, photo.file, session.accountId) ? () => setEditing(true) : undefined} />
       ) : null}
       <EditDetailsDialog photo={photo} open={editing} onClose={() => setEditing(false)} />
       <ConfirmDestructive

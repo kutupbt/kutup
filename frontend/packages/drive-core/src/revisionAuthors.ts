@@ -5,7 +5,7 @@
 
 /**
  * Who the server says wrote a revision, as the UI shows it: a version
- * row's author (`authorUserId`, or `remoteAuthor` for someone on another
+ * row's author (`authorAccountId`, or `remoteAuthor` for someone on another
  * server), the original upload's uploader. The signature must agree.
  */
 export type ClaimedAuthor = { accountId: string } | { address: string }
@@ -29,9 +29,9 @@ export function claimRevisionAuthor(fileId: string, revisionId: string, author: 
 }
 
 /** A version row's author as the UI shows it: someone on another server by address, else the account. */
-export function versionAuthor(version: { authorUserId?: string | null; remoteAuthor?: string | null }): ClaimedAuthor | null {
+export function versionAuthor(version: { authorAccountId?: string | null; remoteAuthor?: string | null }): ClaimedAuthor | null {
   if (version.remoteAuthor) return { address: version.remoteAuthor }
-  return version.authorUserId ? { accountId: version.authorUserId } : null
+  return version.authorAccountId ? { accountId: version.authorAccountId } : null
 }
 
 /** The author the UI shows for a revision (null: none recorded). */

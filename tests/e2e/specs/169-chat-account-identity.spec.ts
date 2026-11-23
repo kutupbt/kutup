@@ -16,6 +16,23 @@ import {
 
 const PASSWORD = 'Deneme123*AccountIdentityPassword'
 
+/**
+ * Numbers only (no message text, names or keys), so they pass the sanitized
+ * reporter with KUTUP_E2E_CHAT_DIAGNOSTICS=1: the backup's state, cursor and
+ * pending events on `page`.
+ */
+async function backupFacts(page: Page): Promise<string> {
+  await openSettings(page, 'History backup')
+  const status = page.getByTestId('chat-backup-state')
+  await status.waitFor({ timeout: 15_000 }).catch(() => undefined)
+  const state = ((await status.textContent().catch(() => '')) ?? '').trim().replace(/\s+/g, '_')
+  const cursor = await status.getAttribute('data-current-cursor').catch(() => null)
+  const pending = await page.getByText(/events? waiting/i).count().catch(() => -1)
+  await page.goBack()
+  await page.goBack()
+  return `state=${state || 'none'} cursor=${cursor ?? 'none'} pendingLines=${pending}`
+}
+
 /** The thread's "safety number changed" lines for `name`. */
 function changedLines(page: Page, name: string) {
   return page.getByText(`Your safety number with ${name} changed.`)
@@ -112,6 +129,9 @@ test('links a device, resets the identity on removal, and starts over in a clear
   await expect(message(pageA, replyAfterReset)).toBeVisible({ timeout: 60_000 })
   // The reply is in Alice's history backup before her browser goes.
   await waitForProtection(pageA, cursorBeforeReply)
+  // The cursor the server acknowledged with the reply in it: what a restore
+  // must reach (diagnostics below).
+  const protectedCursor = await backupCursor(pageA)
 
   // Alice's last browser is cleared too: with no device to link from, she
   // starts over in a new one, which restores her history.
@@ -120,7 +140,24 @@ test('links a device, resets the identity on removal, and starts over in a clear
   await signIn(contextA3, alice)
   const pageA3 = await openChat(contextA3)
   await openConversationWith(pageA3, bob.username)
-  await expect(message(pageA3, replyAfterReset)).toBeVisible({ timeout: 90_000 })
+  try {
+    await expect(message(pageA3, replyAfterReset)).toBeVisible({ timeout: 90_000 })
+  } catch (error) {
+    // A restore that missed a backed-up message, or one still running:
+    // which, in numbers (the restored cursor against the protected one, and
+    // whether the message comes later).
+    const shown = await pageA3.getByTestId('chat-message').count()
+    const facts = await backupFacts(pageA3)
+    await openConversationWith(pageA3, bob.username)
+    const late = await message(pageA3, replyAfterReset)
+      .waitFor({ timeout: 60_000 })
+      .then(() => 1)
+      .catch(() => 0)
+    console.log(
+      `CHAT DIAGNOSTIC 169 restore protectedCursor=${protectedCursor} ${facts} messagesShown=${shown} arrivedWithin60sMore=${late}`,
+    )
+    throw error
+  }
   const afterStartOver = `after-start-over-${tag}`
   await send(pageA3, afterStartOver)
   await expect(message(pageB, afterStartOver)).toBeVisible({ timeout: 90_000 })

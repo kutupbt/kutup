@@ -70,7 +70,7 @@ async function listedContacts<T>(session: Session, edit: (index: VerifiedIndex) 
 
 /**
  * Another device changed the contact since the edit started (the server's
- * `revision_conflict`, or the head's index listing another revision): the
+ * `revisionConflict`, or the head's index listing another revision): the
  * person's form is not laid over it.
  */
 export class ContactChangedError extends Error {
@@ -239,10 +239,10 @@ async function prepare(session: Session, uid: string, input: ContactDraft, base 
   return { body: { summary: signed.summary, signature: signed.signature, card }, revision, uid }
 }
 
-/** Another device saved the contact first (the server's `revision_conflict`, or the head saying so). */
+/** Another device saved the contact first (the server's `revisionConflict`, or the head saying so). */
 export function isRevisionConflict(error: unknown): boolean {
   if (error instanceof ContactChangedError) return true
-  return isAxiosError(error) && error.response?.status === 409 && (error.response.data as { code?: string } | undefined)?.code === 'revision_conflict'
+  return isAxiosError(error) && error.response?.status === 409 && (error.response.data as { code?: string } | undefined)?.code === 'revisionConflict'
 }
 
 /**
@@ -337,7 +337,7 @@ function useContactMutation<T, R>(fn: (input: T, session: Session) => Promise<R>
         // and the sidebar meter reads the session's figure.
         queryClient.invalidateQueries({ queryKey: ['storage'] }),
         api
-          .get<{ storageUsedBytes: number }>('/user/me')
+          .get<{ storageUsedBytes: number }>('/account')
           .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes }))
           .catch(() => undefined),
       ]),
@@ -442,13 +442,13 @@ export async function loadGroups(session: Session): Promise<Omit<ContactGroup, '
 }
 
 /** The ids of the groups the account keeps, read at most every few seconds. */
-let knownGroups: { userId: string; at: number; ids: Promise<Set<string>> } | null = null
+let knownGroups: { accountId: string; at: number; ids: Promise<Set<string>> } | null = null
 async function groupIds(session: Session): Promise<Set<string>> {
   const now = Date.now()
-  if (!knownGroups || knownGroups.userId !== session.userId || now - knownGroups.at > 5000) {
+  if (!knownGroups || knownGroups.accountId !== session.accountId || now - knownGroups.at > 5000) {
     const ids = (async () => new Set((await (await accountHead(session)).records(GROUPS_SCOPE)).records.keys()))()
     ids.catch(() => (knownGroups = null))
-    knownGroups = { userId: session.userId, at: now, ids }
+    knownGroups = { accountId: session.accountId, at: now, ids }
   }
   return knownGroups.ids
 }

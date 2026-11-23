@@ -29,12 +29,22 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 revision="$(git rev-parse HEAD)"
 tag="$(git rev-parse --short=12 HEAD)"
+# The release version (docs/plans/api-surface.md §1.2): CalVer in semver
+# shape, YYYY.MDD.N from the commit's UTC date (the month without a leading
+# zero, which semver forbids), N counting the earlier commits of that day on
+# the first-parent line. The server and the web apps report it, and clients
+# send theirs in X-Kutup-Client.
+day="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%d HEAD)"
+year="${day%%-*}"; rest="${day#*-}"; month="${rest%%-*}"; dom="${rest#*-}"
+same_day="$(git rev-list --count --first-parent --since="${day}T00:00:00Z" HEAD)"
+release="${year}.$((10#$month))${dom}.$((same_day > 0 ? same_day - 1 : 0))"
 source_url="https://github.com/kutupbt/kutup"
 
 build() {
   local name="$1" dockerfile="$2" title="$3" context="${4:-.}"
   docker build \
     --file "$dockerfile" \
+    --build-arg "KUTUP_RELEASE=$release" \
     --tag "$registry/$name:$tag" \
     --label "org.opencontainers.image.source=$source_url" \
     --label "org.opencontainers.image.revision=$revision" \
@@ -54,6 +64,7 @@ if [ "$push" = 1 ]; then
 fi
 
 echo
+echo "release $release"
 echo "KUTUP_SERVER_IMAGE=$registry/kutup-server:$tag"
 echo "KUTUP_WEB_IMAGE=$registry/kutup-web:$tag"
 echo "KUTUP_STALWART_SETUP_IMAGE=$registry/kutup-stalwart-setup:$tag"

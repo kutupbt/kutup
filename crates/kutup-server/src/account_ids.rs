@@ -1,5 +1,5 @@
 //! Permanent account ids (docs/plans/account-ids.md): a person is their
-//! server and their account id (`users.id`), never their name.
+//! server and their account id (`accounts.id`), never their name.
 
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::primitives::{mac, mac_verify, subkey, Suite};
@@ -45,7 +45,7 @@ pub async fn local_user<'e, E: sqlx::PgExecutor<'e>>(
     let id = Uuid::parse_str(&account.account_id)
         .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
     Ok(
-        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND is_active")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND state = 'active'")
             .bind(id)
             .fetch_optional(executor)
             .await?,
@@ -66,7 +66,7 @@ pub async fn local_user_for_peer<'e, E: sqlx::PgExecutor<'e>>(
     let id = Uuid::parse_str(&account.account_id)
         .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
     Ok(sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE id = $1 AND is_active AND kutup_account_federates(id)",
+        "SELECT id FROM accounts WHERE id = $1 AND state = 'active' AND kutup_account_federates(id)",
     )
     .bind(id)
     .fetch_optional(executor)
@@ -83,7 +83,7 @@ pub fn from_peer(server: &str, account_id: &str) -> AppResult<AccountRef> {
     })
 }
 
-/// The key of the proofs `POST /api/auth/opaque/register/start` gives with a
+/// The key of the proofs `POST /api/v1/auth/opaque/register/start` gives with a
 /// minted account id, so that `register` takes back only an id this server
 /// minted for that key binding (stateless, like the registration answer).
 async fn proof_key(state: &crate::AppState) -> AppResult<[u8; 32]> {

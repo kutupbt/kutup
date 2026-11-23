@@ -73,7 +73,7 @@ fn verified_head(
     token: &str,
     keys: &HeadKeys,
 ) -> VerifiedHead {
-    let (_, head) = get(c, base, token, "/api/account/head");
+    let (_, head) = get(c, base, token, "/api/v1/account/head");
     let sealed = b64_decode(head["head"].as_str().expect("a head"));
     let incarnation = user.identity.incarnation_id();
     account_head::check(
@@ -110,7 +110,7 @@ fn a_rotation_keeps_every_record_readable_and_ends_the_old_key() {
         .to_owned();
 
     // The chain, and a contact sealed under the first key.
-    let (_, index) = get(&c, &base, &user.token, "/api/account/index/contacts");
+    let (_, index) = get(&c, &base, &user.token, "/api/v1/account/index/contacts");
     let (first, first_verified) = account_head::first(
         &old_head_keys,
         &user.binding,
@@ -120,7 +120,7 @@ fn a_rotation_keeps_every_record_readable_and_ends_the_old_key() {
         vec![],
     )
     .unwrap();
-    let r = bearer(c.post(format!("{base}/api/account/head")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/account/head")), &user.token)
         .json(&json!({ "head": b64(&first), "basis": index["basis"] }))
         .send()
         .unwrap();
@@ -132,7 +132,7 @@ fn a_rotation_keeps_every_record_readable_and_ends_the_old_key() {
     let sealed = account_head::seal(&old_head_keys, &user.binding, &next).unwrap();
     let mut body = contact(&user, &old, 1);
     body["head"] = json!(b64(&sealed));
-    let r = bearer(c.post(format!("{base}/api/contacts")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/contacts")), &user.token)
         .json(&body)
         .send()
         .unwrap();
@@ -169,7 +169,7 @@ fn a_rotation_keeps_every_record_readable_and_ends_the_old_key() {
             .seal_master_key(rotation.master_key(), envelope_generation, &user.binding)
             .unwrap();
         bearer(
-            c.post(format!("{base}/api/account/master-key/rotate")),
+            c.post(format!("{base}/api/v1/account/master-key/rotate")),
             &user.token,
         )
         .json(&json!({
@@ -198,11 +198,11 @@ fn a_rotation_keeps_every_record_readable_and_ends_the_old_key() {
 
     // The other sign-in ended; this one goes on.
     assert_eq!(
-        get(&c, &base, &other, "/api/user/me").0,
+        get(&c, &base, &other, "/api/v1/account").0,
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        get(&c, &base, &user.token, "/api/user/me").0,
+        get(&c, &base, &user.token, "/api/v1/account").0,
         StatusCode::OK
     );
 
@@ -237,7 +237,7 @@ fn a_rotation_keeps_every_record_readable_and_ends_the_old_key() {
     )
     .unwrap();
     assert!(opened.same_for_tests_as(&user.roots));
-    let (_, listed) = get(&c, &base, &user.token, "/api/contacts");
+    let (_, listed) = get(&c, &base, &user.token, "/api/v1/contacts");
     let card = b64_decode(listed["contacts"][0]["card"].as_str().unwrap());
     assert_eq!(account_record::inspect(&card).unwrap().generation.get(), 1);
     contact_card::open_card(keys.key_for(&card).unwrap(), &user.binding, UID, &card).unwrap();
@@ -259,7 +259,7 @@ fn a_rotation_keeps_every_record_readable_and_ends_the_old_key() {
     )
     .unwrap()));
     let r = bearer(
-        c.put(format!("{base}/api/contacts/{contact_id}")),
+        c.put(format!("{base}/api/v1/contacts/{contact_id}")),
         &user.token,
     )
     .json(&update)
@@ -274,14 +274,14 @@ fn a_rotation_keeps_every_record_readable_and_ends_the_old_key() {
     )
     .unwrap()));
     let r = bearer(
-        c.put(format!("{base}/api/contacts/{contact_id}")),
+        c.put(format!("{base}/api/v1/contacts/{contact_id}")),
         &user.token,
     )
     .json(&update)
     .send()
     .unwrap();
     assert!(r.status().is_success(), "{}", r.status());
-    let (_, listed) = get(&c, &base, &user.token, "/api/contacts");
+    let (_, listed) = get(&c, &base, &user.token, "/api/v1/contacts");
     let card = b64_decode(listed["contacts"][0]["card"].as_str().unwrap());
     assert_eq!(account_record::inspect(&card).unwrap().generation.get(), 2);
 
@@ -289,7 +289,7 @@ fn a_rotation_keeps_every_record_readable_and_ends_the_old_key() {
     // holds the new key.
     let grant_for = |entropy: &[u8; 32]| {
         let proof = kutup_crypto::kdf::derive_recovery_auth_proof(entropy, &user.binding).unwrap();
-        c.post(format!("{base}/api/auth/recover/grant"))
+        c.post(format!("{base}/api/v1/auth/recover/grant"))
             .json(&json!({ "name": user.username, "recoveryProof": b64(proof.as_slice()) }))
             .send()
             .unwrap()

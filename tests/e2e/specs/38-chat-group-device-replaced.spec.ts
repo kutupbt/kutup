@@ -84,11 +84,11 @@ test('a group member keeps the group after repairing their browser', async ({ br
   // longer knows what the browser asks about), and Bob takes the repair it
   // offers. A server that is merely unreachable offers none
   // (40-chat-open-failures).
-  await pageB.route('**/api/chat/messages*', (route) => route.fulfill({ status: 404, body: '' }))
+  await pageB.route('**/api/v1/chat/messages*', (route) => route.fulfill({ status: 404, body: '' }))
   await pageB.reload()
   await expect(pageB.getByText('Chat could not open')).toBeVisible({ timeout: 90_000 })
   await pageB.getByRole('button', { name: 'Repair this browser' }).click()
-  await pageB.unroute('**/api/chat/messages*')
+  await pageB.unroute('**/api/v1/chat/messages*')
   await pageB.getByRole('button', { name: 'Reset and restore' }).click()
   // The account's identity was only on this browser's discarded device:
   // with no other device to link from, Bob starts over.

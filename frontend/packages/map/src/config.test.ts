@@ -10,7 +10,7 @@ const base: MapConfig = {
       name: 'OpenFreeMap',
       kind: 'vector',
       url: 'https://tiles.openfreemap.org/styles/liberty',
-      proxyUrl: '/api/maps/proxy/openfreemap/styles/liberty',
+      proxyUrl: '/api/v1/maps/proxy/openfreemap/styles/liberty',
       direct: true,
       attribution: 'OpenFreeMap',
     },
@@ -19,7 +19,7 @@ const base: MapConfig = {
       name: 'OpenStreetMap',
       kind: 'raster',
       url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-      proxyUrl: '/api/maps/proxy/openstreetmap/{z}/{x}/{y}.png',
+      proxyUrl: '/api/v1/maps/proxy/openstreetmap/{z}/{x}/{y}.png',
       direct: true,
       attribution: '© OpenStreetMap contributors',
     },
@@ -38,7 +38,7 @@ describe('effectiveMap', () => {
     const map = effectiveMap(base, 'https://drive.example.org')!
     expect(map.provider.id).toBe('openstreetmap')
     expect(map.viaProxy).toBe(true)
-    expect(map.url).toBe('https://drive.example.org/api/maps/proxy/openstreetmap/{z}/{x}/{y}.png')
+    expect(map.url).toBe('https://drive.example.org/api/v1/maps/proxy/openstreetmap/{z}/{x}/{y}.png')
   })
 
   it('goes direct when the person chose so, unless the relay is enforced', () => {
@@ -55,7 +55,7 @@ describe('effectiveMap', () => {
     }
     const map = effectiveMap(relayOnly, 'https://x')!
     expect(map.viaProxy).toBe(true)
-    expect(map.url).toBe('https://x/api/maps/proxy/openstreetmap/{z}/{x}/{y}.png')
+    expect(map.url).toBe('https://x/api/v1/maps/proxy/openstreetmap/{z}/{x}/{y}.png')
   })
 
   it('falls back to the first provider when the chosen one is no longer offered', () => {
@@ -64,7 +64,7 @@ describe('effectiveMap', () => {
   })
 
   it('reads the relay mode', () => {
-    const direct = { direct: true, proxyUrl: '/api/maps/proxy/x' }
+    const direct = { direct: true, proxyUrl: '/api/v1/maps/proxy/x' }
     expect(usesRelay('off', true, { ...direct, proxyUrl: null })).toBe(false)
     expect(usesRelay('available', false, direct)).toBe(false)
     expect(usesRelay('available', false, { ...direct, direct: false })).toBe(true)

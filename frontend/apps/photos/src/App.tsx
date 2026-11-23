@@ -64,7 +64,7 @@ function DriveUpkeep() {
 function PhotosUploadPanel() {
   const session = useRequiredSession()
   const onResume = useResumePhotos()
-  return <UploadPanel resume={{ owner: session.userId, onResume }} />
+  return <UploadPanel resume={{ owner: session.accountId, onResume }} />
 }
 
 /** Everything behind the session: the library and its pages. */

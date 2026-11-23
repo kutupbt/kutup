@@ -28,7 +28,7 @@ export interface GuardWindow {
  * Reload button, saying Kutup was updated, whatever the page shows.
  */
 export function reloadGuard(win: GuardWindow, build: string): void {
-  const key = `kutup-reload:${build}`
+  const key = `kutup.ui.reload:${build}`
   let handled = false
   const root = () => win.document.getElementById('root')
   const blank = () => {
@@ -49,7 +49,7 @@ export function reloadGuard(win: GuardWindow, build: string): void {
   function showError(updated = false) {
     let language = ''
     try {
-      language = win.localStorage.getItem('kutup-lang') ?? ''
+      language = win.localStorage.getItem('kutup.ui.language') ?? ''
     } catch {
       language = ''
     }

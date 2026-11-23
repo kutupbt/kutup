@@ -81,7 +81,7 @@ pub async fn outdate(
     sqlx::query(
         "DELETE FROM mail_forwarding_keys
           WHERE forwarding_id IN (SELECT id FROM mail_forwardings
-                                   WHERE forwarder_address_id = $1 AND kind = 'end_to_end')",
+                                   WHERE forwarder_address_id = $1 AND kind = 'endToEnd')",
     )
     .bind(forwarder_address_id)
     .execute(&mut **tx)
@@ -89,7 +89,7 @@ pub async fn outdate(
     sqlx::query(
         "UPDATE mail_forwardings SET state = 'outdated', activation = NULL, expires_at = NULL,
                 updated_at = now()
-          WHERE forwarder_address_id = $1 AND kind = 'end_to_end' AND state <> 'rejected'",
+          WHERE forwarder_address_id = $1 AND kind = 'endToEnd' AND state <> 'rejected'",
     )
     .bind(forwarder_address_id)
     .execute(&mut **tx)
@@ -300,7 +300,7 @@ pub async fn outside_refusal(
     state: &AppState,
     account: Uuid,
 ) -> Result<Option<&'static str>, crate::error::AppError> {
-    let is_admin: bool = sqlx::query_scalar("SELECT is_admin FROM accounts WHERE id = $1")
+    let is_admin: bool = sqlx::query_scalar("SELECT role <> 'member' FROM accounts WHERE id = $1")
         .bind(account)
         .fetch_one(&state.pool)
         .await?;
@@ -445,8 +445,8 @@ pub async fn tidy(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
            JOIN accounts fu ON fu.id = f.account_id
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
            LEFT JOIN accounts bu ON bu.id = b.account_id
-          WHERE f.kind = 'end_to_end' AND f.state <> 'outdated'
-            AND (NOT fu.is_active OR NOT COALESCE(bu.is_active, true))",
+          WHERE f.kind = 'endToEnd' AND f.state <> 'outdated'
+            AND (fu.state <> 'active' OR NOT COALESCE(bu.state = 'active', true))",
     )
     .fetch_all(pool)
     .await?;
@@ -483,7 +483,6 @@ pub struct Arrived {
     /// The copy's message row (its folder after filters decides spam).
     pub message_id: Uuid,
     pub object_key: String,
-    pub object_version: String,
     pub readable: Readable,
     /// Whether the message may be forwarded at all: false when it came back
     /// through a forwarding loop (our marker header, our SRS sender, or more
@@ -598,7 +597,7 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
            LEFT JOIN accounts u ON u.id = b.account_id
           WHERE f.forwarder_address_id = $1 AND f.state = 'active'
             AND f.verified_at IS NOT NULL
-            AND (f.kind = 'outside' OR (b.state = 'active' AND b.disabled_at IS NULL AND u.is_active))",
+            AND (f.kind = 'outside' OR (b.state = 'active' AND b.disabled_at IS NULL AND u.state = 'active'))",
     )
     .bind(arrived.address_id)
     .fetch_all(&state.pool)
@@ -670,10 +669,7 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
             continue;
         };
         if message.is_none() {
-            let (body, _) = state
-                .storage
-                .get_stored(&arrived.object_key, &arrived.object_version)
-                .await?;
+            let (body, _) = state.storage.get_object(&arrived.object_key).await?;
             message = Some(body.collect().await?.into_bytes().to_vec());
         }
         let stored = message.as_deref().expect("read above");
@@ -886,9 +882,9 @@ async fn deliver(
     let id = Uuid::new_v4();
     let key = super::object_key(forwardee_user, id);
     let size = i64::try_from(forwarded.len())?;
-    let version = state
+    state
         .storage
-        .put_object_versioned(&key, ByteStream::from(forwarded), size)
+        .upload(&key, ByteStream::from(forwarded), size)
         .await?;
     let stored: anyhow::Result<bool> = async {
         let mut tx = state.pool.begin().await?;
@@ -900,15 +896,14 @@ async fn deliver(
             &mut tx,
             super::NewMessage {
                 id,
-                user_id: Some(forwardee_user),
+                account_id: Some(forwardee_user),
                 address_id: forwardee_address,
                 thread_id: None,
                 direction: "inbound",
                 folder: "inbox",
-                protection: "end_to_end",
+                protection: "endToEnd",
                 seen: false,
                 object_key: &key,
-                object_version: &version,
                 size,
                 readable,
                 bcc: &[],
@@ -925,7 +920,7 @@ async fn deliver(
     }
     .await;
     if !matches!(stored, Ok(true)) {
-        if let Err(error) = state.storage.delete_stored(&key, &version).await {
+        if let Err(error) = state.storage.delete(&key).await {
             tracing::warn!(error = %error, "mail: unrecorded forwarded copy left for the sweep");
         }
     }

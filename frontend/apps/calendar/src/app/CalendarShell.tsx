@@ -209,7 +209,7 @@ export function CalendarShell() {
       <EventDialog />
       <AlarmWatcher />
       <NotificationBanner
-        storageKey="kutup.calendar.notificationBanner.dismissed"
+        storageKey="kutup.calendar.notificationBannerDismissed"
         message={t('reminders.banner')}
         label={t('reminders.bannerLabel')}
         enable={t('reminders.enable')}

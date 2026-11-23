@@ -142,7 +142,7 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
         return
       }
       try {
-        await openVault(vault, key, session.userId)
+        await openVault(vault, key, session.accountId)
         freshKeys.delete(fileId)
         clearLocked(fileId)
       } catch (failure) {
@@ -160,7 +160,7 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
     try {
       // Kept before the vault shows: a reload once it shows still opens it
       // with the sign-in.
-      await openVault(vault, key, session.userId, async (opened) => {
+      await openVault(vault, key, session.accountId, async (opened) => {
         if (!remember) return
         try {
           await keepKey(session, fileId, opened.vault())
@@ -224,7 +224,7 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
                     return
                   }
                 }
-                await openVault(vault, kept, session.userId)
+                await openVault(vault, kept, session.accountId)
                 clearLocked(fileId)
               } catch (failure) {
                 setError(

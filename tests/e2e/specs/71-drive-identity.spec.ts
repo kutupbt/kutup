@@ -32,7 +32,7 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   let aliceDrive = await openDrive(a)
   const first = await createNote(aliceDrive)
   await noteLive(aliceDrive)
-  const shared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
+  const shared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/v1\/drive\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
   await shareOpenNote(aliceDrive, bob.address)
   expect((await shared).status()).toBe(204)
   await a.close()
@@ -74,7 +74,7 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   const second = await createNote(aliceDrive)
   await noteLive(aliceDrive)
   const aliceSecondUrl = aliceDrive.url()
-  const reshared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
+  const reshared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/v1\/drive\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
   await shareOpenNote(aliceDrive, bob.address)
   expect((await reshared).status()).toBe(204)
   await a2.close()
@@ -90,7 +90,7 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await noteLive(bobDrive)
   const dialog = await shareOpenNote(bobDrive, alice.address)
   await expect(dialog.getByText(/identity changed/)).toBeVisible({ timeout: 30_000 })
-  const anyway = bobDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
+  const anyway = bobDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/v1\/drive\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
   await dialog.getByTestId('identity-share-anyway').click()
   expect((await anyway).status()).toBe(204)
   await bobDrive.keyboard.press('Escape')
@@ -130,7 +130,10 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   // The pins are an account record (docs/plans/account-records.md).
   const verified = bobPage.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/account/records'))
   await bobPage.getByRole('button', { name: 'Verify exact match' }).click()
-  expect((await verified).status()).toBe(204)
+  // `200 { "seq" }` (docs/api.md, POST /api/v1/account/records).
+  const stored = await verified
+  expect(stored.status()).toBe(200)
+  expect(typeof (await stored.json()).seq).toBe('number')
   await bobPage.keyboard.press('Escape')
   await bobPage.goto(appUrl('drive', '/shared'))
   await expect(bobPage.getByTestId('identity-verified').first()).toBeVisible({ timeout: 60_000 })

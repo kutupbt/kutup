@@ -269,7 +269,7 @@ export async function openForwardedMailMessage(key: SealedMailKey, message: Uint
   }
 }
 
-/** An end-to-end forwarding's material, the body of `POST /api/mail/forwardings`' `endToEnd`. */
+/** An end-to-end forwarding's material, the body of `POST /api/v1/mail/forwardings`' `endToEnd`. */
 export interface MailForwardingMaterial {
   /** The forwardee key's public part (base64). */
   forwardeePublicKey: string
@@ -305,7 +305,7 @@ export async function makeMailForwarding(
   )
 }
 
-/** The forwarding key as `POST /api/mail/forwardings/{id}/accept` takes it. */
+/** The forwarding key as `POST /api/v1/mail/forwardings/{id}/accept` takes it. */
 export interface AcceptedMailForwarding {
   publicKey: string
   privateKeyEnvelope: string
@@ -448,7 +448,7 @@ export interface GroupMailKey {
 export interface GroupKeyMember {
   account: AccountRef
   incarnationId: string
-  hpkePublicKey: string
+  xwingPublicKey: string
 }
 
 export interface GeneratedMailGroupKey {
@@ -470,7 +470,7 @@ function holder(key: GroupMailKey) {
 }
 
 function memberInputs(members: GroupKeyMember[]) {
-  return members.map((m) => ({ account: { server: m.account.server, accountId: m.account.accountId }, incarnationId: m.incarnationId, hpkePublicKey: m.hpkePublicKey }))
+  return members.map((m) => ({ account: { server: m.account.server, accountId: m.account.accountId }, incarnationId: m.incarnationId, xwingPublicKey: m.xwingPublicKey }))
 }
 
 /** Makes the shared mailbox `groupId`'s key, with a share for each member. */

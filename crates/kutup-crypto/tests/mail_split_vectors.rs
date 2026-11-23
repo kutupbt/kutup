@@ -204,7 +204,7 @@ fn group_key_shares_open_only_for_their_member() {
             account: &bob,
             incarnation_id: &incarnation,
         },
-        &bob_keys.drive_hpke_public_key(),
+        &bob_keys.drive_xwing_public_key(),
     )
     .unwrap();
     // The server sees whose keys it is sealed to, not what it holds.
@@ -217,7 +217,7 @@ fn group_key_shares_open_only_for_their_member() {
         group_id,
         &group.fingerprint,
         &bob,
-        bob_keys.drive_hpke_private_key(),
+        bob_keys.drive_xwing_private_key(),
     )
     .unwrap();
     assert_eq!(&*opened, &*group.secret_key);
@@ -232,7 +232,7 @@ fn group_key_shares_open_only_for_their_member() {
         group_id,
         &group.fingerprint,
         &carol,
-        carol_keys.drive_hpke_private_key()
+        carol_keys.drive_xwing_private_key()
     )
     .is_err());
     assert!(open(
@@ -240,7 +240,7 @@ fn group_key_shares_open_only_for_their_member() {
         group_id,
         &group.fingerprint,
         &carol,
-        bob_keys.drive_hpke_private_key()
+        bob_keys.drive_xwing_private_key()
     )
     .is_err());
     assert!(open(
@@ -248,7 +248,7 @@ fn group_key_shares_open_only_for_their_member() {
         "00000000-0000-4000-8000-000000000000",
         &group.fingerprint,
         &bob,
-        bob_keys.drive_hpke_private_key()
+        bob_keys.drive_xwing_private_key()
     )
     .is_err());
     assert!(open(
@@ -256,7 +256,7 @@ fn group_key_shares_open_only_for_their_member() {
         group_id,
         &other.fingerprint,
         &bob,
-        bob_keys.drive_hpke_private_key()
+        bob_keys.drive_xwing_private_key()
     )
     .is_err());
     // A share claiming another incarnation does not open.
@@ -267,7 +267,7 @@ fn group_key_shares_open_only_for_their_member() {
         group_id,
         &group.fingerprint,
         &bob,
-        bob_keys.drive_hpke_private_key()
+        bob_keys.drive_xwing_private_key()
     )
     .is_err());
     // Only a secret key is sealed.
@@ -278,7 +278,7 @@ fn group_key_shares_open_only_for_their_member() {
             account: &bob,
             incarnation_id: &incarnation
         },
-        &bob_keys.drive_hpke_public_key(),
+        &bob_keys.drive_xwing_public_key(),
     )
     .is_err());
 }

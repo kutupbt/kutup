@@ -14,6 +14,8 @@
 #   2. Fetches the newest (or a named) database dump from the backup bucket,
 #      checks and decrypts it with the age identity, and pg_restores it into
 #      the empty database, timed (scripts/backup-postgres.sh --restore).
+#      Before the server first starts, deleted blobs are made to wait 90
+#      days (the runbook's step 3), so no purge removes what the checks need.
 #   3. Copies the blob bucket into the drill's scratch bucket and points the
 #      stack there (never at the source), starts the server with
 #      BACKGROUND_JOBS=false, then
@@ -355,6 +357,29 @@ blob_s3() {
     amazon/aws-cli:2.37.9 --endpoint-url "$s3_endpoint" "$@"
 }
 
+# Makes the scratch bucket an exact copy of the source (objects not in the
+# source are deleted there), copying server side. rclone, not `aws s3 sync`:
+# the AWS CLI reads an object's tags before a multipart copy (every object
+# above 8 MiB) and, with --copy-props other than default, sends a tagging
+# directive on single copies; Cloudflare R2 implements neither
+# (NotImplemented, the 2026-11-20 drill), and Kutup's blobs reach 1 TiB.
+# The keys reach the container by name only, never on the printed line.
+blob_sync() {
+  local provider=Other
+  case "$s3_endpoint" in
+    *.r2.cloudflarestorage.com*) provider=Cloudflare ;;
+  esac
+  RCLONE_CONFIG_DRILL_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
+  RCLONE_CONFIG_DRILL_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+  export RCLONE_CONFIG_DRILL_ACCESS_KEY_ID RCLONE_CONFIG_DRILL_SECRET_ACCESS_KEY
+  run docker run --rm \
+    -e RCLONE_CONFIG_DRILL_TYPE=s3 -e RCLONE_CONFIG_DRILL_PROVIDER="$provider" \
+    -e RCLONE_CONFIG_DRILL_ENDPOINT="$s3_endpoint" -e RCLONE_CONFIG_DRILL_REGION="${s3_region:-us-east-1}" \
+    -e RCLONE_CONFIG_DRILL_NO_CHECK_BUCKET=true \
+    -e RCLONE_CONFIG_DRILL_ACCESS_KEY_ID -e RCLONE_CONFIG_DRILL_SECRET_ACCESS_KEY \
+    rclone/rclone:1.68.2 sync --config /dev/null --log-level NOTICE "drill:$1" "drill:$2"
+}
+
 # Sets KEY=VALUE in the drill's settings (the last assignment wins, for
 # Compose and for the backup scripts alike).
 drill_set() {
@@ -476,6 +501,25 @@ guard_project
 # Checked whole with the identity before the database is touched.
 timed "restore the dump (fetch, check, pg_restore)" run scripts/backup-postgres.sh --restore "$dump" "$identity"
 
+# Step 3 of the runbook: before the server first starts, deleted blobs wait
+# the longest the setting allows (90 days), so no purge job deletes a blob
+# the checks still need. The restored value is printed, to put back after
+# the drill (Administration -> Server settings).
+db_user="$(drill_setting POSTGRES_USER)"
+db_name="$(drill_setting POSTGRES_DB)"
+retention_key="server.storage.deleted_blob_retention_seconds"
+drill_retention=7776000
+restored_retention="(dry run)"
+if [ "$dry_run" -eq 0 ]; then
+  restored_retention="$(docker compose exec -T postgres psql -U "${db_user:-kutup}" -d "${db_name:-kutup}" -At \
+    -c "SELECT value FROM site_settings WHERE key = '$retention_key'")"
+  restored_retention="${restored_retention:-the default}"
+fi
+guard_project
+run docker compose exec -T postgres psql -U "${db_user:-kutup}" -d "${db_name:-kutup}" -v ON_ERROR_STOP=1 -q \
+  -c "INSERT INTO site_settings (key, value) VALUES ('$retention_key', '$drill_retention') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+note "deleted blobs wait $drill_retention s in the drill (restored value: $restored_retention); put it back after the drill"
+
 # ---- Step 3: the blobs, and the server with its jobs off --------------------
 
 step "3. The blobs: a copy in s3://$scratch_bucket, and the server with its jobs off"
@@ -490,10 +534,9 @@ elif ! blob_s3 s3api head-bucket --bucket "$scratch_bucket" >/dev/null 2>&1; the
     || die "could not create s3://$scratch_bucket; create it at the provider and run again"
 fi
 [ "$scratch_bucket" != "$source_bucket" ] || die "refusing: the scratch bucket is the source"
-# Reads the source, writes only the scratch copy (--delete removes there
-# what the source does not have, so the copy is exact).
-timed "copy the blobs" blob_s3 s3 sync --only-show-errors --delete \
-  "s3://$source_bucket" "s3://$scratch_bucket"
+# Reads the source, writes only the scratch copy (sync deletes there what
+# the source does not have, so the copy is exact).
+timed "copy the blobs" blob_sync "$source_bucket" "$scratch_bucket"
 if [ "$dry_run" -eq 0 ]; then
   [ "$(setting_in "$drill_env" S3_BUCKET)" = "$scratch_bucket" ] \
     || die "refusing: the drill's S3_BUCKET is not $scratch_bucket"
@@ -601,8 +644,6 @@ release_versions() {
     ls "$root_dir/crates/kutup-server/migrations/"
   fi | sed -n 's#^.*/\{0,1\}\([0-9]\{14\}\)_.*\.up\.sql$#\1#p; s#^.*/\{0,1\}\([0-9]\{14\}\)_[^.]*\.sql$#\1#p' | sort -u
 }
-db_user="$(drill_setting POSTGRES_USER)"
-db_name="$(drill_setting POSTGRES_DB)"
 migrations_query="SELECT version FROM _sqlx_migrations WHERE success ORDER BY version"
 if [ "$dry_run" -eq 1 ]; then
   run docker compose exec -T postgres psql -U "${db_user:-kutup}" -d "${db_name:-kutup}" -At -c "$migrations_query"
@@ -652,6 +693,7 @@ echo "Readiness:           $ready_status"
 echo "check-config:        $config_status"
 echo "Migrations:          $migrations_status"
 echo "Background jobs:     $([ "$jobs_on" -eq 1 ] && echo on || echo off)"
+echo "Deleted-blob wait:   $drill_retention s for the drill (restored value: $restored_retention; put it back after)"
 echo "Outbound delivery:   held (OUTBOUND_DELIVERY=false$([ "$mail" -eq 0 ] || echo ", Stalwart in recovery mode"))"
 echo
 echo "Next: the checks as a user and as the operator (docs/self-hosting.md, \"Restore drill\", steps 5-7)."

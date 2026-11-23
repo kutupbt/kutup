@@ -95,7 +95,7 @@ fn write_vectors() {
         &sender,
         &from.authority_public_key(),
         1,
-        &from.drive_hpke_public_key(),
+        &from.drive_xwing_public_key(),
         &from.drive_signing_public_key(),
     )
     .unwrap();
@@ -111,7 +111,7 @@ fn write_vectors() {
         from.drive_signing_key(),
         &recipient,
         &to.incarnation_id(),
-        &to.drive_hpke_public_key(),
+        &to.drive_xwing_public_key(),
     )
     .unwrap();
     let file_id = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
@@ -125,7 +125,7 @@ fn write_vectors() {
         from.drive_signing_key(),
         &recipient,
         &to.incarnation_id(),
-        &to.drive_hpke_public_key(),
+        &to.drive_xwing_public_key(),
     )
     .unwrap();
     let profile_key = [0x55u8; 32];
@@ -138,7 +138,7 @@ fn write_vectors() {
             recipient_incarnation_id: &to.incarnation_id(),
         },
         from.drive_signing_key(),
-        &to.drive_hpke_public_key(),
+        &to.drive_xwing_public_key(),
     )
     .unwrap();
     let vectors = Vectors {
@@ -182,7 +182,7 @@ fn the_drive_key_binding_names_the_account() {
     let from = identity(&v.sender_master_key);
     let (authority, hpke, signing) = (
         from.authority_public_key(),
-        from.drive_hpke_public_key(),
+        from.drive_xwing_public_key(),
         from.drive_signing_public_key(),
     );
     assert_eq!(
@@ -233,7 +233,7 @@ fn shares_open_only_between_their_accounts() {
             &from.drive_signing_public_key(),
             to_whom,
             &to.incarnation_id(),
-            to.drive_hpke_private_key(),
+            to.drive_xwing_private_key(),
         )
     };
     assert_eq!(
@@ -262,7 +262,7 @@ fn shares_open_only_between_their_accounts() {
             &from.drive_signing_public_key(),
             to_whom,
             &to.incarnation_id(),
-            to.drive_hpke_private_key(),
+            to.drive_xwing_private_key(),
         )
     };
     assert_eq!(
@@ -285,7 +285,7 @@ fn shares_open_only_between_their_accounts() {
             .open(
                 &parties,
                 &from.drive_signing_public_key(),
-                to.drive_hpke_private_key(),
+                to.drive_xwing_private_key(),
             )
             .map(|key| key.as_slice().try_into().unwrap())
             .unwrap_or([0; 32])

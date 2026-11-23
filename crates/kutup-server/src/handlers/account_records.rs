@@ -30,7 +30,7 @@ use uuid::Uuid;
 use crate::account_heads::{self, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::site_settings::{
     NumericSetting, ACCOUNT_RECORDS_BATCH_ITEMS, ACCOUNT_RECORDS_CALENDAR_SETTINGS,
     ACCOUNT_RECORDS_CHAT_ATTACHMENTS, ACCOUNT_RECORDS_CHAT_CONTACTS, ACCOUNT_RECORDS_CHAT_GROUPS,
@@ -133,13 +133,13 @@ pub struct FeedPage {
     pub basis: Option<String>,
 }
 
-/// `GET /api/account/records/{scope}` — a page of the scope's changes after
+/// `GET /api/v1/account/records/{scope}` — a page of the scope's changes after
 /// `after`, with the head of the same snapshot. A client checks the head
 /// against its anchor before it applies a page, and checks the scope's
 /// index against the head once `more` is false.
 #[utoipa::path(
     get,
-    path = "/api/account/records/{scope}",
+    path = "/api/v1/account/records/{scope}",
     tag = "account",
     security(("BearerAuth" = [])),
     params(("scope" = String, Path, description = "The scope's name"), FeedQuery),
@@ -150,11 +150,11 @@ pub struct FeedPage {
 )]
 pub async fn feed(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(scope): Path<String>,
     Query(query): Query<FeedQuery>,
 ) -> AppResult<Json<FeedPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     read_allowed(user_id)?;
     let scope = scope_named(&scope)?;
     let after = query.after.unwrap_or(0);
@@ -252,10 +252,10 @@ pub(crate) async fn page(
     Ok(page)
 }
 
-/// `GET /api/account/records/{scope}/{id}` — one record.
+/// `GET /api/v1/account/records/{scope}/{id}` — one record.
 #[utoipa::path(
     get,
-    path = "/api/account/records/{scope}/{id}",
+    path = "/api/v1/account/records/{scope}/{id}",
     tag = "account",
     security(("BearerAuth" = [])),
     params(
@@ -269,10 +269,10 @@ pub(crate) async fn page(
 )]
 pub async fn get_one(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((scope, id)): Path<(String, String)>,
 ) -> AppResult<Json<RecordView>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     read_allowed(user_id)?;
     let scope = scope_named(&scope)?;
     scope
@@ -355,13 +355,13 @@ struct Put {
     envelope: Vec<u8>,
 }
 
-/// `POST /api/account/records` — stores and deletes records with the next
-/// head, all or nothing. `409 revision_conflict` lists every record not at
-/// its base revision; `head_conflict` and `head_required` as for any listed
+/// `POST /api/v1/account/records` — stores and deletes records with the next
+/// head, all or nothing. `409 revisionConflict` lists every record not at
+/// its base revision; `headConflict` and `headRequired` as for any listed
 /// write.
 #[utoipa::path(
     post,
-    path = "/api/account/records",
+    path = "/api/v1/account/records",
     tag = "account",
     security(("BearerAuth" = [])),
     request_body = Batch,
@@ -369,15 +369,15 @@ struct Put {
         (status = 200, description = "Applied", body = BatchResult),
         (status = 400, description = "Not a valid batch, or a scope is full"),
         (status = 404, description = "A Pass secret's vault is gone or not the caller's"),
-        (status = 409, description = "revision_conflict (with conflicts), head_conflict, head_required or masterKeyStale"),
+        (status = 409, description = "revisionConflict (with conflicts), headConflict, headRequired or masterKeyStale"),
     )
 )]
 pub async fn batch(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(batch): Json<Batch>,
 ) -> AppResult<Json<BatchResult>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let items = batch.puts.len() + batch.deletes.len();
     if items == 0 {
         return Err(AppError::bad_request("the batch is empty"));
@@ -481,7 +481,7 @@ pub async fn batch(
     }
     if !conflicts.is_empty() {
         return Err(AppError::conflict("records were changed elsewhere")
-            .with_details(json!({ "code": "revision_conflict", "conflicts": conflicts })));
+            .with_details(json!({ "code": "revisionConflict", "conflicts": conflicts })));
     }
 
     // The scopes' counts after the batch.
@@ -680,10 +680,9 @@ mod tests {
             .unwrap();
         let user_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', $3, '')",
+            "INSERT INTO accounts (id, username, account_incarnation_id, identity_suite,
+                 drive_key_binding_epoch, master_key_generation)
+             VALUES ($1, $2, decode($3, 'hex'), 2, 1, 1)",
         )
         .bind(user_id)
         .bind(format!("records{}", &user_id.simple().to_string()[..12]))

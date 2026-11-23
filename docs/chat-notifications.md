@@ -43,8 +43,8 @@ then shows what arrived.
 
 - **Opt-in:** "Notify me when Chat is closed" subscribes the browser
   (`PushManager.subscribe`, `userVisibleOnly`) with the server's VAPID key
-  (`/api/auth/settings` → `chat.webPushPublicKey`). It then registers the
-  endpoint for this chat device (`PUT /api/chat/push-subscription`).
+  (`/api/v1/auth/settings` → `chat.webPushPublicKey`). It then registers the
+  endpoint for this chat device (`PUT /api/v1/chat/push-subscription`).
   - Each start renews the registration, for a new server key or a new
     language of the worker's words, which travel in its registration URL.
   - Signing out removes it.

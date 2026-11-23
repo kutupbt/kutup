@@ -15,26 +15,26 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::auth::{clear_refresh_cookie, client_header, refresh_cookie, user_agent};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::OkResponse;
 use crate::sessions::{self, ClientType};
 use crate::{jwt, AppState};
 
-fn user_uuid(user: &AuthUser) -> AppResult<Uuid> {
-    Uuid::parse_str(&user.user_id).map_err(|_| AppError::unauthorized("unauthorized"))
+fn user_uuid(user: &AuthAccount) -> AppResult<Uuid> {
+    Uuid::parse_str(&user.account_id).map_err(|_| AppError::unauthorized("unauthorized"))
 }
 
-/// `POST /api/auth/logout` — ends the whole sign-in the caller belongs to: the
+/// `POST /api/v1/auth/logout` — ends the whole sign-in the caller belongs to: the
 /// account. (or CLI) session and every session forked from it. Other apps find out on
 /// their next request (401) and go back through the account app.
 #[utoipa::path(
     post,
-    path = "/api/auth/logout",
-    tag = "sessions",
+    path = "/api/v1/auth/logout",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Signed out", body = OkResponse))
 )]
-pub async fn logout(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn logout(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
     // Recorded first: the session's client and browser are copied from it.
     // Best effort: a log that can't be written never keeps anyone signed in.
     log(&state, &user, crate::security_events::Kind::SignOut).await;
@@ -47,10 +47,6 @@ pub async fn logout(State(state): State<AppState>, user: AuthUser) -> AppResult<
                 (
                     SET_COOKIE,
                     crate::auth_check::clear_known_client_cookie(&state),
-                ),
-                (
-                    SET_COOKIE,
-                    crate::auth_check::clear_retired_known_client_cookie(&state),
                 ),
             ]),
             body,
@@ -82,15 +78,18 @@ pub struct SessionView {
     current: bool,
 }
 
-/// `GET /api/auth/sessions` — the caller's live sessions, most recently used first.
+/// `GET /api/v1/auth/sessions` — the caller's live sessions, most recently used first.
 #[utoipa::path(
     get,
-    path = "/api/auth/sessions",
-    tag = "sessions",
+    path = "/api/v1/auth/sessions",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Live sessions", body = [SessionView]))
 )]
-pub async fn list_sessions(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn list_sessions(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Response> {
     let rows = sessions::list(&state.pool, user_uuid(&user)?).await?;
     let own = user.session.session_id;
     let own_root = rows
@@ -113,19 +112,19 @@ pub async fn list_sessions(State(state): State<AppState>, user: AuthUser) -> App
     Ok(Json(views).into_response())
 }
 
-/// `DELETE /api/auth/sessions/{id}` — revoke one of the caller's sessions and anything
+/// `DELETE /api/v1/auth/sessions/{id}` — revoke one of the caller's sessions and anything
 /// forked from it.
 #[utoipa::path(
     delete,
-    path = "/api/auth/sessions/{id}",
-    tag = "sessions",
+    path = "/api/v1/auth/sessions/{id}",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Session id")),
     responses((status = 200, description = "Revoked", body = OkResponse), (status = 404, description = "No such session"))
 )]
 pub async fn revoke_session(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("session not found"))?;
@@ -136,18 +135,18 @@ pub async fn revoke_session(
     Ok(Json(OkResponse { ok: true }).into_response())
 }
 
-/// `DELETE /api/auth/sessions` — sign out everywhere else: revoke every session except
+/// `DELETE /api/v1/auth/sessions` — sign out everywhere else: revoke every session except
 /// the caller's own sign-in.
 #[utoipa::path(
     delete,
-    path = "/api/auth/sessions",
-    tag = "sessions",
+    path = "/api/v1/auth/sessions",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Other sessions revoked", body = OkResponse))
 )]
 pub async fn revoke_other_sessions(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Response> {
     sessions::revoke_all_for_user(
         &state.pool,
@@ -167,7 +166,7 @@ pub async fn revoke_other_sessions(
 /// `kind` in the account's security log, made by the calling session
 /// (docs/plans/server-personal-data.md, A8). Best effort: what it records
 /// goes on whether or not the log could be written (a failure is logged).
-async fn log(state: &AppState, user: &AuthUser, kind: crate::security_events::Kind) {
+async fn log(state: &AppState, user: &AuthAccount, kind: crate::security_events::Kind) {
     let written: AppResult<()> = async {
         let mut tx = state.pool.begin().await?;
         crate::security_events::record(
@@ -205,18 +204,18 @@ pub struct CreateForkResponse {
     child_origin: String,
 }
 
-/// `POST /api/auth/forks` — the account app hands a child app (drive, chat) a session.
+/// `POST /api/v1/auth/forks` — the account app hands a child app (drive, chat) a session.
 #[utoipa::path(
     post,
-    path = "/api/auth/forks",
-    tag = "sessions",
+    path = "/api/v1/auth/forks",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = CreateForkRequest,
     responses((status = 200, description = "Fork created", body = CreateForkResponse))
 )]
 pub async fn create_fork(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<CreateForkRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
@@ -253,19 +252,19 @@ pub struct ConsumeForkRequest {
 pub struct ConsumeForkResponse {
     access_token: String,
     session_id: String,
-    user_id: String,
+    account_id: String,
     /// The `SessionFork` envelope, canonical base64; the key is in the child's URL fragment.
     payload: String,
 }
 
-/// `POST /api/auth/forks/consume` — the child app (on its own origin) turns a fork into
+/// `POST /api/v1/auth/forks/consume` — the child app (on its own origin) turns a fork into
 /// its own session. Single use; the `X-Kutup-Client` type must be the one the fork was
 /// minted for, and the request `Origin` must be that app's configured origin, so a fork
 /// cannot be redeemed from anywhere else. The refresh cookie is set on this origin.
 #[utoipa::path(
     post,
-    path = "/api/auth/forks/consume",
-    tag = "sessions",
+    path = "/api/v1/auth/forks/consume",
+    tag = "account",
     request_body = ConsumeForkRequest,
     responses((status = 200, description = "Child session created", body = ConsumeForkResponse), (status = 401, description = "Invalid, used or expired fork"))
 )]
@@ -292,8 +291,7 @@ pub async fn consume_fork(
     let consumed =
         sessions::consume_fork(&state.pool, &req.selector, child, user_agent(&headers)).await?;
     let access = jwt::generate_access_token(
-        &consumed.user_id.to_string(),
-        consumed.is_admin,
+        &consumed.account_id.to_string(),
         &consumed.issued.session_id.to_string(),
         &state.config.jwt_secret,
     )
@@ -301,7 +299,7 @@ pub async fn consume_fork(
     let body = ConsumeForkResponse {
         access_token: access,
         session_id: consumed.issued.session_id.to_string(),
-        user_id: consumed.user_id.to_string(),
+        account_id: consumed.account_id.to_string(),
         payload: STANDARD.encode(&consumed.payload),
     };
     // Each app's origin gets its own known-client mark (`auth_check`), so
@@ -311,15 +309,11 @@ pub async fn consume_fork(
         AppendHeaders([
             (
                 SET_COOKIE,
-                refresh_cookie(&state, &consumed.issued.refresh_token),
+                refresh_cookie(&state, &consumed.issued.refresh_token, consumed.issued.ttl),
             ),
             (
                 SET_COOKIE,
-                crate::auth_check::known_client_cookie(&state, consumed.user_id).await?,
-            ),
-            (
-                SET_COOKIE,
-                crate::auth_check::clear_retired_known_client_cookie(&state),
+                crate::auth_check::known_client_cookie(&state, consumed.account_id).await?,
             ),
         ]),
         Json(body),
@@ -334,20 +328,20 @@ pub struct LocalKeyBody {
     key: String,
 }
 
-/// `PUT /api/auth/sessions/current/local-key` — store the key that unlocks this web
+/// `PUT /api/v1/auth/sessions/current/local-key` — store the key that unlocks this web
 /// session's persisted key blob. The blob stays in the browser; the key stays here,
 /// released only to this live session, so neither is useful alone.
 #[utoipa::path(
     put,
-    path = "/api/auth/sessions/current/local-key",
-    tag = "sessions",
+    path = "/api/v1/auth/sessions/current/local-key",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = LocalKeyBody,
     responses((status = 200, description = "Stored", body = OkResponse))
 )]
 pub async fn put_local_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<LocalKeyBody>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
@@ -360,15 +354,18 @@ pub async fn put_local_key(
     Ok(Json(OkResponse { ok: true }).into_response())
 }
 
-/// `GET /api/auth/sessions/current/local-key`
+/// `GET /api/v1/auth/sessions/current/local-key`
 #[utoipa::path(
     get,
-    path = "/api/auth/sessions/current/local-key",
-    tag = "sessions",
+    path = "/api/v1/auth/sessions/current/local-key",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The session's local key", body = LocalKeyBody), (status = 404, description = "None stored"))
 )]
-pub async fn get_local_key(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn get_local_key(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Response> {
     let key = sessions::local_key(&state.pool, &user.session)
         .await?
         .ok_or_else(|| AppError::not_found("no local key"))?;

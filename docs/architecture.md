@@ -114,7 +114,7 @@ remains a ciphertext relay.
    - `masterKey` under the key-encryption key with purpose `PasswordMasterKey`;
    - `masterKey` under the recovery entropy with purpose `RecoveryMasterKey`;
    - the Drive private key under the master key with purpose
-     `DriveHpkePrivateKey`.
+     `DriveXwingPrivateKey`.
    Each single envelope carries and authenticates its closed suite ID, typed
    purpose, the account's key binding (docs/plans/account-identity.md), 24-byte nonce and exact ciphertext
    length. Separate nonce columns and implicit account-wrap formats do not
@@ -125,7 +125,7 @@ remains a ciphertext relay.
    The server bcrypts only that proof into `recovery_key_verifier`. The proof is
    password-equivalent for recovery authorization, but cannot decrypt
    `recoveryKeyEnvelope`; the raw recovery entropy never leaves the client.
-7. Client POSTs the encrypted bundle to `POST /api/auth/register`. The server
+7. Client POSTs the encrypted bundle to `POST /api/v1/auth/register`. The server
    stores all ciphertext, the complete public account-identity binding, and the
    recovery verifier. The mnemonic is shown to the user once and never stored
    anywhere. Every later account manifest must match the registered authority,
@@ -150,25 +150,25 @@ sequenceDiagram
     Note over B: export key → KEK → open masterKeyEnvelope<br/>→ master key (browser memory only)
 ```
 
-1. The client starts the exchange with `POST /api/auth/login/start`. The
+1. The client starts the exchange with `POST /api/v1/auth/login/start`. The
    server counts the attempt against the name (the lockout and ceiling)
    before any OPAQUE work, and answers from the account's record. A name that
    is no account gets a fake answer of the same shape, which can never be
    finished.
 2. The client runs its half (Argon2id in a Web Worker). A wrong password fails
    here, on the client. A right one gives KE3 and the export key.
-3. `POST /api/auth/login/finish` checks KE3. On success the server returns an
+3. `POST /api/v1/auth/login/finish` checks KE3. On success the server returns an
    **access token** (short-lived JWT) in the JSON body and sets the **refresh
    token** as an HTTP-only `refresh_token` cookie scoped to
-   `/api/auth/refresh`.
+   `/api/v1/auth/refresh`.
 4. The answer carries `masterKeyEnvelope`. The client opens it locally with
    the key-encryption key from the export key, with the expected key binding
    and purpose, and derives the account's keys (the authority and the Drive
    keys) from the master key: they are never stored
    (docs/plans/w6-key-hierarchy.md). The server never holds anything that
    opens the envelope. The master key lives only in client memory.
-5. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
-6. For accounts an administrator created (or `ADMIN_ACCOUNT`) that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle, registers its own password, and submits both to `POST /api/auth/complete-setup`.
+5. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/v1/auth/login/2fa` with a TOTP code before receiving the full JWT.
+6. For accounts an administrator created (or `ADMIN_ACCOUNT`) that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle, registers its own password, and submits both to `POST /api/v1/auth/complete-setup`.
 7. Re-authentication (the Pass PIN, a new password, an admin reset) is the
    same exchange with `purpose: "reauth"`, answered by a one-time grant
    instead of a session.
@@ -197,7 +197,7 @@ For each file upload:
    as a `FileMetadata` `DriveEnvelopeV1` under the file key. Its
    authenticated context binds the file UUID, the key generation and the
    metadata revision. The metadata commits with the content: inline for a
-   whole-buffer upload, by `POST /api/files/{id}/revisions/{revisionId}/commit`
+   whole-buffer upload, by `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`
    after a tus upload.
 5. Client seals the file key as a `FileKey` `DriveEnvelopeV1` under the
    collection key, bound to the file, the collection, the collection epoch
@@ -227,7 +227,7 @@ epoch-1 key, which every member reaches through the key chain and which
 no rotation changes; the account's current Drive root for the top level,
 whose generation each top-level folder records), and unique
 indexes plus a per-place advisory lock refuse a second item with the same
-hash (`409 name_taken`, naming what holds it). Each upload also hashes the
+hash (`409 nameTaken`, naming what holds it). Each upload also hashes the
 plaintext (SHA-256, read while it encrypts) and records a content hash
 under the same key, so a client about to upload a file with a taken name
 and the same size can tell whether it is the same file: then nothing is
@@ -287,18 +287,18 @@ Server A (sharer)                          Server B (recipient)
    via signed v2 discovery
 
 2. Signed Drive directory lookup
-   GET /api/fed/drive/users/bob
-                                           ← signed bob@b.example publicKey
+   GET /api/fed/v2/accounts/lookup?name=bob
+                                           ← signed bob@b.example account and keys
 
 3. Browser seals collection key to Bob
-   POST /api/collections/:id/federated-shares
+   POST /api/v1/drive/collections/:id/federated-shares
    (stores canonical b.example + capability hash)
 
 4. Return /invite#server=a.example&capability=...
    (fragment keeps capability out of HTTP requests/logs)
 
                                            5. Recipient opens invite link
-                                              POST /api/drive/federation/shares
+                                              POST /api/v1/drive/federation/folder-shares
                                               Server B fetches signed invite
                                               and checks intended username
 
@@ -513,15 +513,17 @@ Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backen
 - **Uploads from the browser survive a lost connection and a reload.** The web client seals a file block by block as tus asks for each range (`frontend/packages/files/src/upload/encryptedSource.ts`; a PATCH carries two 4 MiB blocks), so memory stays at a few blocks whatever the size. A connection lost for any length of time leaves the upload waiting ("Waiting for the connection"); it goes on from the server's offset (tus `HEAD`) once the browser is back online. Drive and Photos also remember each upload in IndexedDB (`pendingUploads.ts`: the tus URL, size and modified time, the folder and its key epoch, the envelope the upload already made, its revision id and a draft of its metadata sealed under the file key: nothing readable without the folder key). After a reload or a crash the upload panel offers it again; choosing the same file (same name, size and modified time) goes on where the server stopped. The blocks are sealed again from the one the server's offset falls in (their nonces are synthetic, so the bytes are the same) and what the server already holds is dropped, not sent; the sealed manifest, whose nonce is random, is kept in the record once made (docs/plans/drive-block-format.md §10 slice 3). An upload running in some tab holds a Web Lock, so it is never offered as interrupted. One idle for 24 hours is reaped by the server and dropped from the list; one whose folder moved to a new key since cannot go on and is offered only to discard.
 - Each file is stored under its client-generated UUID; the human-readable name exists only in its authenticated metadata envelope, which the server cannot read. Its keyed name and content hashes ("Names in a folder" above) tell the server only which items in one folder share a name or content.
 - The SeaweedFS cluster (master + volume + filer + S3 gateway) runs as Docker services on the same network as the backend. No S3 ports are exposed externally.
-- Each account has one storage pool (`users.storage_quota_bytes` /
-  `storage_used_bytes`, 10 GiB default, administrator-controlled per account).
+- Each account has one storage pool: its quota is its entitlement
+  `account.storage_quota_bytes` (`account_entitlements`), else the site's
+  `account.default_storage_quota_bytes` (10 GiB until set), against
+  `accounts.storage_used_bytes`.
   Drive, Photos, Office, Maps and Chat (delivery media, history segments and
   bases, protected history media) all charge it. Every write locks the user row
   (`storage_pool::lock`) and checks used + reserved + new bytes against the
   quota; reserved bytes are open tus uploads, open Chat media uploads, and
   pending federated inbound Chat-media hand-overs. Each stored copy counts
   separately. `quota_reconcile_tick` rewrites the counter from the rows.
-  `GET /api/user/storage` returns the breakdown that the Account app's
+  `GET /api/v1/account/storage` returns the breakdown that the Account app's
   Settings → Storage page shows.
 
 ---
@@ -612,8 +614,8 @@ Each browser tab session and each CLI session generates a fresh Ed25519 keypair.
 
 ### Versioning
 Two-tier:
-- **Live deltas** in Postgres `file_update_log` (truncated on snapshot).
-- **Snapshots** as SeaweedFS S3 noncurrent versions, indexed in `file_versions`.
+- **Live deltas** in Postgres `collab_update_log` (truncated on snapshot).
+- **Snapshots** as objects of their own (`files/{id}/revisions/{versionId}`), indexed in `drive_file_versions`.
 
 Snapshots fire on idle 30s + ≥1 update, every 200 updates, or on explicit "Save version".
 
@@ -621,13 +623,20 @@ Retention: 30 days OR last 50 versions, whichever yields more. Named/keep-foreve
 
 Versions are stored with one request (`POST /files/:fileId/versions`, multipart, charged by measured size, one object per version; `docs/plans/drive-versions-v2.md`) and are file-type-agnostic — notes (`kind = yjs`), office docs and whiteboards (`kind = file`) all use the same plumbing. Restore for blob-based editors (office, whiteboard) reposts the chosen old bytes as a new version then reloads the page; for Yjs editors the CRDT merges the restored state in-place.
 
+### Object storage
+Every key holds one revision of something and is never overwritten (W7, docs/plans/w7-schema.md §8), so the bucket needs no versioning and a store without it, or a plain directory, would do:
+- Drive: `files/{file}/revisions/{revisionId}` (the first upload and every version), `files/{file}/assets/{assetId}`, `files/{file}/thumbnails/{variant}/{objectId}` (a new key per upload; the row names the current one). No row stores a Drive key: `file_content::revision_path` and the thumbnail and asset path functions derive them from the ids.
+- Mail messages, attachments and held sends, Chat media and backups: a new key per object, named by its row.
+
+A replaced or removed object is deleted only after the change that drops its row commits. Every delete goes through `storage_pending_deletions` (`object` or `prefix`) and reaches the store after `server.storage.deleted_blob_retention_seconds` (`blob_purge`), so a restored database dump never names a purged blob. A write to a key calls off a delete of it still waiting.
+
 ### Federation, sharing
-A live-edited file is still a regular `files` row with an encrypted blob; non-editing users download it as usual.
+A live-edited file is still a regular `drive_files` row with an encrypted blob; non-editing users download it as usual.
 
 Across servers, each browser connects only to its own server. For a file on another server, that server (the bridge) keeps a local room, subscribes at the file's server (home) over the signed Drive federation transport, sends its users' frames home in batches, and receives home's new frames by push, never by polling. Home applies the same checks as for a local frame plus the share's edit permission, and stores remote senders as `(domain, device)`. Versions and the seed are relayed the same way. Only notes and place lists use it so far; see `docs/plans/collab-federation.md`.
 
 ### Replay protection
-Each frame carries a per-device monotonically-increasing sequence number. The `file_update_log` has a `UNIQUE (file_id, sender_device, sender_seq)` constraint that rejects replays at the database level. Combined with Ed25519 signature verification on every frame, this prevents both forgery and replay attacks.
+Each frame carries a per-device monotonically-increasing sequence number. The `collab_update_log` has a `UNIQUE (file_id, sender_device, sender_seq)` constraint that rejects replays at the database level. Combined with Ed25519 signature verification on every frame, this prevents both forgery and replay attacks.
 
 ### File editor route + cross-tab session
 A file opens full screen at `/file/:cid/:fid` (`/shared/file/:fid` for a file shared by itself). The page is one shared package, `@kutup/editors` (`frontend/packages/editors`), mounted by both Drive and Office; it opens the folder and file keys, then the editor or viewer the file needs (the collaborative text editor, OnlyOffice in the `editor.` sandbox, Excalidraw, or an image, PDF or media viewer).
@@ -641,8 +650,8 @@ Each file has **one address**, whichever app it is opened from (`appFor` in `pac
 
 Drive's lists, search and New menu link a document straight to Office (`?from=drive`, so its back button returns to the folder); the Office home opens it in place. A file opened in the other app (an older `drive.<domain>/file/…` link, say) is replaced by its address in the right one, keeping `?from=`. The back button goes to the app named in `from` (only `drive` or `office` are honoured), or else to Office's home or the file's Drive folder. Only Office may frame the OnlyOffice sandbox (its `frame-ancestors`, and Office's `frame-src`; `frontend/docker/40-kutup-hosts.sh`).
 
-Public links follow the same rule. A link to one document is `office.<domain>/s/<token>#key=…`; a folder's link is `drive.<domain>/s/<token>#key=…`, whose documents open at `office.<domain>/s/<token>/<fileId>#key=…` (the key goes along in the fragment, never through a server) with a way back to the folder. Office shows the document as it is now and read-only, without an account (`packages/editors/src/public/`): OnlyOffice in its viewer with no session or live-editing socket, notes rendered with their pictures (`GET /api/share/:token/files/:fileId/assets/:assetId`), code read-only, whiteboards in Excalidraw's view mode, PDFs in the browser's viewer. (A one-file link to a file renamed into a document type later still opens at Drive, listing the file with an "Open" action to Office.) Every public page (Drive, Office, Photos) says who shared it (`ownerAccount`) and that nobody checked what is in it: the pages are on the server's own address, so a link must not pass off what someone put in it (a sign-in form, a payment request) as the server's.
+Public links follow the same rule. A link to one document is `office.<domain>/s/<token>#key=…`; a folder's link is `drive.<domain>/s/<token>#key=…`, whose documents open at `office.<domain>/s/<token>/<fileId>#key=…` (the key goes along in the fragment, never through a server) with a way back to the folder. Office shows the document as it is now and read-only, without an account (`packages/editors/src/public/`): OnlyOffice in its viewer with no session or live-editing socket, notes rendered with their pictures (`GET /api/v1/drive/public-links/:token/files/:fileId/assets/:assetId`), code read-only, whiteboards in Excalidraw's view mode, PDFs in the browser's viewer. (A one-file link to a file renamed into a document type later still opens at Drive, listing the file with an "Open" action to Office.) Every public page (Drive, Office, Photos) says who shared it (`ownerAccount`) and that nobody checked what is in it: the pages are on the server's own address, so a link must not pass off what someone put in it (a sign-in form, a payment request) as the server's.
 
-Anyone who opens a public link can report it (`POST /api/share/:token/report`, no account, rate-limited per address, nothing about the reporter kept). The server cannot see what a link shows, so the reporter may include the whole link, key in the fragment, for an administrator to open; the server accepts only one of its own public pages for that token, and erases the link once the report is resolved. Administrators work through reports in the account app (Admin → Reports): dismiss one, take the link down, or disable the account that made it. A link that is taken down, or whose owner's account is disabled, answers `410` with `code: "link_removed"` on every request, and its pages say it was removed; enabling the account again restores its links that were not taken down. Each action is in the admin activity log.
+Anyone who opens a public link can report it (`POST /api/v1/drive/public-links/:token/report`, no account, rate-limited per address, nothing about the reporter kept). The server cannot see what a link shows, so the reporter may include the whole link, key in the fragment, for an administrator to open; the server accepts only one of its own public pages for that token, and erases the link once the report is resolved. Administrators work through reports in the account app (Admin → Reports): dismiss one, take the link down, or disable the account that made it. A link that is taken down, or whose owner's account is disabled, answers `410` with `code: "linkRemoved"` on every request, and its pages say it was removed; enabling the account again restores its links that were not taken down. Each action is in the admin activity log.
 
 Sensitive material is held tab-locally (Redux + `sessionStorage`). To avoid forcing a fresh login when a new editor tab opens, an already-authenticated tab broadcasts its session payload over a same-origin `BroadcastChannel('kutup-session')`. The fresh tab requests the session on boot (500 ms timeout); on hit it dispatches `setAuth`, on miss it redirects to `/login?next=<path>`. Logout is also broadcast — every tab signs out together so a sibling tab can't re-hydrate a fresh tab after sign-out. See `frontend/src/lib/sessionSync.ts`.

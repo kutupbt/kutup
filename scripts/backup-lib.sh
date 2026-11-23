@@ -133,8 +133,27 @@ encrypted_backup() {
 
 # Records the backup just stored in the database (backup_runs), where
 # /api/health/ready reads the newest backup's age.
+# True when the database is an older chain's, not the wipe-2 baseline's: it has
+# `users` and no `accounts`. That happens exactly once, for the backup a deploy
+# takes right before it wipes such a database; it has no backup_runs table and
+# no account_keys schema. A baseline database never matches, so nothing is
+# skipped there.
+database_predates_baseline() {
+  local user database answer
+  user="$(setting POSTGRES_USER)"
+  database="$(setting POSTGRES_DB)"
+  answer="$(docker compose exec -T postgres psql -tA -U "${user:-kutup}" -d "${database:-kutup}" \
+    -c "SELECT to_regclass('public.users') IS NOT NULL AND to_regclass('public.accounts') IS NULL" \
+    | tr -d '[:space:]')"
+  [ "$answer" = t ]
+}
+
 record_run() {
   local kind="$1" name="$2" size="$3" user database
+  if database_predates_baseline; then
+    echo "backup: the database predates the baseline (no backup_runs); $name stored, not recorded"
+    return 0
+  fi
   user="$(setting POSTGRES_USER)"
   database="$(setting POSTGRES_DB)"
   printf '%s\n' \

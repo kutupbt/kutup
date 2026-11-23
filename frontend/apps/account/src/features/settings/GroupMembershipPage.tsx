@@ -5,6 +5,7 @@ import { useMailAccount } from '@kutup/mail-core/api'
 import { useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { GroupDialog } from '@kutup/mail-core/ui/GroupDialog'
 import { appUrl } from '@kutup/session/apps'
+import { administers } from '@kutup/session/api-types'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
@@ -68,7 +69,7 @@ export function GroupMembershipPage() {
         <GroupDialog
           groupId={open}
           ownKeys={account.data?.groupHolder ?? null}
-          administrator={session.isAdmin}
+          administrator={administers(session.role)}
           onClose={() => setOpen(null)}
         />
       ) : null}

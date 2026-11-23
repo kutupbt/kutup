@@ -46,7 +46,7 @@ export class FederationOffError extends Error {
 }
 
 const FEDERATION_CHECK_MS = 60_000
-let federationCache: { userId: string; on: boolean; at: number } | null = null
+let federationCache: { accountId: string; on: boolean; at: number } | null = null
 
 /** Forgets what {@link federationOn} learnt: the next check asks again. */
 export function forgetFederationState(): void {
@@ -57,12 +57,12 @@ export function forgetFederationState(): void {
 async function federationOn(): Promise<boolean> {
   const session = signedIn()
   const now = Date.now()
-  if (federationCache && federationCache.userId === session.userId && now - federationCache.at < FEDERATION_CHECK_MS) {
+  if (federationCache && federationCache.accountId === session.accountId && now - federationCache.at < FEDERATION_CHECK_MS) {
     return federationCache.on
   }
-  const { data } = await api.get<{ federation?: 'on' | 'off' }>('/user/me')
+  const { data } = await api.get<{ federation?: 'on' | 'off' }>('/account')
   const on = data.federation !== 'off'
-  federationCache = { userId: session.userId, on, at: now }
+  federationCache = { accountId: session.accountId, on, at: now }
   return on
 }
 
@@ -80,20 +80,20 @@ async function ensureMayReach(server: string): Promise<void> {
 export class ApiChatTransport implements ChatTransportPort {
   async listDevices(): Promise<ChatDevice[]> {
     return api
-      .get<{ devices: ChatDevice[] }>('/chat/device')
+      .get<{ devices: ChatDevice[] }>('/chat/devices')
       .then((response) => response.data.devices)
   }
 
   async revokeDevice(deviceId: number): Promise<void> {
-    await api.delete(`/chat/device/${deviceId}`)
+    await api.delete(`/chat/devices/${deviceId}`)
   }
 
   async renameDevice(deviceId: number, name: string): Promise<void> {
-    await api.patch(`/chat/device/${deviceId}`, { name })
+    await api.patch(`/chat/devices/${deviceId}`, { name })
   }
 
   async registerDevice(request: unknown): Promise<unknown> {
-    return api.post('/chat/device', request).then((response) => response.data)
+    return api.post('/chat/devices', request).then((response) => response.data)
   }
 
   setDeviceAuth(deviceId: number, credential: string): void {
@@ -150,11 +150,15 @@ export class ApiChatTransport implements ChatTransportPort {
       .then((response) => response.data)
   }
 
-  /** The `session` hash this device's manifest entry carries: its sign-in, as the server works it out. */
-  async fetchDeviceSession(): Promise<string> {
+  /**
+   * The `session` hash this device's manifest entry carries (its sign-in, as
+   * the server works it out) and the account's device counter, which a
+   * re-registration's id follows.
+   */
+  async fetchDeviceSession(): Promise<{ session: string; nextDeviceId: number }> {
     return api
-      .get<{ session: string }>('/device-session')
-      .then((response) => response.data.session)
+      .get<{ session: string; nextDeviceId: number }>('/account/devices/session')
+      .then((response) => response.data)
   }
 
   async fetchManifest(account: string): Promise<unknown | null> {
@@ -196,7 +200,7 @@ export class ApiChatTransport implements ChatTransportPort {
 
   async fetchSealedSenderPolicy(domain: string): Promise<unknown> {
     return api
-      .get(`/chat/sealed-sender/domains/${encodeURIComponent(domain)}/policy`)
+      .get(`/chat/sealed-sender/servers/${encodeURIComponent(domain)}/policy`)
       .then((response) => response.data)
   }
 

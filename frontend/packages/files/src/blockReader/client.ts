@@ -12,6 +12,7 @@ import { manifestSignerCheck } from '@kutup/crypto/driveBlocks'
 import { answerOnPort, BlockObjectReader } from './core'
 import { STREAM_PROTOCOL_VERSION, type BlockReaderSettings, type BlockReaderTarget, type OpenedObject, type ReaderRequest, type ReaderResponse, type StreamChunkAnswer } from './protocol'
 import type { StreamRange } from './plan'
+import { clientFetch, clientVersionValue, latchClientTooOld } from '@kutup/session/clientVersion'
 
 /** How long the signer check may hold back the first byte; it goes on after that and still warns. */
 const SIGNER_CHECK_WAIT_MS = 10_000
@@ -80,7 +81,7 @@ async function checkSigner({ handle, signedBy }: Opened): Promise<void> {
 
 async function openInPage(options: OpenBlockReaderOptions): Promise<Opened> {
   let token = await tokenOf(options.accessToken)
-  const reader = await BlockObjectReader.open(options.source, options.settings, { fetch: (input, init) => fetch(input, init), token: () => token }, options.signal)
+  const reader = await BlockObjectReader.open(options.source, options.settings, { fetch: (input, init) => clientFetch(input, init), token: () => token }, options.signal)
   const refresh = async () => {
     token = await tokenOf(options.accessToken)
   }
@@ -126,6 +127,8 @@ async function openInWorker(options: OpenBlockReaderOptions): Promise<Opened> {
     if (!waiting) return
     pending.delete(response.id)
     if (response.type === 'error') {
+      // The server refused this build (its range answer was 426).
+      if (response.message.startsWith('range HTTP 426')) latchClientTooOld()
       const error = new Error(response.message)
       if (response.aborted) error.name = 'AbortError'
       waiting.reject(error)
@@ -163,6 +166,7 @@ async function openInWorker(options: OpenBlockReaderOptions): Promise<Opened> {
       target: options.source,
       settings: options.settings,
       token: await tokenOf(options.accessToken),
+      client: clientVersionValue(),
     })
     return {
       signedBy: async (key) => (await call<'signedBy'>({ type: 'signedBy', id: nextId++, key })).ok,

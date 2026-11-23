@@ -169,19 +169,19 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
           {access.data && members.length + federated.length === 0 ? <p className="text-sm text-muted-foreground">{t('share.nobody')}</p> : null}
           <ul className="divide-y divide-border rounded-lg border border-border empty:hidden">
             {members.map((m) => (
-              <li key={m.userId} className="flex items-center gap-2 px-3 py-2">
+              <li key={m.accountId} className="flex items-center gap-2 px-3 py-2">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm">{m.account}</p>
                   <p className="text-xs text-muted-foreground">{m.canUpload ? t('share.canAddShort') : t('share.viewOnly')}</p>
                 </div>
-                <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                <VerifyPersonButton account={m.account} claimed={{ driveXwingPublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
                 <Button
                   variant="ghost"
                   size="icon"
                   disabled={removeAccess.isPending}
                   aria-label={t('share.remove', { account: m.account })}
                   onClick={() =>
-                    removeFromAlbum({ members: [m.userId], publicLinks: [], federatedShares: [] }, () => toast.success(t('share.removed', { account: m.account })))
+                    removeFromAlbum({ members: [m.accountId], publicLinks: [], federatedShares: [] }, () => toast.success(t('share.removed', { account: m.account })))
                   }
                 >
                   <UserMinus />

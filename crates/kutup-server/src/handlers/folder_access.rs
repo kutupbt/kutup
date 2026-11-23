@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One epoch of a folder's key history.
@@ -44,7 +44,9 @@ pub struct EpochLink {
 /// A folder's complete key history, oldest first.
 pub(crate) async fn epoch_chain(pool: &PgPool, collection_id: Uuid) -> AppResult<Vec<EpochLink>> {
     Ok(sqlx::query_as(
-        "SELECT epoch, epoch_statement, epoch_statement_hash, previous_key_envelope
+        "SELECT epoch, kutup_b64(epoch_statement) AS epoch_statement,
+                encode(epoch_statement_hash, 'hex') AS epoch_statement_hash,
+                kutup_b64(previous_key_envelope) AS previous_key_envelope
          FROM drive_collection_key_epoch_history WHERE collection_id = $1 ORDER BY epoch",
     )
     .bind(collection_id)
@@ -89,22 +91,22 @@ fn public_key(value: &str) -> AppResult<Vec<u8>> {
     Ok(bytes)
 }
 
-/// `GET /api/collections/{id}/epochs` — the folder's key history, for the
+/// `GET /api/v1/drive/collections/{id}/epochs` — the folder's key history, for the
 /// owner and its members.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}/epochs",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/epochs",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "Key history, oldest first", body = Vec<EpochLink>))
 )]
 pub async fn epochs(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let collection_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     // The owner also opens trashed folders' files (the trash lists them).
     let owner: Option<Uuid> =
@@ -122,7 +124,7 @@ pub async fn epochs(
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessMember {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub account: String,
     pub account_incarnation_id: String,
     /// The member's Drive HPKE key, to seal them the next epoch's key.
@@ -150,7 +152,7 @@ pub struct AccessLink {
     pub expires_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    /// Why an operator blocked what the link reaches (`legal_order`,
+    /// Why an operator blocked what the link reaches (`legalOrder`,
     /// `abuse`, `other`): it doesn't open, and stays until they lift it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,
@@ -192,7 +194,7 @@ async fn owned_folder(
     lock: bool,
 ) -> AppResult<(i32, i64, String)> {
     let sql = format!(
-        "SELECT key_epoch, name_revision, epoch_statement_hash FROM drive_collections
+        "SELECT key_epoch, name_revision, encode(epoch_statement_hash, 'hex') FROM drive_collections
          WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL{}",
         if lock { " FOR UPDATE" } else { "" }
     );
@@ -204,22 +206,22 @@ async fn owned_folder(
         .ok_or_else(|| AppError::not_found("not found"))
 }
 
-/// `GET /api/collections/{id}/access` — everyone who can open the folder:
+/// `GET /api/v1/drive/collections/{id}/access` — everyone who can open the folder:
 /// members here, members elsewhere, public links. Owner only.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}/access",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/access",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "Who has access", body = FolderAccess))
 )]
 pub async fn access(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let owner = trusted_uuid(&user.user_id)?;
+    let owner = trusted_uuid(&user.account_id)?;
     let collection_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut conn = state.pool.acquire().await?;
     let (key_epoch, _, epoch_statement_hash) =
@@ -240,8 +242,8 @@ pub async fn access(
         OffsetDateTime,
     );
     let members: Vec<MemberRow> = sqlx::query_as(
-        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.identity_suite,
-                u.drive_signing_public_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
+        "SELECT u.id, u.username, COALESCE(encode(u.account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(u.drive_xwing_public_key), ''),
+                u.identity_suite, COALESCE(kutup_b64(u.drive_signing_public_key), ''), cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
          FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1 ORDER BY cs.created_at",
     )
@@ -257,7 +259,7 @@ pub async fn access(
         Option<String>,
     );
     let links: Vec<LinkRow> = sqlx::query_as(
-        "SELECT id, token, owner_link_key_envelope, expires_at, created_at,
+        "SELECT id, token, kutup_b64(owner_link_key_envelope), expires_at, created_at,
                 kutup_target_blocked(share_type, target_id)
            FROM drive_public_shares
           WHERE target_id = $1 AND share_type = 'collection' AND owner_removed_at IS NULL
@@ -278,9 +280,14 @@ pub async fn access(
         OffsetDateTime,
     );
     let federated: Vec<FederatedRow> = sqlx::query_as(
-        "SELECT id, recipient_username, recipient_server, recipient_account_id,
-                named_share_envelope, can_upload, can_delete, upload_quota_bytes, created_at
-         FROM drive_federated_outgoing_shares WHERE collection_id = $1 ORDER BY created_at",
+        "SELECT s.id, split_part(r.current_address, '@', 1), s.recipient_server,
+                s.recipient_account_id, kutup_b64(s.named_share_envelope), s.can_upload,
+                s.can_delete, s.upload_quota_bytes, s.created_at
+         FROM drive_federated_outgoing_shares s
+         -- Their address now (remote_renames): the share names them by id.
+         JOIN remote_account_renames r
+           ON r.server = s.recipient_server AND r.account_id = s.recipient_account_id
+         WHERE s.collection_id = $1 ORDER BY s.created_at",
     )
     .bind(collection_id)
     .fetch_all(&state.pool)
@@ -305,7 +312,7 @@ pub async fn access(
                     created_at,
                 )| {
                     AccessMember {
-                        user_id,
+                        account_id: user_id,
                         account: format!("{}@{domain}", username.unwrap_or_default()),
                         account_incarnation_id: incarnation,
                         drive_public_key: public_key,
@@ -371,7 +378,7 @@ pub async fn access(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct KeptMember {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub named_share_envelope: String,
 }
 
@@ -505,7 +512,7 @@ async fn rotate_album_items(
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
         )?;
         sqlx::query(
-            "UPDATE photos_album_items SET file_key_envelope = $3, album_epoch = $4 WHERE album_id = $1 AND file_id = $2",
+            "UPDATE photos_album_items SET file_key_envelope = kutup_unb64($3), album_epoch = $4 WHERE album_id = $1 AND file_id = $2",
         )
         .bind(collection_id)
         .bind(item.file_id)
@@ -517,13 +524,13 @@ async fn rotate_album_items(
     Ok(())
 }
 
-/// `POST /api/collections/{id}/rotate` — move the folder to a new key, keep
+/// `POST /api/v1/drive/collections/{id}/rotate` — move the folder to a new key, keep
 /// who is listed, remove who is listed as removed. Owner only; all or
 /// nothing.
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/rotate",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/rotate",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = RotateRequest,
@@ -534,11 +541,11 @@ async fn rotate_album_items(
 )]
 pub async fn rotate(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<RotateRequest>,
 ) -> AppResult<Response> {
-    let owner = trusted_uuid(&user.user_id)?;
+    let owner = trusted_uuid(&user.account_id)?;
     let collection_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     let (epoch, name_revision, current_hash) =
@@ -555,8 +562,8 @@ pub async fn rotate(
 
     // The owner's identity, which signs the chain and every share.
     let (incarnation, signing_key, authority_key): (String, String, String) = sqlx::query_as(
-        "SELECT account_incarnation_id, drive_signing_public_key,
-                    account_authority_public_key FROM accounts WHERE id = $1",
+        "SELECT encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key),
+                    kutup_b64(account_authority_public_key) FROM accounts WHERE id = $1",
     )
     .bind(owner)
     .fetch_one(&mut *tx)
@@ -611,7 +618,7 @@ pub async fn rotate(
 
     // Exactly the current access, split into kept and removed.
     let members: Vec<(Uuid, Option<String>, String)> = sqlx::query_as(
-        "SELECT u.id, u.username, u.account_incarnation_id
+        "SELECT u.id, u.username, COALESCE(encode(u.account_incarnation_id, 'hex'), '')
          FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1",
     )
@@ -626,13 +633,13 @@ pub async fn rotate(
     .fetch_all(&mut *tx)
     .await?;
     let federated: Vec<(Uuid, Uuid, String, String)> = sqlx::query_as(
-        "SELECT id, recipient_account_id, recipient_server, named_share_envelope
+        "SELECT id, recipient_account_id, recipient_server, kutup_b64(named_share_envelope)
          FROM drive_federated_outgoing_shares WHERE collection_id = $1",
     )
     .bind(collection_id)
     .fetch_all(&mut *tx)
     .await?;
-    let kept_members: Vec<Uuid> = req.members.iter().map(|m| m.user_id).collect();
+    let kept_members: Vec<Uuid> = req.members.iter().map(|m| m.account_id).collect();
     let kept_links: Vec<Uuid> = req.public_links.iter().map(|l| l.id).collect();
     let kept_federated: Vec<Uuid> = req.federated_shares.iter().map(|f| f.id).collect();
     if !same_membership(
@@ -660,8 +667,8 @@ pub async fn rotate(
         .collect();
     let next_u32 = u32::try_from(next).map_err(|_| AppError::conflict("invalid epoch"))?;
     for member in &req.members {
-        let recipient_incarnation = &member_identity[&member.user_id];
-        let recipient = crate::account_ids::local(domain, member.user_id)?;
+        let recipient_incarnation = &member_identity[&member.account_id];
+        let recipient = crate::account_ids::local(domain, member.account_id)?;
         NamedShareEnvelopeV1::decode_b64(&member.named_share_envelope)
             .and_then(|share| {
                 share.verify_binding_and_signature(
@@ -724,8 +731,9 @@ pub async fn rotate(
 
     // Apply it all.
     sqlx::query(
-        "UPDATE drive_collections SET key_epoch = $2, owner_key_envelope = $3, name_envelope = $4,
-                name_revision = $5, epoch_statement = $6, epoch_statement_hash = $7,
+        "UPDATE drive_collections SET key_epoch = $2, owner_key_envelope = kutup_unb64($3),
+                name_envelope = kutup_unb64($4),
+                name_revision = $5, epoch_statement = kutup_unb64($6), epoch_statement_hash = decode($7, 'hex'),
                 updated_at = NOW()
          WHERE id = $1",
     )
@@ -742,7 +750,7 @@ pub async fn rotate(
         "INSERT INTO drive_collection_key_epoch_history
             (collection_id, epoch, owner_key_envelope, epoch_statement, epoch_statement_hash,
              previous_key_envelope)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+         VALUES ($1, $2, kutup_unb64($3), kutup_unb64($4), decode($5, 'hex'), kutup_unb64($6))",
     )
     .bind(collection_id)
     .bind(next)
@@ -754,11 +762,11 @@ pub async fn rotate(
     .await?;
     for member in &req.members {
         sqlx::query(
-            "UPDATE drive_collection_shares SET named_share_envelope = $3
+            "UPDATE drive_collection_shares SET named_share_envelope = kutup_unb64($3)
              WHERE collection_id = $1 AND recipient_account_id = $2",
         )
         .bind(collection_id)
-        .bind(member.user_id)
+        .bind(member.account_id)
         .bind(&member.named_share_envelope)
         .execute(&mut *tx)
         .await?;
@@ -772,7 +780,7 @@ pub async fn rotate(
     .await?;
     for link in &req.public_links {
         sqlx::query(
-            "UPDATE drive_public_shares SET collection_key_envelope = $2, collection_key_epoch = $3
+            "UPDATE drive_public_shares SET collection_key_envelope = kutup_unb64($2), collection_key_epoch = $3
              WHERE id = $1",
         )
         .bind(link.id)
@@ -809,8 +817,8 @@ pub async fn rotate(
             .map(|envelope| hex::encode(envelope.recipient_incarnation_id))
             .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
         sqlx::query(
-            "UPDATE drive_federated_outgoing_shares SET named_share_envelope = $2,
-                                                   recipient_incarnation_id = $3
+            "UPDATE drive_federated_outgoing_shares SET named_share_envelope = kutup_unb64($2),
+                                                   recipient_incarnation_id = decode($3, 'hex')
              WHERE id = $1",
         )
         .bind(share.id)
@@ -858,15 +866,15 @@ pub struct RekeyResult {
     pub key_generation: i32,
 }
 
-/// `POST /api/files/{id}/rekey` — give a file a new key, wrapped at its
+/// `POST /api/v1/drive/files/{id}/rekey` — give a file a new key, wrapped at its
 /// folder's current epoch, before writing to it: a file the folder has
 /// rotated past (docs/plans/drive-share-revocation.md). The key it leaves is
 /// sealed under the new one, so what was stored under it stays readable in
 /// any folder (docs/plans/drive-move.md). Editors only.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/rekey",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/rekey",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = RekeyRequest,
@@ -877,11 +885,11 @@ pub struct RekeyResult {
 )]
 pub async fn rekey(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<RekeyRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     if !crate::drive_writes::can_write_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::forbidden("forbidden"));
@@ -936,7 +944,7 @@ pub async fn rekey(
     sqlx::query(
         "INSERT INTO drive_file_key_history (file_id, generation, previous_key_envelope,
                                        previous_metadata_envelope, previous_metadata_revision)
-         SELECT $1, $2, $3, metadata_envelope, metadata_revision FROM drive_files WHERE id = $1",
+         SELECT $1, $2, kutup_unb64($3), metadata_envelope, metadata_revision FROM drive_files WHERE id = $1",
     )
     .bind(file_id)
     .bind(next)
@@ -944,8 +952,8 @@ pub async fn rekey(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE drive_files SET key_epoch = $2, key_generation = $3, file_key_envelope = $4,
-                metadata_envelope = $5
+        "UPDATE drive_files SET key_epoch = $2, key_generation = $3, file_key_envelope = kutup_unb64($4),
+                metadata_envelope = kutup_unb64($5)
          WHERE id = $1",
     )
     .bind(file_id)

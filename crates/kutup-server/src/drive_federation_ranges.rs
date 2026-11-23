@@ -3,7 +3,7 @@
 //! `If-Range`) goes to the owner's server in the signed request's query, so
 //! the part asked for is the part the request signs. The owner answers
 //! `206` signed over an RFC 9530 `content-digest` of that part, at most
-//! `drive_stream_response_max_bytes` long, or `416`. The receiving server
+//! `drive.stream_response_max_bytes` long, or `416`. The receiving server
 //! checks the signature and digest (the transport does) and that the part is
 //! the one asked before it releases a byte. `Content-Range`'s total is not
 //! signed: a reader learns the object's length from its own metadata, and

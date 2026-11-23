@@ -43,7 +43,7 @@ export interface KutupChatTransport {
   >;
   fetchBundles(account: string): Promise<unknown>;
   fetchSyncBundles(account: string, currentDeviceId: number): Promise<unknown>;
-  fetchDeviceSession(): Promise<string>;
+  fetchDeviceSession(): Promise<{ session: string; nextDeviceId: number }>;
   fetchManifest(account: string): Promise<unknown | null>;
   fetchManifestHistory(account: string, fromSequence: string, toSequence: string, pageFromSequence: string): Promise<unknown>;
   fetchSealedSenderPolicy(domain: string): Promise<unknown>;
@@ -671,7 +671,7 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn fetch_device_session(&self) -> Result<String> {
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
         from_transport(
             self.js
                 .js_fetch_device_session()

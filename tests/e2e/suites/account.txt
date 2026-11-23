@@ -10,3 +10,5 @@ specs/121-photos-marks.spec.ts
 specs/190-stream-worker-stopped.spec.ts
 specs/191-stream-worker-swapped.spec.ts
 specs/192-stream-long-video.spec.ts
+# A reset server: each origin clears what it kept (docs/plans/api-surface.md §5).
+specs/196-instance-reset.spec.ts

@@ -114,7 +114,7 @@ pub async fn park_for_upgrade(
         id,
         sequence,
         Duration::from_secs(seconds.max(1) as u64),
-        "peer_unsupported",
+        "peerUnsupported",
         error,
     )
     .await
@@ -328,7 +328,7 @@ pub async fn prior(
     sequence: i64,
 ) -> AppResult<Option<InboundRecord>> {
     Ok(sqlx::query_as(
-        "SELECT transaction_id, digest, status, answer FROM federation_inbound
+        "SELECT transaction_id, encode(digest, 'hex') AS digest, status, answer FROM federation_inbound
          WHERE kind = $1 AND origin = $2 AND sequence = $3",
     )
     .bind(kind.as_str())
@@ -355,7 +355,7 @@ pub async fn record(
     let recorded = sqlx::query(
         "INSERT INTO federation_inbound
              (kind, origin, sequence, transaction_id, digest, status, answer)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
+         VALUES ($1, $2, $3, $4, decode($5, 'hex'), $6, $7) ON CONFLICT DO NOTHING",
     )
     .bind(kind.as_str())
     .bind(origin)

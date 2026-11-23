@@ -283,9 +283,7 @@ $(headers '        ')
     location = /kutup-sw.js {
         try_files \$uri =404;
         add_header Cache-Control "no-cache" always;
-        add_header X-Content-Type-Options nosniff always;
-        add_header Content-Security-Policy "$app_csp" always;
-        add_header X-Frame-Options $frame_options always;
+$(headers '        ')
     }
 
     # Streams live only in the service worker: a request it doesn't take

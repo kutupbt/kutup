@@ -11,7 +11,7 @@ import { apiUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { acceptRequest, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*AttachmentWaitPassword'
-const DELIVERIES = '**/api/chat/media/deliveries'
+const DELIVERIES = '**/api/v1/chat/media/deliveries'
 
 interface Settings {
   chat: { serverName: string; sealedSender: boolean }

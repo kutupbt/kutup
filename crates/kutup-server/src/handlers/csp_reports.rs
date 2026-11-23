@@ -41,7 +41,7 @@ struct Violation {
 #[utoipa::path(
     post,
     path = "/api/csp-report",
-    tag = "security",
+    tag = "account",
     request_body(
         content = String,
         description = "A CSP violation report: `application/csp-report` (report-uri) or \
@@ -62,15 +62,13 @@ pub async fn csp_report(headers: HeaderMap, body: Bytes) -> Response {
         .and_then(|value| value.split(';').next())
         .map(|value| value.trim().to_ascii_lowercase())
         .unwrap_or_default();
-    let reports = match content_type.as_str() {
-        "application/csp-report" | "application/json" => serde_json::from_slice::<Value>(&body)
-            .ok()
-            .map(from_report_uri),
-        "application/reports+json" => serde_json::from_slice::<Value>(&body)
-            .ok()
-            .map(from_reporting_api),
-        _ => return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response(),
-    };
+    if !matches!(
+        content_type.as_str(),
+        "application/csp-report" | "application/json" | "application/reports+json"
+    ) {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
+    }
+    let reports = serde_json::from_slice::<Value>(&body).ok().map(violations);
     for violation in reports.unwrap_or_default().into_iter().take(MAX_REPORTS) {
         tracing::warn!(
             host = %violation.host,
@@ -81,6 +79,17 @@ pub async fn csp_report(headers: HeaderMap, body: Bytes) -> Response {
         );
     }
     StatusCode::NO_CONTENT.into_response()
+}
+
+/// A body's reports, read by its shape rather than its content type: WebKit
+/// posts a `report-to` report as `application/csp-report`, one Reporting API
+/// object with no `csp-report` key around it (Safari 26).
+fn violations(value: Value) -> Vec<Violation> {
+    if value.get("csp-report").is_some() {
+        from_report_uri(value)
+    } else {
+        from_reporting_api(value)
+    }
 }
 
 /// `{"csp-report": {"document-uri", "violated-directive", "effective-directive", "blocked-uri", "disposition"}}`.
@@ -97,10 +106,13 @@ fn from_report_uri(value: Value) -> Vec<Violation> {
     }]
 }
 
-/// `[{"type": "csp-violation", "body": {"documentURL", "effectiveDirective", "blockedURL", "disposition"}}]`.
+/// `[{"type": "csp-violation", "body": {"documentURL", "effectiveDirective", "blockedURL", "disposition"}}]`,
+/// or one such report without the array (WebKit's).
 fn from_reporting_api(value: Value) -> Vec<Violation> {
-    let Some(reports) = value.as_array() else {
-        return Vec::new();
+    let reports = match value {
+        Value::Array(reports) => reports,
+        report @ Value::Object(_) => vec![report],
+        _ => return Vec::new(),
     };
     reports
         .iter()
@@ -221,6 +233,40 @@ mod tests {
                 disposition: "enforce".into(),
             }]
         );
+    }
+
+    #[test]
+    fn webkit_reports_one_reporting_api_object_as_a_csp_report() {
+        // What Safari 26 posts to a `report-to` endpoint, with
+        // `Content-Type: application/csp-report`.
+        let reports = violations(json!({
+            "type": "csp-violation",
+            "url": "https://drive.example.org/file/1/2",
+            "body": {
+                "documentURL": "https://drive.example.org/file/1/2",
+                "disposition": "report",
+                "referrer": "",
+                "effectiveDirective": "style-src-elem",
+                "blockedURL": "inline",
+                "originalPolicy": "style-src 'self'; report-uri /api/csp-report; report-to kutup-csp",
+                "statusCode": 200,
+                "sample": "",
+                "sourceFile": "https://drive.example.org/file/1/2",
+                "lineNumber": 1,
+                "columnNumber": 1
+            }
+        }));
+        assert_eq!(
+            reports,
+            vec![Violation {
+                host: "drive.example.org".into(),
+                directive: "style-src-elem".into(),
+                blocked: "inline".into(),
+                disposition: "report".into(),
+            }]
+        );
+        assert!(violations(json!({ "type": "deprecation", "body": {} })).is_empty());
+        assert!(violations(json!("text")).is_empty());
     }
 
     #[test]

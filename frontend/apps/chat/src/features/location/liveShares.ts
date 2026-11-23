@@ -20,7 +20,7 @@ const REKEY_MS = 3_600_000
 const TICK_MS = 5_000
 /** After a failed key hand-off or write, wait this long before trying again. */
 const RETRY_MS = 30_000
-const STORAGE_KEY = 'kutup.chat.liveShares.v1'
+const STORAGE_KEY = 'kutup.chat.liveShares'
 
 export interface ShareSender {
   sendLiveLocation(conversation: ConversationId, share: ChatLiveLocationV1, expiresAfterSeconds?: number): Promise<unknown>

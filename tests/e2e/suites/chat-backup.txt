@@ -8,3 +8,4 @@ specs/165-chat-group-link.spec.ts
 specs/169-chat-account-identity.spec.ts
 specs/170-chat-group-send-endorsements.spec.ts
 specs/90-load-retries.spec.ts
+specs/48-chat-search.spec.ts

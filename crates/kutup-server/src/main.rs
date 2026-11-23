@@ -28,6 +28,7 @@ mod chat_groups;
 mod chat_hub;
 mod chat_media_federation;
 mod client_family;
+mod client_version;
 mod collab_federation;
 mod config;
 mod content_range;
@@ -41,6 +42,7 @@ mod drive_federation_ranges;
 mod drive_names;
 mod drive_profile_keys;
 mod drive_writes;
+mod entitlements;
 mod error;
 mod federation;
 mod federation_outbox;
@@ -50,6 +52,7 @@ mod file_content;
 mod grants;
 mod handlers;
 mod hub;
+mod instance;
 mod job_health;
 mod jobs;
 mod jwt;
@@ -113,10 +116,6 @@ use config::Config;
 use error::AppError;
 use models::HealthResponse;
 
-/// Server build identifier returned by `/api/health`. Mirrors `main.buildVersion`
-/// in Go (injected via `-ldflags` in release builds; `"dev"` otherwise).
-const BUILD_VERSION: &str = "dev";
-
 /// Default request-body cap. Handlers that buffer (JSON, `Bytes`) hold the
 /// whole body in memory, so the default is small; the upload routes that
 /// need more raise it on their own route (and stream to disk).
@@ -162,6 +161,10 @@ pub struct AppState {
     /// (docs/plans/security-keys.md); `None` where the account app's origin
     /// can't use WebAuthn (plain http off localhost), so keys are off.
     pub(crate) webauthn: Option<Arc<kutup_crypto::webauthn::RelyingParty>>,
+    /// The lowest client version per type (docs/plans/api-surface.md §1.3).
+    pub(crate) client_minimums: client_version::ClientMinimums,
+    /// This database's instance id (docs/plans/api-surface.md §5).
+    pub(crate) instance_id: Arc<str>,
 }
 
 const USAGE: &str = "usage: kutup-server [serve]
@@ -170,7 +173,8 @@ const USAGE: &str = "usage: kutup-server [serve]
        kutup-server orphan-sweep [--delete] [--age-floor=<dur>] [--page-sleep=<dur>] [--prefix=<p>]
        kutup-server federation-identity rotate
        kutup-server chat-zk-keys rotate
-       kutup-server feature-policy rotate sealed-sender";
+       kutup-server feature-policy rotate sealed-sender
+       kutup-server reset-instance-id";
 
 /// Whether `rest` (the arguments after the program name) is a command this
 /// build has. `orphan-sweep` checks its own flags.
@@ -185,6 +189,7 @@ fn known_command(rest: &[String]) -> bool {
             | ["federation-identity", "rotate"]
             | ["chat-zk-keys", "rotate"]
             | ["feature-policy", "rotate", "sealed-sender"]
+            | ["reset-instance-id"]
     )
 }
 
@@ -229,6 +234,12 @@ async fn main() -> anyhow::Result<()> {
         None => None,
     };
     db::migrate(owner_pool.as_ref().unwrap_or(&pool)).await?;
+    // A fork's own tables, after the core's, in their own schema
+    // (`ENTERPRISE_MIGRATIONS`; the core runs none).
+    if let Some(dir) = &config.enterprise_migrations {
+        db::migrate_enterprise(owner_pool.as_ref().unwrap_or(&pool), dir).await?;
+        tracing::info!(dir = %dir.display(), "enterprise migrations applied");
+    }
     tracing::info!("migrations applied");
     match &owner_pool {
         Some(owner) => db::grant_app_role(owner, &config.database_url).await?,
@@ -266,6 +277,18 @@ async fn main() -> anyhow::Result<()> {
         println!(
             "kutup-server: group send endorsement key {key_id} issues from now on; \
              the previous one verifies until its last endorsement expires"
+        );
+        return Ok(());
+    }
+    // A new instance id on purpose, on an empty server only
+    // (docs/plans/api-surface.md §5): every client drops what it keeps.
+    if args
+        .get(1..)
+        .is_some_and(|rest| rest == ["reset-instance-id"])
+    {
+        let id = instance::reset(&pool).await?;
+        println!(
+            "kutup-server: the instance id is now {id}; a server already running keeps answering with the old one until it is restarted"
         );
         return Ok(());
     }
@@ -467,11 +490,9 @@ async fn main() -> anyhow::Result<()> {
         jobs::spawn_all(
             pool.clone(),
             storage.clone(),
-            config.trash_retention_days,
             jobs::ChatMaintenancePolicy {
                 mailbox_retention_days: config.chat_mailbox_retention_days,
                 media_delivery_retention_days: config.chat_media_delivery_retention_days,
-                send_retention_days: config.chat_send_retention_days,
                 device_expiry_days: config.chat_device_expiry_days,
             },
             chat_hub.clone(),
@@ -537,7 +558,13 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+    let client_minimums = client_version::ClientMinimums::load(&pool).await?;
+    let instance_id: Arc<str> = instance::load_or_mint(&mut *pool.acquire().await?)
+        .await?
+        .into();
     let state = AppState {
+        client_minimums,
+        instance_id,
         opaque,
         group_send,
         webauthn,
@@ -598,7 +625,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
-    // `/api/collections/`). This mirrors Fiber's default `StrictRouting = false`, which the
+    // `/api/v1/drive/collections/`). This mirrors Fiber's default `StrictRouting = false`, which the
     // Go CLI relies on (it calls e.g. `/collections/` with a trailing slash).
     let app = NormalizePathLayer::trim_trailing_slash().layer(build_router(state));
     // PORT (default 3000): e.g. a second local server for federation testing.
@@ -723,13 +750,6 @@ async fn bootstrap_admin(
         }
     };
 
-    let storage_quota_bytes = match crate::storage_pool::default_quota(pool).await {
-        Ok(quota) => quota,
-        Err(error) => {
-            tracing::error!(%error, "bootstrapAdmin: could not read the default quota; not creating the account");
-            return;
-        }
-    };
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => {
@@ -740,11 +760,8 @@ async fn bootstrap_admin(
     let res: Result<uuid::Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO accounts (
             username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
-            master_key_envelope, recovery_key_envelope,
-            public_key, account_authority_public_key, account_authority_key_id,
-            account_incarnation_id, drive_signing_public_key,
-            is_admin, is_first_login, storage_quota_bytes, is_break_glass
-        ) VALUES ($1,$2,$3,$4,$5,'','','','','','','',true,true,$6,true)
+            identity_suite, role, drive_key_binding_epoch, master_key_generation
+        ) VALUES ($1,$2::uuid,$3,$4,$5,2,$6,1,1)
         RETURNING id"#,
     )
     .bind(username)
@@ -752,7 +769,7 @@ async fn bootstrap_admin(
     .bind(&opaque_record)
     .bind(kutup_crypto::opaque::SUITE as i16)
     .bind(opaque_server_key_id as i16)
-    .bind(storage_quota_bytes)
+    .bind(crate::models::AccountRole::BreakGlassAdmin.as_str())
     .fetch_one(&mut *tx)
     .await;
     let created = match res {
@@ -807,7 +824,7 @@ fn build_router(state: AppState) -> Router {
         // OpenAPI spec as JSON. The Go server served an interactive Swagger UI at
         // `/swagger/*`; the UI bundle is deferred (offline-build constraint, see
         // docs/roadmap.md) — the machine-readable spec lives here meanwhile.
-        .route("/api-docs/openapi.json", get(openapi_json))
+        .route("/api/v1/openapi.json", get(openapi_json))
         .route("/api/health", get(health))
         .route("/api/health/ready", get(readiness::ready))
         .route(
@@ -849,401 +866,422 @@ fn build_router(state: AppState) -> Router {
         // /internal, and the hook authenticates with a bearer token.
         .route("/internal/mail/rcpt", post(crate::mail::rcpt_hook))
         .route(
-            "/api/federation/policies/:feature",
+            "/api/v1/federation/policies/:feature",
             get(crate::federation::get_local_feature_policy),
         )
         // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
-        .route("/api/auth/settings", get(auth::get_public_settings))
-        .route("/api/legal/documents", get(legal::get_documents))
+        .route("/api/v1/auth/settings", get(auth::get_public_settings))
+        .route("/api/v1/legal/documents", get(legal::get_documents))
         .route(
-            "/api/auth/register",
+            "/api/v1/auth/register",
             post(auth::register).route_layer(from_fn(middleware::rate_limit_register)),
         )
         .route(
-            "/api/auth/registration-code/check",
+            "/api/v1/auth/registration-code/check",
             post(auth::check_registration_code)
                 .route_layer(from_fn(middleware::rate_limit_registration_code_check)),
         )
         // OPAQUE sign-in (docs/plans/opaque.md): every start is one attempt.
         .route(
-            "/api/auth/login/start",
+            "/api/v1/auth/login/start",
             post(handlers::opaque::login_start)
                 .route_layer(from_fn(middleware::rate_limit_login))
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/auth/login/finish",
+            "/api/v1/auth/login/finish",
             post(handlers::opaque::login_finish).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/auth/login/abort",
+            "/api/v1/auth/login/abort",
             post(handlers::opaque::login_abort).route_layer(DefaultBodyLimit::max(1024)),
         )
         .route(
-            "/api/auth/login/2fa",
+            "/api/v1/auth/login/2fa",
             post(auth::login_two_fa).route_layer(from_fn(middleware::rate_limit_login)),
         )
         // Security keys at sign-in (docs/plans/security-keys.md §4); the
         // answer is a few KiB of JSON.
         .route(
-            "/api/auth/login/security-key/start",
+            "/api/v1/auth/login/security-key/start",
             post(handlers::security_keys::login_start)
                 .route_layer(from_fn(middleware::rate_limit_login)),
         )
         .route(
-            "/api/auth/login/security-key/finish",
+            "/api/v1/auth/login/security-key/finish",
             post(handlers::security_keys::login_finish)
                 .route_layer(from_fn(middleware::rate_limit_login))
                 .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
         // Keeping a closing account: one try per grant, limited as a sign-in.
         .route(
-            "/api/auth/keep",
+            "/api/v1/auth/keep",
             post(handlers::closing::keep).route_layer(from_fn(middleware::rate_limit_login)),
         )
         .route(
-            "/api/auth/recover/preflight",
+            "/api/v1/auth/recover/preflight",
             get(auth::get_recovery_preflight).route_layer(from_fn(middleware::rate_limit_recovery)),
         )
         .route(
-            "/api/auth/recover/grant",
+            "/api/v1/auth/recover/grant",
             post(auth::recover_grant).route_layer(from_fn(middleware::rate_limit_recovery)),
         )
         // OPAQUE registration: each start is one query of an OPRF key, so it
         // is limited as a sign-in attempt is.
         .route(
-            "/api/auth/opaque/register/start",
+            "/api/v1/auth/opaque/register/start",
             post(handlers::opaque::register_start)
                 .route_layer(from_fn(middleware::rate_limit_login))
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/auth/opaque/register/finish",
+            "/api/v1/auth/opaque/register/finish",
             post(handlers::opaque::register_finish).route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
-        .route("/api/auth/refresh", post(auth::refresh))
-        .route("/api/auth/complete-setup", post(auth::complete_setup))
+        .route("/api/v1/auth/refresh", post(auth::refresh))
+        .route("/api/v1/auth/complete-setup", post(auth::complete_setup))
         // --- Sessions: sign-out, the session list, forks, web local keys ---
-        .route("/api/auth/logout", post(session_routes::logout))
+        .route("/api/v1/auth/logout", post(session_routes::logout))
         .route(
-            "/api/auth/sessions",
+            "/api/v1/auth/sessions",
             get(session_routes::list_sessions).delete(session_routes::revoke_other_sessions),
         )
         .route(
-            "/api/auth/sessions/:id",
+            "/api/v1/auth/sessions/:id",
             delete(session_routes::revoke_session),
         )
         .route(
-            "/api/auth/sessions/current/local-key",
+            "/api/v1/auth/sessions/current/local-key",
             get(session_routes::get_local_key).put(session_routes::put_local_key),
         )
-        .route("/api/auth/forks", post(session_routes::create_fork))
+        .route("/api/v1/auth/forks", post(session_routes::create_fork))
         .route(
-            "/api/auth/forks/consume",
+            "/api/v1/auth/forks/consume",
             post(session_routes::consume_fork).route_layer(from_fn(middleware::rate_limit_fork)),
         )
-        // --- User routes (authenticated via the AuthUser extractor) ---
-        .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
+        // --- User routes (authenticated via the AuthAccount extractor) ---
+        .route("/api/v1/account", get(auth::get_me).patch(auth::update_me))
         .route(
-            "/api/admin/names/:name/close",
+            "/api/v1/admin/names/:name/close",
             post(handlers::renames::admin_close),
         )
         .route(
-            "/api/admin/names/:name/free",
+            "/api/v1/admin/names/:name/free",
             post(handlers::renames::admin_free),
         )
         .route(
-            "/api/users/renames/:address",
+            "/api/v1/accounts/by-address/:address/renames",
             get(handlers::renames::chains).route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
-        .route("/api/user/rename/check", get(handlers::renames::check))
-        .route("/api/user/rename", post(handlers::renames::rename))
-        .route("/api/user/close", post(handlers::closing::close))
-        .route("/api/user/legal/pending", get(legal::get_pending))
-        .route("/api/user/legal/acknowledge", post(legal::post_acknowledge))
         .route(
-            "/api/user/consents",
+            "/api/v1/account/rename/check",
+            get(handlers::renames::check),
+        )
+        .route("/api/v1/account/rename", post(handlers::renames::rename))
+        .route("/api/v1/account/close", post(handlers::closing::close))
+        .route("/api/v1/account/legal/pending", get(legal::get_pending))
+        .route(
+            "/api/v1/account/legal/acknowledge",
+            post(legal::post_acknowledge),
+        )
+        .route(
+            "/api/v1/account/consents",
             get(legal::get_consents).put(legal::put_consent),
         )
         .route(
-            "/api/user/federation",
+            "/api/v1/account/federation",
             put(federation_switch::put_federation),
         )
-        .route("/api/user/names", get(handlers::renames::names))
+        .route("/api/v1/account/names", get(handlers::renames::names))
         .route(
-            "/api/user/names/:name",
+            "/api/v1/account/names/:name",
             axum::routing::delete(handlers::renames::drop_name),
         )
         .route(
-            "/api/account/head",
+            "/api/v1/account/head",
             get(handlers::account_heads::head).post(handlers::account_heads::start),
         )
-        .route("/api/account/heads", get(handlers::account_heads::heads))
-        .route("/api/account/roots", get(account_roots::get))
+        .route("/api/v1/account/heads", get(handlers::account_heads::heads))
+        .route("/api/v1/account/roots", get(account_roots::get))
         .route(
-            "/api/account/master-key/rotate",
+            "/api/v1/account/master-key/rotate",
             post(handlers::master_key::rotate).route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
-            "/api/account/index/:scope",
+            "/api/v1/account/index/:scope",
             get(handlers::account_heads::index),
         )
         // The account-records store (docs/plans/account-records.md).
         .route(
-            "/api/account/records",
+            "/api/v1/account/records",
             post(handlers::account_records::batch).route_layer(DefaultBodyLimit::max(
                 handlers::account_records::MAX_BATCH_BODY_BYTES,
             )),
         )
         .route(
-            "/api/account/records/:scope",
+            "/api/v1/account/records/:scope",
             get(handlers::account_records::feed),
         )
         .route(
-            "/api/account/records/:scope/:id",
+            "/api/v1/account/records/:scope/:id",
             get(handlers::account_records::get_one),
         )
         .route(
-            "/api/user/security-events",
+            "/api/v1/account/security-events",
             get(handlers::security_events::list),
         )
         .route(
-            "/api/feedback",
+            "/api/v1/feedback",
             post(feedback::send_feedback)
                 // A message of 5000 characters and a few details.
                 .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
-            "/api/chat/group-send/endorsement",
+            "/api/v1/chat/group-send/endorsement",
             get(chat_group_send::endorsement),
         )
-        .route("/api/chat/group-send/params", get(chat_group_send::params))
-        .route("/api/pass/vault-states", get(handlers::pass::vault_states))
         .route(
-            "/api/pass/settings",
+            "/api/v1/chat/group-send/params",
+            get(chat_group_send::params),
+        )
+        .route(
+            "/api/v1/pass/vault-states",
+            get(handlers::pass::vault_states),
+        )
+        .route(
+            "/api/v1/pass/settings",
             get(handlers::pass_icons::get_settings)
                 .put(handlers::pass_icons::put_settings)
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/pass/icon",
+            "/api/v1/pass/icon",
             post(handlers::pass_icons::icon).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
-        .route("/api/pass/pin", get(handlers::pass::pin_status))
+        .route("/api/v1/pass/pin", get(handlers::pass::pin_status))
         .route(
-            "/api/pass/pin",
+            "/api/v1/pass/pin",
             put(handlers::pass::set_pin)
                 .delete(handlers::pass::remove_pin)
                 .route_layer(from_fn(middleware::rate_limit_login))
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/pass/pin/verify",
+            "/api/v1/pass/pin/verify",
             // Bounded by the account's three tries, not the sign-in limit.
             post(handlers::pass::verify_pin).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
-        .route("/api/user/storage", get(handlers::storage::usage))
+        .route("/api/v1/account/storage", get(handlers::storage::usage))
         .route(
-            "/api/mail/addresses",
+            "/api/v1/mail/addresses",
             get(handlers::mail_keys::list_addresses),
         )
-        .route("/api/mail/search-index", get(handlers::mail::search_index))
         .route(
-            "/api/mail/search-index/changes",
+            "/api/v1/mail/search-index",
+            get(handlers::mail::search_index),
+        )
+        .route(
+            "/api/v1/mail/search-index/changes",
             get(handlers::mail::search_index_changes),
         )
         .route(
-            "/api/mail/notifications",
+            "/api/v1/mail/notifications",
             get(handlers::mail_notifications::new_mail),
         )
         .route(
-            "/api/mail/search-addresses",
+            "/api/v1/mail/search-addresses",
             get(handlers::mail::search_addresses),
         )
         .route(
-            "/api/mail/messages",
+            "/api/v1/mail/messages",
             get(handlers::mail::list_messages).patch(handlers::mail::update_messages),
         )
         .route(
-            "/api/mail/messages/delete",
+            "/api/v1/mail/messages/delete",
             post(handlers::mail::delete_messages),
         )
         .route(
-            "/api/mail/messages/snooze",
+            "/api/v1/mail/messages/snooze",
             post(handlers::mail::snooze_messages),
         )
         .route(
-            "/api/mail/messages/batch",
+            "/api/v1/mail/messages/batch",
             post(handlers::mail::batch_messages),
         )
-        .route("/api/mail/counts", get(handlers::mail::counts))
-        .route("/api/mail/places", get(handlers::mail_folders::places))
+        .route("/api/v1/mail/counts", get(handlers::mail::counts))
+        .route("/api/v1/mail/places", get(handlers::mail_folders::places))
         .route(
-            "/api/mail/folders",
+            "/api/v1/mail/folders",
             post(handlers::mail_folders::create_folder),
         )
         .route(
-            "/api/mail/folders/:id",
+            "/api/v1/mail/folders/:id",
             patch(handlers::mail_folders::update_folder)
                 .delete(handlers::mail_folders::delete_folder),
         )
         .route(
-            "/api/mail/auto-reply",
+            "/api/v1/mail/auto-reply",
             get(handlers::mail_auto_reply::get).put(handlers::mail_auto_reply::put),
         )
         .route(
-            "/api/mail/identity",
+            "/api/v1/mail/identity",
             get(handlers::mail_identity::get).patch(handlers::mail_identity::update),
         )
         .route(
-            "/api/mail/settings",
+            "/api/v1/mail/settings",
             get(handlers::mail_settings::get).patch(handlers::mail_settings::update),
         )
         .route(
-            "/api/mail/messages/empty",
+            "/api/v1/mail/messages/empty",
             post(handlers::mail_settings::empty),
         )
-        .route("/api/mail/outbox/:id", get(handlers::mail_outbox::status))
         .route(
-            "/api/mail/outbox/:id/cancel",
+            "/api/v1/mail/outbox/:id",
+            get(handlers::mail_outbox::status),
+        )
+        .route(
+            "/api/v1/mail/outbox/:id/cancel",
             post(handlers::mail_outbox::cancel),
         )
         .route(
-            "/api/mail/image-senders",
+            "/api/v1/mail/image-senders",
             get(handlers::mail_image_senders::list).post(handlers::mail_image_senders::add),
         )
-        .route("/api/mail/images", post(handlers::mail_images::fetch))
+        .route("/api/v1/mail/images", post(handlers::mail_images::fetch))
         .route(
-            "/api/mail/image-senders/delete",
+            "/api/v1/mail/image-senders/delete",
             post(handlers::mail_image_senders::delete),
         )
         .route(
-            "/api/mail/sender-rules",
+            "/api/v1/mail/sender-rules",
             get(handlers::mail_sender_rules::list).post(handlers::mail_sender_rules::set),
         )
         .route(
-            "/api/mail/sender-rules/delete",
+            "/api/v1/mail/sender-rules/delete",
             post(handlers::mail_sender_rules::delete),
         )
         .route(
-            "/api/mail/sender-rules/:id",
+            "/api/v1/mail/sender-rules/:id",
             patch(handlers::mail_sender_rules::update),
         )
         .route(
-            "/api/mail/filters",
+            "/api/v1/mail/filters",
             get(handlers::mail_filters::list).post(handlers::mail_filters::create),
         )
         .route(
-            "/api/mail/filters/order",
+            "/api/v1/mail/filters/order",
             put(handlers::mail_filters::order),
         )
         .route(
-            "/api/mail/filters/apply",
+            "/api/v1/mail/filters/apply",
             post(handlers::mail_filters::apply),
         )
         .route(
-            "/api/mail/filters/runs/:id",
+            "/api/v1/mail/filters/runs/:id",
             get(handlers::mail_filters::run_status),
         )
         .route(
-            "/api/mail/filters/:id",
+            "/api/v1/mail/filters/:id",
             patch(handlers::mail_filters::update).delete(handlers::mail_filters::delete),
         )
         .route(
-            "/api/mail/domains",
+            "/api/v1/mail/domains",
             get(handlers::mail_domains::list).post(handlers::mail_domains::add),
         )
         .route(
-            "/api/mail/domains/addresses",
+            "/api/v1/mail/domains/addresses",
             post(handlers::mail_domains::create_address),
         )
         .route(
-            "/api/mail/domains/:id",
+            "/api/v1/mail/domains/:id",
             get(handlers::mail_domains::get).delete(handlers::mail_domains::delete),
         )
         .route(
-            "/api/mail/domains/:id/catch-all",
+            "/api/v1/mail/domains/:id/catch-all",
             put(handlers::mail_domains::catch_all),
         )
         .route(
-            "/api/mail/forwardings",
+            "/api/v1/mail/forwardings",
             get(handlers::mail_forwardings::list).post(handlers::mail_forwardings::create),
         )
         .route(
-            "/api/mail/forwardings/:id",
+            "/api/v1/mail/forwardings/:id",
             put(handlers::mail_forwardings::renew).delete(handlers::mail_forwardings::delete),
         )
         .route(
-            "/api/mail/forwardings/external",
+            "/api/v1/mail/forwardings/external",
             post(handlers::mail_forwardings::external),
         )
         .route(
-            "/api/mail/forwardings/:id/code",
+            "/api/v1/mail/forwardings/:id/code",
             post(handlers::mail_forwardings::send_code),
         )
         .route(
-            "/api/mail/forwardings/:id/verify",
+            "/api/v1/mail/forwardings/:id/verify",
             post(handlers::mail_forwardings::verify),
         )
         .route(
-            "/api/mail/forwardings/external/decline",
+            "/api/v1/mail/forwardings/external/decline",
             post(handlers::mail_forwardings::external_decline),
         )
         .route(
-            "/api/mail/forwardings/:id/reinvite",
+            "/api/v1/mail/forwardings/:id/reinvite",
             put(handlers::mail_forwardings::reinvite),
         )
         .route(
-            "/api/mail/forwardings/:id/pause",
+            "/api/v1/mail/forwardings/:id/pause",
             put(handlers::mail_forwardings::pause),
         )
         .route(
-            "/api/mail/forwardings/:id/resume",
+            "/api/v1/mail/forwardings/:id/resume",
             put(handlers::mail_forwardings::resume),
         )
         .route(
-            "/api/mail/forwardings/:id/conditions",
+            "/api/v1/mail/forwardings/:id/conditions",
             put(handlers::mail_forwardings::conditions),
         )
         .route(
-            "/api/mail/forwardings/:id/activation",
+            "/api/v1/mail/forwardings/:id/activation",
             get(handlers::mail_forwardings::activation),
         )
         .route(
-            "/api/mail/forwardings/:id/accept",
+            "/api/v1/mail/forwardings/:id/accept",
             post(handlers::mail_forwardings::accept),
         )
         .route(
-            "/api/mail/forwardings/:id/decline",
+            "/api/v1/mail/forwardings/:id/decline",
             post(handlers::mail_forwardings::decline),
         )
         .route(
-            "/api/mail/addresses/:address/forwarding-keys/:key",
+            "/api/v1/mail/addresses/:address/forwarding-keys/:key",
             delete(handlers::mail_forwardings::delete_key),
         )
         .route(
-            "/api/mail/labels",
+            "/api/v1/mail/labels",
             post(handlers::mail_folders::create_label),
         )
         .route(
-            "/api/mail/labels/:id",
+            "/api/v1/mail/labels/:id",
             patch(handlers::mail_folders::update_label)
                 .delete(handlers::mail_folders::delete_label),
         )
-        .route("/api/mail/sending", get(handlers::mail_sending::own_status))
-        .route("/api/mail/threads/:id", get(handlers::mail::thread))
         .route(
-            "/api/mail/drafts",
+            "/api/v1/mail/sending",
+            get(handlers::mail_sending::own_status),
+        )
+        .route("/api/v1/mail/threads/:id", get(handlers::mail::thread))
+        .route(
+            "/api/v1/mail/drafts",
             post(handlers::mail_send::create_draft)
                 .route_layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
         )
         .route(
-            "/api/mail/drafts/:id",
+            "/api/v1/mail/drafts/:id",
             put(handlers::mail_send::update_draft)
                 .route_layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
         )
         .route(
-            "/api/mail/drafts/:id/attachments",
+            "/api/v1/mail/drafts/:id/attachments",
             get(handlers::mail_send::list_draft_attachments)
                 .post(handlers::mail_send::add_draft_attachment)
                 .route_layer(DefaultBodyLimit::max(
@@ -1251,436 +1289,469 @@ fn build_router(state: AppState) -> Router {
                 )),
         )
         .route(
-            "/api/mail/drafts/:id/attachments/:attachment",
+            "/api/v1/mail/drafts/:id/attachments/:attachment",
             get(handlers::mail_send::draft_attachment_content)
                 .delete(handlers::mail_send::delete_draft_attachment),
         )
         .route(
-            "/api/mail/send",
+            "/api/v1/mail/send",
             post(handlers::mail_send::send)
                 .route_layer(DefaultBodyLimit::max(handlers::mail_send::SEND_BODY_LIMIT)),
         )
         .route(
-            "/api/mail/messages/:id/content",
+            "/api/v1/mail/messages/:id/content",
             get(handlers::mail::message_content),
         )
         .route(
-            "/api/mail/messages/:id/receipt",
+            "/api/v1/mail/messages/:id/receipt",
             post(handlers::mail::receipt_sent),
         )
         .route(
-            "/api/mail/messages/:id/unsubscribe",
+            "/api/v1/mail/messages/:id/unsubscribe",
             post(handlers::mail::unsubscribe)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
-            "/api/contacts",
+            "/api/v1/contacts",
             get(handlers::contacts::list).post(handlers::contacts::create),
         )
         .route(
-            "/api/calendar/calendars",
+            "/api/v1/calendar/calendars",
             get(handlers::calendar::list).post(handlers::calendar::create),
         )
         .route(
-            "/api/calendar/calendars/:id",
+            "/api/v1/calendar/calendars/:id",
             put(handlers::calendar::update).delete(handlers::calendar::delete),
         )
         .route(
-            "/api/calendar/calendars/:id/events",
+            "/api/v1/calendar/calendars/:id/events",
             get(handlers::calendar::events),
         )
         .route(
-            "/api/calendar/calendars/:id/events/sync",
+            "/api/v1/calendar/calendars/:id/events/sync",
             post(handlers::calendar::sync),
         )
         .route(
-            "/api/calendar/alarms",
+            "/api/v1/calendar/alarms",
             get(handlers::calendar_reminders::alarms),
         )
         .route(
-            "/api/calendar/settings",
+            "/api/v1/calendar/settings",
             get(handlers::calendar_reminders::settings)
                 .put(handlers::calendar_reminders::put_settings),
         )
         .route(
-            "/api/calendar/push-subscription",
+            "/api/v1/calendar/push-subscription",
             put(handlers::calendar_reminders::put_push_subscription)
                 .delete(handlers::calendar_reminders::delete_push_subscription),
         )
         .route(
-            "/api/calendar/calendars/:id/events/:event_id",
+            "/api/v1/calendar/calendars/:id/events/:eventId",
             get(handlers::calendar::event),
         )
         .route(
-            "/api/contacts/delete",
+            "/api/v1/contacts/delete",
             post(handlers::contacts::delete_many),
         )
-        .route("/api/contacts/import", post(handlers::contacts::import))
-        .route("/api/contacts/emails", get(handlers::contacts::emails))
+        .route("/api/v1/contacts/import", post(handlers::contacts::import))
+        .route("/api/v1/contacts/emails", get(handlers::contacts::emails))
         .route(
-            "/api/contacts/:id",
+            "/api/v1/contacts/:id",
             put(handlers::contacts::update).delete(handlers::contacts::delete),
         )
         .route(
-            "/api/mail/addresses/:id/keys",
+            "/api/v1/mail/addresses/:id/keys",
             post(handlers::mail_keys::add_key),
         )
         .route(
-            "/api/mail/addresses/:id/key-list",
+            "/api/v1/mail/addresses/:id/key-list",
             put(handlers::mail_keys::update_key_list),
         )
         .route(
-            "/api/mail/addresses/order",
+            "/api/v1/mail/addresses/order",
             put(handlers::mail_addresses::order),
         )
         .route(
-            "/api/mail/addresses/:id/disable",
+            "/api/v1/mail/addresses/:id/disable",
             put(handlers::mail_addresses::disable),
         )
         .route(
-            "/api/mail/addresses/:id/enable",
+            "/api/v1/mail/addresses/:id/enable",
             put(handlers::mail_addresses::enable),
         )
         .route(
-            "/api/mail/addresses/:id/delete",
+            "/api/v1/mail/addresses/:id/delete",
             put(handlers::mail_addresses::delete),
         )
         .route(
-            "/api/user/storage/versions",
+            "/api/v1/account/storage/versions",
             get(handlers::storage::version_ages),
         )
         .route(
-            "/api/user/storage/versions/prune",
+            "/api/v1/account/storage/versions/prune",
             post(handlers::storage::prune_versions),
         )
-        .route("/api/user/2fa/setup", post(auth::setup_totp))
-        .route("/api/user/2fa/verify", post(auth::verify_totp))
-        .route("/api/user/2fa", delete(auth::disable_totp))
+        .route("/api/v1/account/2fa/setup", post(auth::setup_totp))
+        .route("/api/v1/account/2fa/verify", post(auth::verify_totp))
+        .route("/api/v1/account/2fa", delete(auth::disable_totp))
         .route(
-            "/api/user/2fa/recovery-codes",
+            "/api/v1/account/2fa/recovery-codes",
             get(auth::recovery_codes_left).post(auth::renew_recovery_codes),
         )
         .route(
-            "/api/auth/security-keys",
+            "/api/v1/auth/security-keys",
             get(handlers::security_keys::list),
         )
         .route(
-            "/api/auth/security-keys/register/start",
+            "/api/v1/auth/security-keys/register/start",
             post(handlers::security_keys::register_start),
         )
         .route(
-            "/api/auth/security-keys/register/finish",
+            "/api/v1/auth/security-keys/register/finish",
             post(handlers::security_keys::register_finish)
                 .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
-            "/api/auth/security-keys/proof/start",
+            "/api/v1/auth/security-keys/proof/start",
             post(handlers::security_keys::proof_start),
         )
         .route(
-            "/api/auth/security-keys/require-uv",
+            "/api/v1/auth/security-keys/require-uv",
             put(handlers::security_keys::set_require_uv),
         )
         .route(
-            "/api/auth/security-keys/:id",
+            "/api/v1/auth/security-keys/:id",
             patch(handlers::security_keys::rename).delete(handlers::security_keys::remove),
         )
         .route(
-            "/api/users/by-address/:address",
+            "/api/v1/accounts/by-address/:address",
             get(auth::get_user_by_address).route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
-            "/api/users/by-id/:accountId",
+            "/api/v1/accounts/:accountId",
             get(handlers::accounts::by_id).route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
-            "/api/users/drive-identities",
+            "/api/v1/drive/identities",
             post(identity::drive_identities)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
-            "/api/mail/keys",
+            "/api/v1/mail/keys",
             get(handlers::mail_keys::lookup_keys)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
-            "/api/mail/keys/outside",
+            "/api/v1/mail/keys/outside",
             get(handlers::mail_keys::outside_keys)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
-        .route("/api/mail/groups", get(handlers::mail_groups::my_groups))
+        .route("/api/v1/mail/groups", get(handlers::mail_groups::my_groups))
         .route(
-            "/api/mail/accounts",
+            "/api/v1/mail/accounts",
             get(handlers::mail_groups::resolve_account)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
-            "/api/mail/groups/directory",
+            "/api/v1/mail/groups/directory",
             get(handlers::mail_groups::directory)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
-            "/api/mail/groups/recipients",
+            "/api/v1/mail/groups/recipients",
             get(handlers::mail_groups::recipients)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
-            "/api/mail/groups/:id",
+            "/api/v1/mail/groups/:id",
             get(handlers::mail_groups::group_detail).patch(handlers::mail_groups::update_group),
         )
         .route(
-            "/api/mail/groups/:id/members",
+            "/api/v1/mail/groups/:id/members",
             put(handlers::mail_groups::set_members),
         )
         .route(
-            "/api/mail/groups/:id/keys",
+            "/api/v1/mail/groups/:id/keys",
             get(handlers::mail_groups::group_keys).post(handlers::mail_groups::rotate_group_key),
         )
         // --- Collections (authenticated). ---
         .route(
-            "/api/collections",
+            "/api/v1/drive/collections",
             get(collections::list_collections).post(collections::create_collection),
         )
         .route(
-            "/api/collections/:id",
+            "/api/v1/drive/collections/:id",
             get(collections::get_collection)
                 .put(collections::update_collection)
                 .delete(collections::delete_collection),
         )
         .route(
-            "/api/collections/:id/color",
+            "/api/v1/drive/collections/:id/color",
             patch(collections::update_collection_color),
         )
         .route(
-            "/api/collections/:id/share",
+            "/api/v1/drive/collections/:id/share",
             post(collections::share_collection),
         )
         .route(
-            "/api/drive/profile-keys",
+            "/api/v1/drive/profile-keys",
             put(drive_profile_keys::put_profile_key),
         )
-        .route("/api/drive/people", get(drive_profile_keys::list_people))
+        .route("/api/v1/drive/people", get(drive_profile_keys::list_people))
         // --- Maps (docs/plans/maps.md). ---
-        .route("/api/maps", get(maps::get_config))
+        .route("/api/v1/maps", get(maps::get_config))
         .route(
-            "/api/account/ui-preferences",
+            "/api/v1/account/ui-preferences",
             get(ui_preferences::get_ui_preferences).put(ui_preferences::put_ui_preferences),
         )
-        .route("/api/maps/preferences", put(maps::put_preferences))
-        .route("/api/maps/proxy/:provider/*path", get(maps::proxy))
+        .route("/api/v1/maps/preferences", put(maps::put_preferences))
+        .route("/api/v1/maps/proxy/:provider/*path", get(maps::proxy))
         // --- Photos (docs/plans/photos.md). ---
         .route(
-            "/api/photos/preferences",
+            "/api/v1/photos/preferences",
             get(photos::get_preferences).put(photos::put_preferences),
         )
-        .route("/api/albums", get(albums::list).post(albums::create))
-        .route("/api/albums/:id", delete(albums::delete))
         .route(
-            "/api/albums/:id/items",
+            "/api/v1/photos/albums",
+            get(albums::list).post(albums::create),
+        )
+        .route("/api/v1/photos/albums/:id", delete(albums::delete))
+        .route(
+            "/api/v1/photos/albums/:id/items",
             get(albums::items).post(albums::add_items),
         )
-        .route("/api/albums/:id/items/remove", post(albums::remove_items))
-        .route("/api/albums/:id/keys", get(albums::keys))
-        .route("/api/albums/:id/membership", delete(albums::leave))
+        .route(
+            "/api/v1/photos/albums/:id/items/remove",
+            post(albums::remove_items),
+        )
+        .route("/api/v1/photos/albums/:id/keys", get(albums::keys))
+        .route(
+            "/api/v1/photos/albums/:id/membership",
+            delete(albums::leave),
+        )
         // --- Live-location streams (docs/plans/maps.md). ---
         .route(
-            "/api/live-locations",
+            "/api/v1/chat/live-locations",
             post(live_locations::create).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/live-locations/:streamId",
+            "/api/v1/chat/live-locations/:streamId",
             get(live_locations::read)
                 .put(live_locations::write)
                 .delete(live_locations::delete)
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/collections/:id/federated-shares",
+            "/api/v1/drive/collections/:id/federated-shares",
             post(drive_federation::create_federated_share),
         )
-        .route("/api/collections/:id/files", get(files::list_files))
-        .route("/api/drive/files", get(files::list_all_files))
-        // --- Folder access: key history, who has access, rotation. ---
-        .route("/api/collections/:id/epochs", get(folder_access::epochs))
-        .route("/api/collections/:id/access", get(folder_access::access))
         .route(
-            "/api/collections/:id/rotate",
+            "/api/v1/drive/collections/:id/files",
+            get(files::list_files),
+        )
+        .route("/api/v1/drive/files", get(files::list_all_files))
+        // --- Folder access: key history, who has access, rotation. ---
+        .route(
+            "/api/v1/drive/collections/:id/epochs",
+            get(folder_access::epochs),
+        )
+        .route(
+            "/api/v1/drive/collections/:id/access",
+            get(folder_access::access),
+        )
+        .route(
+            "/api/v1/drive/collections/:id/rotate",
             post(folder_access::rotate).route_layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
-        .route("/api/files/:id/rekey", post(folder_access::rekey))
+        .route("/api/v1/drive/files/:id/rekey", post(folder_access::rekey))
         // --- Sharing a single file (docs/plans/drive-file-sharing.md). ---
-        .route("/api/files/:id/share", post(file_shares::share_file))
-        .route("/api/files/:id/access", get(file_shares::file_access))
-        .route("/api/files/:id/shares", put(file_shares::reseal))
-        .route("/api/files/:id/sharing", put(file_shares::set_sharing))
-        .route("/api/files/:id/rotate", post(file_shares::rotate))
-        .route("/api/shared-files", get(file_shares::shared_with_me))
-        .route("/api/file-shares/pending", get(file_shares::pending))
-        .route("/api/shared-by-me", get(file_shares::shared_by_me))
-        // --- Moving files and folders (docs/plans/drive-move.md). ---
-        .route("/api/files/:id/move", post(drive_move::move_file))
         .route(
-            "/api/files/:id/content-hash",
+            "/api/v1/drive/files/:id/share",
+            post(file_shares::share_file),
+        )
+        .route(
+            "/api/v1/drive/files/:id/access",
+            get(file_shares::file_access),
+        )
+        .route("/api/v1/drive/files/:id/shares", put(file_shares::reseal))
+        .route(
+            "/api/v1/drive/files/:id/sharing",
+            put(file_shares::set_sharing),
+        )
+        .route("/api/v1/drive/files/:id/rotate", post(file_shares::rotate))
+        .route(
+            "/api/v1/drive/shared-with-me",
+            get(file_shares::shared_with_me),
+        )
+        .route(
+            "/api/v1/drive/shared-with-me/pending",
+            get(file_shares::pending),
+        )
+        .route("/api/v1/drive/shared-by-me", get(file_shares::shared_by_me))
+        // --- Moving files and folders (docs/plans/drive-move.md). ---
+        .route("/api/v1/drive/files/:id/move", post(drive_move::move_file))
+        .route(
+            "/api/v1/drive/files/:id/content-hash",
             put(handlers::name_hashes::set_content_hash),
         )
         .route(
-            "/api/collections/:id/available-hashes",
+            "/api/v1/drive/collections/:id/available-hashes",
             post(handlers::name_hashes::available_hashes),
         )
         .route(
-            "/api/drive/top-level-available-hashes",
+            "/api/v1/drive/top-level-available-hashes",
             post(handlers::name_hashes::top_level_available_hashes),
         )
         .route(
-            "/api/collections/:id/move",
+            "/api/v1/drive/collections/:id/move",
             post(drive_move::move_collection),
         )
         // --- Devices (authenticated) ---
         .route(
-            "/api/devices",
+            "/api/v1/account/devices",
             post(account_devices::register_device).get(account_devices::list_devices),
         )
         .route(
-            "/api/device-ticket",
+            "/api/v1/account/devices/tickets",
             post(account_devices::create_device_ticket),
         )
-        // --- Chat (E2EE messaging; authenticated via AuthUser except the WS, which
+        // --- Chat (E2EE messaging; authenticated via AuthAccount except the WS, which
         // validates its token pre-upgrade like the collab WS) ---
         .route(
-            "/api/chat/device",
+            "/api/v1/chat/devices",
             post(chat::register_device).get(chat::list_devices),
         )
         .route(
-            "/api/chat/device/:deviceId",
+            "/api/v1/chat/devices/:deviceId",
             patch(chat::rename_device).delete(chat::revoke_device),
         )
         .route(
-            "/api/chat/backup",
+            "/api/v1/chat/backup",
             post(handlers::chat_backup::provision)
                 .get(handlers::chat_backup::status)
                 .route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route(
-            "/api/chat/backup/segments",
+            "/api/v1/chat/backup/segments",
             post(handlers::chat_backup::append_segment)
                 .get(handlers::chat_backup::list_segments)
                 .route_layer(DefaultBodyLimit::max(400 * 1024)),
         )
         .route(
-            "/api/chat/backup/bases",
+            "/api/v1/chat/backup/bases",
             post(handlers::chat_backup::stage_base)
                 .route_layer(DefaultBodyLimit::max(129 * 1024 * 1024)),
         )
         .route(
-            "/api/chat/backup/bases/:objectId",
+            "/api/v1/chat/backup/bases/:objectId",
             get(handlers::chat_backup::download_base),
         )
         .route(
-            "/api/chat/backup/manifest",
+            "/api/v1/chat/backup/manifest",
             put(handlers::chat_backup::commit_manifest)
                 .route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route(
-            "/api/chat/backup/media/copy",
+            "/api/v1/chat/backup/media/copy",
             post(handlers::chat_backup::copy_media).route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route(
-            "/api/chat/backup/media",
+            "/api/v1/chat/backup/media",
             post(handlers::chat_backup::upload_media)
                 .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024 + 1024 * 1024)),
         )
         .route(
-            "/api/chat/backup/media/reconciliation",
+            "/api/v1/chat/backup/media/reconciliation",
             post(handlers::chat_backup::reconcile_media)
                 .route_layer(DefaultBodyLimit::max(256 * 1024)),
         )
         .route(
-            "/api/chat/backup/media/:mediaId",
+            "/api/v1/chat/backup/media/:mediaId",
             get(handlers::chat_backup::download_media),
         )
         .route(
-            "/api/device-session",
+            "/api/v1/account/devices/session",
             get(account_devices::get_device_session),
         )
-        .route("/api/chat/manifest", post(chat::publish_manifest))
+        .route("/api/v1/chat/manifest", post(chat::publish_manifest))
         .route(
-            "/api/chat/profile",
+            "/api/v1/chat/profile",
             get(chat::get_own_profile)
                 .put(chat::put_profile)
                 .route_layer(DefaultBodyLimit::max(1024 * 1024)),
         )
         .route(
-            "/api/chat/sealed-sender/certificate",
+            "/api/v1/chat/sealed-sender/certificate",
             post(sealed_sender_service::issue_sender_certificate)
                 .route_layer(DefaultBodyLimit::max(8 * 1024)),
         )
         .route(
-            "/api/chat/sealed-sender/domains/:domain/policy",
+            "/api/v1/chat/sealed-sender/servers/:domain/policy",
             get(sealed_sender_service::get_domain_policy),
         )
         .route(
-            "/api/chat/accounts/:account_id/profile/:version",
+            "/api/v1/chat/accounts/:accountId/profile/:version",
             get(chat::get_user_profile),
         )
         .route(
-            "/api/chat/accounts/:account_id/manifest",
+            "/api/v1/chat/accounts/:accountId/manifest",
             get(chat::get_user_manifest),
         )
         .route(
-            "/api/chat/accounts/:account_id/manifest-history",
+            "/api/v1/chat/accounts/:accountId/manifest-history",
             get(chat::get_manifest_history).route_layer(from_fn(middleware::rate_limit_chat_keys)),
         )
-        .route("/api/chat/keys", put(chat::replenish_keys))
-        .route("/api/chat/keys/count", get(chat::prekey_count))
+        .route("/api/v1/chat/keys", put(chat::replenish_keys))
+        .route("/api/v1/chat/keys/count", get(chat::prekey_count))
         .route(
-            "/api/chat/link-tokens",
+            "/api/v1/chat/link-tokens",
             post(handlers::chat_provisioning::create_link_token),
         )
         .route(
-            "/api/chat/provisioning/ticket",
+            "/api/v1/chat/provisioning/ticket",
             post(handlers::chat_provisioning::create_ticket)
                 .route_layer(from_fn(middleware::rate_limit_chat_provisioning)),
         )
         .route(
-            "/api/chat/provisioning",
+            "/api/v1/chat/provisioning",
             get(handlers::chat_provisioning::socket),
         )
         .route(
-            "/api/chat/provisioning/:address",
+            "/api/v1/chat/provisioning/:address",
             // Above `chatProvisionBodyBytes`' largest (64 KiB), base64; the
             // handler holds a body to the setting.
             put(handlers::chat_provisioning::relay).route_layer(DefaultBodyLimit::max(128 * 1024)),
         )
         .route(
-            "/api/chat/account-identity",
+            "/api/v1/chat/account-identity",
             // The ceiling the settings' maxima allow: ten devices' syncs at
             // `chatDistributionMessageBytes`' largest, base64, plus their keys.
             put(handlers::chat_identity::distribute_identity)
                 .route_layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route(
-            "/api/chat/keys/check",
+            "/api/v1/chat/keys/check",
             post(handlers::chat_identity::check_keys).route_layer(DefaultBodyLimit::max(1024)),
         )
         .route(
-            "/api/chat/accounts/:account_id/keys",
+            "/api/v1/chat/accounts/:accountId/keys",
             get(chat::get_user_bundles).route_layer(from_fn(middleware::rate_limit_chat_keys)),
         )
         .route(
-            "/api/chat/anonymous/accounts/:account_id/keys",
+            "/api/v1/chat/anonymous/accounts/:accountId/keys",
             post(chat::get_anonymous_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
-            "/api/chat/anonymous/messages/multi",
+            "/api/v1/chat/anonymous/messages/multi",
             post(handlers::chat_multi::send_multi)
                 // The largest payload the format takes, base64, and the rest.
                 .route_layer(DefaultBodyLimit::max(handlers::chat_multi::MAX_BODY))
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
-            "/api/chat/anonymous/messages/batch",
+            "/api/v1/chat/anonymous/messages/batch",
             post(chat::send_sealed_batch)
                 .route_layer(DefaultBodyLimit::max(
                     kutup_chat_proto::MAX_SEALED_BATCH_BYTES + 64 * 1024,
@@ -1688,176 +1759,182 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
-            "/api/chat/anonymous/accounts/:account_id/messages",
+            "/api/v1/chat/anonymous/accounts/:accountId/messages",
             post(chat::send_sealed_messages)
                 .route_layer(DefaultBodyLimit::max(1024 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
-            "/api/chat/accounts/:account_id/messages",
+            "/api/v1/chat/accounts/:accountId/messages",
             post(chat::send_messages).route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES)),
         )
         .route(
-            "/api/chat/sync/messages",
+            "/api/v1/chat/sync/messages",
             post(chat::sync_messages).route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES)),
         )
-        .route("/api/chat/messages", get(chat::drain_mailbox))
-        .route("/api/chat/messages/ack", post(chat::ack_messages))
-        .route("/api/chat/link-preview", post(chat_link_preview::fetch))
-        .route("/api/chat/call-servers", get(calls::call_servers))
+        .route("/api/v1/chat/messages", get(chat::drain_mailbox))
+        .route("/api/v1/chat/messages/ack", post(chat::ack_messages))
+        .route("/api/v1/chat/link-preview", post(chat_link_preview::fetch))
+        .route("/api/v1/chat/call-servers", get(calls::call_servers))
         .route(
-            "/api/chat/group-calls/token",
+            "/api/v1/chat/group-calls/token",
             post(chat_calls::group_call_token).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/chat/groups/gateway-key",
+            "/api/v1/chat/groups/gateway-key",
             get(chat_groups::routes::gateway_key),
         )
         .route(
-            "/api/chat/groups/relay/:server",
+            "/api/v1/chat/groups/relay/:server",
             post(chat_groups::routes::relay)
                 .route_layer(DefaultBodyLimit::max(chat_groups::routes::MAX_SEALED)),
         )
         .route(
-            "/api/chat/call-links",
+            "/api/v1/chat/call-links",
             post(chat_calls::call_links::create)
                 .get(chat_calls::call_links::list)
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/chat/call-links/token",
+            "/api/v1/chat/call-links/token",
             post(chat_calls::call_links::token)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link)),
         )
         .route(
-            "/api/chat/call-links/info",
+            "/api/v1/chat/call-links/info",
             post(chat_calls::call_links::info)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link)),
         )
         .route(
-            "/api/chat/call-links/knock",
+            "/api/v1/chat/call-links/knock",
             post(chat_calls::call_link_waiting::knock)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link)),
         )
         .route(
-            "/api/chat/call-links/knock/status",
+            "/api/v1/chat/call-links/knock/status",
             post(chat_calls::call_link_waiting::knock_status)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/knock/leave",
+            "/api/v1/chat/call-links/knock/leave",
             post(chat_calls::call_link_waiting::leave_knock)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/knocks",
+            "/api/v1/chat/call-links/knocks",
             post(chat_calls::call_link_waiting::knocks)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/knocks/decide",
+            "/api/v1/chat/call-links/knocks/decide",
             post(chat_calls::call_link_waiting::decide)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/roles",
+            "/api/v1/chat/call-links/roles",
             post(chat_calls::call_link_moderation::roles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/co-hosts",
+            "/api/v1/chat/call-links/co-hosts",
             post(chat_calls::call_link_moderation::set_co_host)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/participants/remove",
+            "/api/v1/chat/call-links/participants/remove",
             post(chat_calls::call_link_moderation::remove_participant)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/participants/mute",
+            "/api/v1/chat/call-links/participants/mute",
             post(chat_calls::call_link_moderation::mute)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/participants/screen",
+            "/api/v1/chat/call-links/participants/screen",
             post(chat_calls::call_link_moderation::set_screen_share)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/lock",
+            "/api/v1/chat/call-links/lock",
             post(chat_calls::call_link_moderation::lock)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/end",
+            "/api/v1/chat/call-links/end",
             post(chat_calls::call_link_moderation::end)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
-            "/api/chat/call-links/:room_id",
+            "/api/v1/chat/call-links/:roomId",
             delete(chat_calls::call_links::delete),
         )
         .route(
-            "/api/chat/call-links/:room_id/waiting-room",
+            "/api/v1/chat/call-links/:roomId/waiting-room",
             put(chat_calls::call_link_waiting::set_waiting_room)
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/chat/call-links/:room_id/info",
+            "/api/v1/chat/call-links/:roomId/info",
             put(chat_calls::call_links::update_info).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/chat/push-subscription",
+            "/api/v1/chat/push-subscription",
             put(web_push::put_subscription)
                 .delete(web_push::delete_subscription)
                 .route_layer(DefaultBodyLimit::max(8 * 1024)),
         )
-        .route("/api/chat/ws", get(chat::ws))
+        .route("/api/v1/chat/ws", get(chat::ws))
         // Chat-media uses the same storage client and tus multipart semantics,
         // but a separate typed object namespace and quota reference model.
-        .route("/api/chat/media/uploads", post(chat_media::create_upload))
         .route(
-            "/api/chat/media/uploads/:id",
+            "/api/v1/chat/media/uploads",
+            post(chat_media::create_upload),
+        )
+        .route(
+            "/api/v1/chat/media/uploads/:id",
             patch(chat_media::patch_upload)
                 .head(chat_media::head_upload)
                 .delete(chat_media::delete_upload)
                 .route_layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
         )
         .route(
-            "/api/chat/media/objects/:attachmentId",
+            "/api/v1/chat/media/objects/:attachmentId",
             get(chat_media::download_object).delete(chat_media::discard_origin_object),
         )
         .route(
-            "/api/chat/media/references/:attachmentId",
+            "/api/v1/chat/media/references/:attachmentId",
             get(chat_media::reference_info).delete(chat_media::clear_reference),
         )
         .route(
-            "/api/chat/media/deliveries",
+            "/api/v1/chat/media/deliveries",
             post(chat_media::deliver_local).route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
-        .route("/api/chat/media/storage", get(chat_media::storage_summary))
+        .route(
+            "/api/v1/chat/media/storage",
+            get(chat_media::storage_summary),
+        )
         // --- tus.io resumable uploads. The OPTIONS discovery is served by the
         // `tus_options_passthrough` layer (mirroring Fiber, which lets non-preflight
-        // OPTIONS reach the handler); the rest authenticate via the AuthUser extractor
+        // OPTIONS reach the handler); the rest authenticate via the AuthAccount extractor
         // inside each handler. ---
-        .route("/api/uploads", post(tus::create))
+        .route("/api/v1/drive/uploads", post(tus::create))
         .route(
-            "/api/uploads/:id",
+            "/api/v1/drive/uploads/:id",
             patch(tus::patch)
                 .head(tus::head)
                 .delete(tus::delete)
@@ -1865,44 +1942,50 @@ fn build_router(state: AppState) -> Router {
         )
         // --- Files (authenticated) ---
         .route(
-            "/api/files/upload",
+            "/api/v1/drive/files",
             // The upload limit is a site setting the handler counts against
             // as the body arrives (driveUploadMaxBytes).
             post(files::upload).route_layer(DefaultBodyLimit::disable()),
         )
-        .route("/api/drive/limits", get(files::limits))
-        .route("/api/files/:id/download", get(files::download))
-        .route("/api/files/:id/original", get(files::download_original))
+        .route("/api/v1/drive/limits", get(files::limits))
+        .route("/api/v1/drive/files/:id/download", get(files::download))
         .route(
-            "/api/files/:id",
+            "/api/v1/drive/files/:id/original",
+            get(files::download_original),
+        )
+        .route(
+            "/api/v1/drive/files/:id",
             put(files::update_metadata).delete(files::delete),
         )
-        .route("/api/files/:fileId/claim-seed", post(files::claim_seed))
         .route(
-            "/api/files/:id/revisions/:revisionId/commit",
+            "/api/v1/drive/files/:fileId/claim-seed",
+            post(files::claim_seed),
+        )
+        .route(
+            "/api/v1/drive/files/:id/revisions/:revisionId/commit",
             post(revision_commit::commit),
         )
         // --- Trash (authenticated; owner-scoped soft-delete + 30-day retention) ---
-        .route("/api/trash", get(trash::list).delete(trash::empty))
-        .route("/api/trash/:id", delete(trash::destroy))
-        .route("/api/trash/:id/restore", post(trash::restore))
+        .route("/api/v1/drive/trash", get(trash::list).delete(trash::empty))
+        .route("/api/v1/drive/trash/:id", delete(trash::destroy))
+        .route("/api/v1/drive/trash/:id/restore", post(trash::restore))
         .route(
-            "/api/files/:fileId/versions",
+            "/api/v1/drive/files/:fileId/versions",
             get(file_versions::list)
                 .post(file_versions::create)
                 // Counted by the handler (driveVersionMaxBytes).
                 .route_layer(DefaultBodyLimit::disable()),
         )
         .route(
-            "/api/files/:fileId/versions/:vid/download",
+            "/api/v1/drive/files/:fileId/versions/:vid/download",
             get(file_versions::download),
         )
         .route(
-            "/api/files/:fileId/versions/:vid",
+            "/api/v1/drive/files/:fileId/versions/:vid",
             patch(file_versions::patch).delete(file_versions::delete),
         )
         .route(
-            "/api/files/:fileId/assets/:assetId",
+            "/api/v1/drive/files/:fileId/assets/:assetId",
             put(file_assets::upload)
                 .get(file_assets::download)
                 // One asset envelope plus the multipart framing.
@@ -1911,23 +1994,23 @@ fn build_router(state: AppState) -> Router {
                 )),
         )
         .route(
-            "/api/files/:fileId/thumbnails/:variant",
+            "/api/v1/drive/files/:fileId/thumbnails/:variant",
             put(file_thumbnails::upload)
                 .get(file_thumbnails::download)
                 // A large thumbnail envelope, whole, and no more.
                 .route_layer(DefaultBodyLimit::max(1100 * 1024)),
         )
         .route(
-            "/api/files/:fileId/thumbnails",
+            "/api/v1/drive/files/:fileId/thumbnails",
             delete(file_thumbnails::delete),
         )
         // --- Collab-edit WebSocket. Auth (token + file access + device) happens inside the
         // handler before the upgrade (mirrors Go's PreUpgrade — browsers can't set headers
         // on `new WebSocket`, so the token may arrive via ?token=). ---
-        .route("/api/files/:fileId/collab/ws", get(collab::ws))
+        .route("/api/v1/drive/files/:fileId/collab/ws", get(collab::ws))
         // The log over HTTP, for a peer without a socket (the CLI).
         .route(
-            "/api/files/:fileId/collab/frames",
+            "/api/v1/drive/files/:fileId/collab/frames",
             get(collab::get_frames)
                 .post(collab::post_frame)
                 // One sealed frame at most.
@@ -1938,29 +2021,32 @@ fn build_router(state: AppState) -> Router {
         )
         // --- Public shares. Create is authenticated; the read/download endpoints are
         // anonymous (the token is the capability). ---
-        .route("/api/share", post(shares::create_public_share))
         .route(
-            "/api/share/:token",
+            "/api/v1/drive/public-links",
+            post(shares::create_public_share),
+        )
+        .route(
+            "/api/v1/drive/public-links/:token",
             get(shares::get_public_share).route_layer(from_fn(middleware::no_store)),
         )
         .route(
-            "/api/share/:token/files",
+            "/api/v1/drive/public-links/:token/files",
             get(shares::list_public_share_files).route_layer(from_fn(middleware::no_store)),
         )
         .route(
-            "/api/share/:token/epochs",
+            "/api/v1/drive/public-links/:token/epochs",
             get(shares::public_share_epochs).route_layer(from_fn(middleware::no_store)),
         )
         .route(
-            "/api/share/:token/album",
+            "/api/v1/drive/public-links/:token/album",
             get(shares::public_album_items).route_layer(from_fn(middleware::no_store)),
         )
         .route(
-            "/api/share/:token/thumbnails/:fileId/:variant",
+            "/api/v1/drive/public-links/:token/files/:fileId/thumbnails/:variant",
             get(shares::public_thumbnail).route_layer(from_fn(middleware::no_store)),
         )
         .route(
-            "/api/share/:token/state/:fileId",
+            "/api/v1/drive/public-links/:token/files/:fileId/state",
             get(shares::public_share_state).route_layer(from_fn(middleware::no_store)),
         )
         // Content-Security-Policy violation reports from the web apps: anyone,
@@ -1972,39 +2058,39 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_csp_reports)),
         )
         .route(
-            "/api/share/:token/report",
+            "/api/v1/drive/public-links/:token/report",
             post(link_reports::report_public_link)
                 .route_layer(from_fn(middleware::rate_limit_report)),
         )
         .route(
-            "/api/share/:token/files/:fileId/assets/:assetId",
+            "/api/v1/drive/public-links/:token/files/:fileId/assets/:assetId",
             get(shares::public_share_asset).route_layer(from_fn(middleware::no_store)),
         )
         .route(
-            "/api/share/:token/download/:fileId",
+            "/api/v1/drive/public-links/:token/files/:fileId/download",
             get(shares::download_public_share_file).route_layer(from_fn(middleware::no_store)),
         )
         // --- Server-to-server endpoints. Every feature uses the shared v2
         // identity, discovery, policy, pinning, replay, and signed transport. ---
         .route(
-            "/api/fed/chat/accounts/:account_id/keys",
+            "/api/fed/v2/chat/accounts/:accountId/keys",
             get(chat_federation::get_user_bundles)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/sealed/accounts/:account_id/keys",
+            "/api/fed/v2/chat/sealed/accounts/:accountId/keys",
             post(chat_federation::get_sealed_user_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/sealed/multi",
+            "/api/fed/v2/chat/sealed/multi",
             post(handlers::chat_multi::deliver_federated)
                 .route_layer(DefaultBodyLimit::max(handlers::chat_multi::MAX_BODY))
                 .route_layer(from_fn(middleware::rate_limit_fed_multi)),
         )
         .route(
-            "/api/fed/chat/sealed/batch",
+            "/api/fed/v2/chat/sealed/batch",
             post(chat_federation::deliver_sealed_batch)
                 .route_layer(DefaultBodyLimit::max(
                     kutup_chat_proto::MAX_SEALED_BATCH_BYTES,
@@ -2012,45 +2098,45 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/sealed/messages",
+            "/api/fed/v2/chat/sealed/messages",
             post(chat_federation::deliver_sealed_messages)
                 .route_layer(DefaultBodyLimit::max(1024 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/groups/gateway",
+            "/api/fed/v2/chat/groups/gateway",
             post(chat_groups::routes::fed_gateway)
                 .route_layer(DefaultBodyLimit::max(chat_groups::routes::MAX_SEALED))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/groups/gateway-key",
+            "/api/fed/v2/chat/groups/gateway-key",
             get(chat_groups::routes::fed_gateway_key)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/group-calls/token",
+            "/api/fed/v2/chat/group-calls/token",
             post(chat_calls::federated_group_call_token)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/policies/:feature",
+            "/api/fed/v2/policies/:feature",
             get(crate::federation::get_federated_feature_policy)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/accounts/:account_id/profile/:version",
+            "/api/fed/v2/chat/accounts/:accountId/profile/:version",
             get(chat_federation::get_user_profile)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/accounts/:account_id/manifest-history",
+            "/api/fed/v2/chat/accounts/:accountId/manifest-history",
             get(chat_federation::get_manifest_history)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/accounts/:account_id/manifest",
+            "/api/fed/v2/chat/accounts/:accountId/manifest",
             get(chat_federation::get_manifest)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
@@ -2061,68 +2147,57 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/messages",
+            "/api/fed/v2/chat/messages",
             post(chat_federation::deliver_messages)
                 .route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/media/offers",
+            "/api/fed/v2/chat/media/offers",
             post(chat_media_federation::receive_offer)
                 .route_layer(DefaultBodyLimit::max(64 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/media/objects",
+            "/api/fed/v2/chat/media/objects",
             post(chat_media_federation::serve_object)
                 .route_layer(DefaultBodyLimit::max(64 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
-        // Renames, under Chat's and Drive's namespaces alike (the signed
-        // request's feature says which).
+        // The account namespace, for Chat's and Drive's requests alike (the
+        // signed request's feature says which; docs/plans/api-surface.md
+        // §3): the one lookup by name, and rename announces.
         .route(
-            "/api/fed/chat/names/:username/renames",
-            get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
+            "/api/fed/v2/accounts/lookup",
+            get(remote_renames::fed_lookup).route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/names/:username/renames",
-            get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/accounts/renames",
+            "/api/fed/v2/accounts/renames",
             post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         .route(
-            "/api/fed/drive/accounts/renames",
-            post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
-        )
-        .route(
-            "/api/fed/drive/accounts/:accountId",
+            "/api/fed/v2/drive/accounts/:accountId",
             get(handlers::accounts::fed_by_id)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/users/:username",
-            get(drive_federation::get_user).route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/live-locations/:streamId",
+            "/api/fed/v2/chat/live-locations/:streamId",
             get(live_locations::federated_read)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/profile-keys",
+            "/api/fed/v2/drive/profile-keys",
             put(drive_profile_keys::receive_profile_key)
                 .route_layer(DefaultBodyLimit::max(16 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/invite",
+            "/api/fed/v2/drive/folder-shares/invite",
             get(drive_federation::get_invite)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/files",
+            "/api/fed/v2/drive/folder-shares/files",
             get(drive_federation::list_files)
                 .post(drive_federation::upload_file)
                 // Spooled against the upload limit, a site setting.
@@ -2130,177 +2205,177 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/epochs",
+            "/api/fed/v2/drive/folder-shares/epochs",
             get(drive_federation::list_epochs)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/files/:fileId/content",
+            "/api/fed/v2/drive/folder-shares/files/:fileId/content",
             get(drive_federation::download_file)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/subscribe",
+            "/api/fed/v2/drive/collab/subscribe",
             post(collab_federation::subscribe)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/unsubscribe",
+            "/api/fed/v2/drive/collab/unsubscribe",
             post(collab_federation::unsubscribe)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/frames",
+            "/api/fed/v2/drive/collab/frames",
             post(collab_federation::frames)
                 .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/log",
+            "/api/fed/v2/drive/collab/log",
             post(collab_federation::log).route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/versions/list",
+            "/api/fed/v2/drive/collab/versions/list",
             post(collab_federation::versions_list)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/versions/create",
+            "/api/fed/v2/drive/collab/versions/create",
             post(collab_federation::versions_create)
                 .route_layer(DefaultBodyLimit::max(collab_federation::VERSION_BODY_LIMIT))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/versions/patch",
+            "/api/fed/v2/drive/collab/versions/patch",
             post(collab_federation::versions_patch)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/claim-seed",
+            "/api/fed/v2/drive/collab/claim-seed",
             post(collab_federation::claim_seed)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/push",
+            "/api/fed/v2/drive/collab/push",
             post(collab_federation::receive_push)
                 .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/assets/create",
+            "/api/fed/v2/drive/collab/assets/create",
             post(collab_federation::assets_create)
                 .route_layer(DefaultBodyLimit::max(collab_federation::ASSET_BODY_LIMIT))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/files/:fileId/assets/:assetId",
+            "/api/fed/v2/drive/collab/files/:fileId/assets/:assetId",
             get(collab_federation::asset_content)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/files/:fileId/versions/:vid",
+            "/api/fed/v2/drive/collab/files/:fileId/versions/:vid",
             get(collab_federation::version_content)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/file-invite",
+            "/api/fed/v2/drive/file-shares/invite",
             get(drive_federation_files::get_file_invite)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/file-content",
+            "/api/fed/v2/drive/file-shares/content",
             get(drive_federation_files::get_file_content)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/files/:fileId/state",
+            "/api/fed/v2/drive/folder-shares/files/:fileId/state",
             get(drive_federation_files::get_folder_file_state)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/album",
+            "/api/fed/v2/drive/folder-shares/album",
             get(drive_federation_albums::album_items)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/files/:fileId/thumbnails/:variant",
+            "/api/fed/v2/drive/folder-shares/files/:fileId/thumbnails/:variant",
             get(drive_federation_albums::thumbnail)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/file-state",
+            "/api/fed/v2/drive/file-shares/state",
             get(drive_federation_files::get_file_state)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/files/:fileId",
+            "/api/fed/v2/drive/folder-shares/files/:fileId",
             delete(drive_federation::delete_file)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         // --- Authenticated local Drive adapter. The browser never receives a
         // stored remote capability after invite acceptance. ---
         .route(
-            "/api/drive/federation/shares",
+            "/api/v1/drive/federation/folder-shares",
             post(drive_federation::accept_incoming_share)
                 .get(drive_federation::list_incoming_shares),
         )
         .route(
-            "/api/drive/federation/shares/:shareId",
+            "/api/v1/drive/federation/folder-shares/:shareId",
             delete(drive_federation::remove_incoming_share),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/files/:fileId/state",
+            "/api/v1/drive/federation/folder-shares/:shareId/files/:fileId/state",
             get(drive_federation_files::proxy_folder_file_state),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/album",
+            "/api/v1/drive/federation/folder-shares/:shareId/album",
             get(drive_federation_albums::proxy_album_items),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/files/:fileId/thumbnails/:variant",
+            "/api/v1/drive/federation/folder-shares/:shareId/files/:fileId/thumbnails/:variant",
             get(drive_federation_albums::proxy_thumbnail),
         )
         // Live editing of files on other servers, relayed through this one:
-        // the same suffixes as `/api/files/:id/…`.
+        // the same suffixes as `/api/v1/drive/files/:id/…`.
         .route(
-            "/api/drive/federation/shares/:shareId/files/:fileId/collab/ws",
+            "/api/v1/drive/federation/folder-shares/:shareId/files/:fileId/collab/ws",
             get(collab_federation::ws_folder_file),
         )
         .route(
-            "/api/drive/federation/file-shares/:id/collab/ws",
+            "/api/v1/drive/federation/file-shares/:id/collab/ws",
             get(collab_federation::ws_shared_file),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/files/:fileId/versions",
+            "/api/v1/drive/federation/folder-shares/:shareId/files/:fileId/versions",
             get(collab_federation::folder_versions)
                 .post(collab_federation::folder_version_create)
                 .route_layer(DefaultBodyLimit::max(collab_federation::VERSION_BODY_LIMIT)),
         )
         .route(
-            "/api/drive/federation/file-shares/:id/versions",
+            "/api/v1/drive/federation/file-shares/:id/versions",
             get(collab_federation::file_versions)
                 .post(collab_federation::file_version_create)
                 .route_layer(DefaultBodyLimit::max(collab_federation::VERSION_BODY_LIMIT)),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/files/:fileId/versions/:vid/download",
+            "/api/v1/drive/federation/folder-shares/:shareId/files/:fileId/versions/:vid/download",
             get(collab_federation::folder_version_download),
         )
         .route(
-            "/api/drive/federation/file-shares/:id/versions/:vid/download",
+            "/api/v1/drive/federation/file-shares/:id/versions/:vid/download",
             get(collab_federation::file_version_download),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/files/:fileId/versions/:vid",
+            "/api/v1/drive/federation/folder-shares/:shareId/files/:fileId/versions/:vid",
             patch(collab_federation::folder_version_patch),
         )
         .route(
-            "/api/drive/federation/file-shares/:id/versions/:vid",
+            "/api/v1/drive/federation/file-shares/:id/versions/:vid",
             patch(collab_federation::file_version_patch),
         )
         // Pictures in notes and on whiteboards of files on other servers.
         .route(
-            "/api/drive/federation/shares/:shareId/files/:fileId/assets/:assetId",
+            "/api/v1/drive/federation/folder-shares/:shareId/files/:fileId/assets/:assetId",
             get(collab_federation::folder_asset_download)
                 .put(collab_federation::folder_asset_upload)
                 .route_layer(DefaultBodyLimit::max(
@@ -2308,7 +2383,7 @@ fn build_router(state: AppState) -> Router {
                 )),
         )
         .route(
-            "/api/drive/federation/file-shares/:id/assets/:assetId",
+            "/api/v1/drive/federation/file-shares/:id/assets/:assetId",
             get(collab_federation::file_asset_download)
                 .put(collab_federation::file_asset_upload)
                 .route_layer(DefaultBodyLimit::max(
@@ -2316,227 +2391,250 @@ fn build_router(state: AppState) -> Router {
                 )),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/files/:fileId/claim-seed",
+            "/api/v1/drive/federation/folder-shares/:shareId/files/:fileId/claim-seed",
             post(collab_federation::folder_claim_seed),
         )
         .route(
-            "/api/drive/federation/file-shares/:id/claim-seed",
+            "/api/v1/drive/federation/file-shares/:id/claim-seed",
             post(collab_federation::file_claim_seed),
         )
         .route(
-            "/api/drive/federation/file-shares",
+            "/api/v1/drive/federation/file-shares",
             post(drive_federation_files::accept_file_share)
                 .get(drive_federation_files::list_file_shares),
         )
         .route(
-            "/api/drive/federation/file-shares/:id",
+            "/api/v1/drive/federation/file-shares/:id",
             get(drive_federation_files::get_file_share)
                 .delete(drive_federation_files::remove_file_share),
         )
         .route(
-            "/api/drive/federation/file-shares/:id/content",
+            "/api/v1/drive/federation/file-shares/:id/content",
             get(drive_federation_files::proxy_file_content),
         )
         .route(
-            "/api/drive/federation/file-shares/:id/state",
+            "/api/v1/drive/federation/file-shares/:id/state",
             get(drive_federation_files::proxy_file_state),
         )
         .route(
-            "/api/files/:id/federated-shares",
+            "/api/v1/drive/files/:id/federated-shares",
             post(drive_federation_files::create_federated_file_share),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/files",
+            "/api/v1/drive/federation/folder-shares/:shareId/files",
             get(drive_federation::proxy_list_files)
                 .post(drive_federation::proxy_upload)
                 // Spooled against the upload limit, a site setting.
                 .route_layer(DefaultBodyLimit::disable()),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/refresh",
+            "/api/v1/drive/federation/folder-shares/:shareId/refresh",
             post(drive_federation::refresh_incoming_share),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/epochs",
+            "/api/v1/drive/federation/folder-shares/:shareId/epochs",
             get(drive_federation::proxy_list_epochs),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/files/:fileId/content",
+            "/api/v1/drive/federation/folder-shares/:shareId/files/:fileId/content",
             get(drive_federation::proxy_download),
         )
         .route(
-            "/api/drive/federation/shares/:shareId/files/:fileId",
+            "/api/v1/drive/federation/folder-shares/:shareId/files/:fileId",
             delete(drive_federation::proxy_delete),
         )
-        // --- Admin (authenticated + isAdmin via the AdminUser extractor; a stricter
+        // --- Admin (authenticated + isAdmin via the AdminAccount extractor; a stricter
         //     per-IP rate limit fronts every admin route). ---
         .merge(
             Router::new()
                 .route(
-                    "/api/admin/users",
+                    "/api/v1/admin/accounts",
                     get(admin::list_users).post(admin::create_user),
                 )
                 .route(
-                    "/api/admin/users/:id",
+                    "/api/v1/admin/accounts/:id",
                     put(admin::update_user).delete(admin::delete_user),
                 )
-                .route("/api/admin/users/:id/2fa", delete(admin::force_disable_2fa))
                 .route(
-                    "/api/admin/users/:id/rotate-temp-password",
+                    "/api/v1/admin/accounts/:id/2fa",
+                    delete(admin::force_disable_2fa),
+                )
+                .route(
+                    "/api/v1/admin/accounts/:id/rotate-temp-password",
                     post(admin::rotate_temp_password),
                 )
-                .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
-                .route("/api/admin/users/:id/close", post(admin::close_user))
                 .route(
-                    "/api/admin/users/:id/legal-hold",
+                    "/api/v1/admin/accounts/:id/reset-keys",
+                    post(admin::wipe_user),
+                )
+                .route("/api/v1/admin/accounts/:id/close", post(admin::close_user))
+                .route(
+                    "/api/v1/admin/accounts/:id/legal-hold",
                     put(admin::set_legal_hold).delete(admin::clear_legal_hold),
                 )
-                .route("/api/admin/users/:id/reset-grant", post(admin::reset_grant))
-                .route("/api/admin/reports", get(link_reports::list_reports))
                 .route(
-                    "/api/admin/reports/:id/dismiss",
+                    "/api/v1/admin/accounts/:id/reset-grant",
+                    post(admin::reset_grant),
+                )
+                .route("/api/v1/admin/reports", get(link_reports::list_reports))
+                .route(
+                    "/api/v1/admin/reports/:id/dismiss",
                     post(link_reports::dismiss_report),
                 )
                 .route(
-                    "/api/admin/reports/:id/remove-link",
+                    "/api/v1/admin/reports/:id/remove-link",
                     post(link_reports::remove_reported_link),
                 )
                 .route(
-                    "/api/admin/legal/documents",
+                    "/api/v1/admin/legal/documents",
                     get(legal::admin_documents).post(legal::publish),
                 )
                 .route(
-                    "/api/admin/shares/:id/block",
+                    "/api/v1/admin/public-links/:id/block",
                     post(link_reports::block_link).delete(link_reports::unblock_link),
                 )
-                .route("/api/admin/feedback", get(feedback::list_feedback))
+                .route("/api/v1/admin/feedback", get(feedback::list_feedback))
                 .route(
-                    "/api/admin/feedback/:id/resolve",
+                    "/api/v1/admin/feedback/:id/resolve",
                     post(feedback::resolve_feedback),
                 )
-                .route("/api/admin/feedback/:id", delete(feedback::delete_feedback))
-                .route("/api/admin/stats", get(admin::get_stats))
                 .route(
-                    "/api/admin/mail/senders",
+                    "/api/v1/admin/feedback/:id",
+                    delete(feedback::delete_feedback),
+                )
+                .route("/api/v1/admin/stats", get(admin::get_stats))
+                .route(
+                    "/api/v1/admin/mail/senders",
                     get(handlers::mail_sending::senders),
                 )
                 .route(
-                    "/api/admin/mail/domains",
+                    "/api/v1/admin/mail/domains",
                     get(handlers::mail_domains_admin::list),
                 )
                 .route(
-                    "/api/admin/mail/domains/settings",
+                    "/api/v1/admin/mail/domains/settings",
                     put(handlers::mail_domains_admin::set_settings),
                 )
                 .route(
-                    "/api/admin/mail/domains/:id/approve",
+                    "/api/v1/admin/mail/domains/:id/approve",
                     post(handlers::mail_domains_admin::approve),
                 )
                 .route(
-                    "/api/admin/mail/domains/:id/deactivate",
+                    "/api/v1/admin/mail/domains/:id/deactivate",
                     post(handlers::mail_domains_admin::deactivate),
                 )
                 .route(
-                    "/api/admin/mail/domains/blocks",
+                    "/api/v1/admin/mail/domains/blocks",
                     get(handlers::mail_domains_admin::blocks),
                 )
                 .route(
-                    "/api/admin/mail/domains/blocks/:name",
+                    "/api/v1/admin/mail/domains/blocks/:name",
                     delete(handlers::mail_domains_admin::unblock),
                 )
                 .route(
-                    "/api/admin/users/:id/mail-domains",
+                    "/api/v1/admin/accounts/:id/mail-domains",
                     get(handlers::mail_domains_admin::overrides)
                         .put(handlers::mail_domains_admin::set_overrides),
                 )
                 .route(
-                    "/api/admin/mail/outside-sending",
+                    "/api/v1/admin/client-versions",
+                    get(handlers::client_versions::get_client_versions)
+                        .put(handlers::client_versions::set_client_version),
+                )
+                .route(
+                    "/api/v1/admin/mail/outside-sending",
                     get(handlers::mail_sending::outside_sending)
                         .put(handlers::mail_sending::set_outside_sending),
                 )
                 .route(
-                    "/api/admin/mail/groups",
+                    "/api/v1/admin/mail/groups",
                     get(handlers::mail_groups::admin_list)
                         .post(handlers::mail_groups::admin_create),
                 )
                 .route(
-                    "/api/admin/mail/groups/:id",
+                    "/api/v1/admin/mail/groups/:id",
                     patch(handlers::mail_groups::admin_update)
                         .delete(handlers::mail_groups::admin_delete),
                 )
                 .route(
-                    "/api/admin/users/:id/mail-sending",
+                    "/api/v1/admin/accounts/:id/mail-sending",
                     get(handlers::mail_sending::one).put(handlers::mail_sending::update),
                 )
-                .route("/api/admin/activity", get(admin::activity))
-                .route("/api/admin/activity/export", get(admin::activity_export))
-                .route("/api/admin/activity/verify", get(admin::activity_verify))
+                .route("/api/v1/admin/activity", get(admin::activity))
+                .route("/api/v1/admin/activity/export", get(admin::activity_export))
+                .route("/api/v1/admin/activity/verify", get(admin::activity_verify))
                 .route(
-                    "/api/admin/settings",
+                    "/api/v1/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
                 )
-                .route("/api/admin/rate-limits", get(handlers::rate_limits::list))
                 .route(
-                    "/api/admin/rate-limits/:key",
+                    "/api/v1/admin/rate-limits",
+                    get(handlers::rate_limits::list),
+                )
+                .route(
+                    "/api/v1/admin/rate-limits/:key",
                     put(handlers::rate_limits::update),
                 )
                 .route(
-                    "/api/admin/settings/registry",
+                    "/api/v1/admin/settings/registry",
                     get(handlers::account_limits::registry),
                 )
                 .route(
-                    "/api/admin/users/:id/limits",
+                    "/api/v1/admin/accounts/:id/entitlements",
                     get(handlers::account_limits::list),
                 )
                 .route(
-                    "/api/admin/users/:id/limits/:key",
+                    "/api/v1/admin/accounts/:id/entitlements/:key",
                     put(handlers::account_limits::update),
                 )
                 .route(
-                    "/api/admin/registration-codes",
+                    "/api/v1/admin/registration-codes",
                     get(handlers::registration_codes::list)
                         .post(handlers::registration_codes::create),
                 )
                 .route(
-                    "/api/admin/registration-codes/:id/revoke",
+                    "/api/v1/admin/registration-codes/:id/revoke",
                     post(handlers::registration_codes::revoke),
                 )
                 .route(
-                    "/api/admin/registration-codes/:id/uses",
+                    "/api/v1/admin/registration-codes/:id/uses",
                     get(handlers::registration_codes::uses),
                 )
                 .route(
-                    "/api/admin/users/:id/registration-code",
+                    "/api/v1/admin/accounts/:id/registration-code",
                     get(handlers::registration_codes::user_code),
                 )
-                .route("/api/admin/maps", get(maps::admin_get).put(maps::admin_put))
                 .route(
-                    "/api/admin/federation",
+                    "/api/v1/admin/maps",
+                    get(maps::admin_get).put(maps::admin_put),
+                )
+                .route(
+                    "/api/v1/admin/federation",
                     get(admin::get_federation_control_plane).put(admin::update_federation_policy),
                 )
                 .route(
-                    "/api/admin/federation/rules/:feature/:domain",
+                    "/api/v1/admin/federation/rules/:feature/:domain",
                     put(admin::upsert_federation_domain_rule)
                         .delete(admin::delete_federation_domain_rule),
                 )
                 .route(
-                    "/api/admin/federation/peers/retry",
+                    "/api/v1/admin/federation/peers/retry",
                     post(admin::bulk_retry_federation_peers),
                 )
                 .route(
-                    "/api/admin/federation/peers/:domain/evidence",
+                    "/api/v1/admin/federation/peers/:domain/evidence",
                     get(admin::get_federation_peer_evidence),
                 )
                 .route(
-                    "/api/admin/federation/peers/:domain/verify",
+                    "/api/v1/admin/federation/peers/:domain/verify",
                     post(admin::verify_federation_peer),
                 )
                 .route(
-                    "/api/admin/federation/peers/:domain/retry",
+                    "/api/v1/admin/federation/peers/:domain/retry",
                     post(admin::retry_federation_peer),
                 )
                 .route(
-                    "/api/admin/federation/peers/:domain/repin",
+                    "/api/v1/admin/federation/peers/:domain/repin",
                     post(admin::repin_federation_peer),
                 )
                 .route_layer(from_fn(middleware::rate_limit_admin)),
@@ -2548,7 +2646,18 @@ fn build_router(state: AppState) -> Router {
         // panic recovery turns a handler panic into a 500 (mirrors Fiber's `recover.New()`).
         // NOTE: trailing-slash normalization is applied *outside* the Router in `main` (a
         // `Router::layer` runs only for matched paths, so it can't rescue `/collections/`).
+        // Paths no route has: an unknown API version, a client from before
+        // versions, or a plain 404 (docs/plans/api-surface.md §1.3).
+        .fallback(client_version::api_fallback)
         .layer(from_fn(middleware::session_version_header))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            client_version::client_version_gate,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            instance::instance_header,
+        ))
         .layer(CatchPanicLayer::new())
         // Outside the handlers and panic recovery, inside CORS: every /api/
         // answer, errors included, carries the API policy.
@@ -2574,9 +2683,9 @@ async fn tus_options_passthrough(
 ) -> axum::response::Response {
     if req.method() == Method::OPTIONS {
         let path = req.uri().path();
-        let is_uploads = path == "/api/uploads"
+        let is_uploads = path == "/api/v1/drive/uploads"
             || path
-                .strip_prefix("/api/uploads/")
+                .strip_prefix("/api/v1/drive/uploads/")
                 .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'));
         let is_preflight = req.headers().contains_key(axum::http::header::ORIGIN)
             && req
@@ -2687,11 +2796,16 @@ async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
     tag = "health",
     responses((status = 200, description = "Server name, build version, tus versions", body = HealthResponse))
 )]
-async fn health() -> Result<Json<HealthResponse>, AppError> {
+async fn health(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Result<Json<HealthResponse>, AppError> {
     Ok(Json(HealthResponse {
         name: "kutup",
-        version: BUILD_VERSION.to_string(),
+        version: client_version::RELEASE.to_string(),
         tus_versions: vec!["1.0.0"],
+        api_versions: client_version::API_VERSIONS.to_vec(),
+        minimum_clients: state.client_minimums.snapshot(),
+        instance_id: state.instance_id.to_string(),
     }))
 }
 
@@ -2738,6 +2852,8 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static(file_content::REVISION_HEADER),
             HeaderName::from_static(file_content::REVISION_CONTENT_HEADER),
             HeaderName::from_static(middleware::SESSION_VERSION_HEADER),
+            HeaderName::from_static(client_version::MIN_CLIENT_HEADER),
+            HeaderName::from_static(instance::INSTANCE_HEADER),
             axum::http::header::LOCATION,
         ])
 }
@@ -2801,6 +2917,7 @@ mod command_tests {
             &["orphan-sweep", "--delete"],
             &["federation-identity", "rotate"],
             &["feature-policy", "rotate", "sealed-sender"],
+            &["reset-instance-id"],
         ] {
             assert!(known_command(&args(ok)), "{ok:?}");
         }
@@ -2813,7 +2930,6 @@ mod command_tests {
             &["storage-check", "x"],
             &["federation-identity"],
             &["feature-policy", "rotate", "drive"],
-            &["feature-policy", "rotate", "mls-ordering"],
             &["--help"],
         ] {
             assert!(!known_command(&args(refused)), "{refused:?}");

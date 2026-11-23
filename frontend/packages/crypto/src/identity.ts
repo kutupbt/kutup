@@ -5,8 +5,8 @@ export interface AccountIdentityKeysV1 {
   authorityPublicKey: string
   authorityKeyId: string
   incarnationId: string
-  driveHpkePublicKey: string
-  driveHpkePrivateKey: string
+  driveXwingPublicKey: string
+  driveXwingPrivateKey: string
   driveSigningPublicKey: string
 }
 

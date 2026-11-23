@@ -20,7 +20,7 @@ use crate::handlers::collections::{
 };
 use crate::handlers::files::file_rows;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{CollectionRow, CreateCollectionRequest, FileRow};
 use crate::AppState;
 
@@ -36,16 +36,19 @@ pub struct AlbumRow {
     pub item_count: i64,
 }
 
-/// `GET /api/albums` — your albums and those shared with you.
+/// `GET /api/v1/photos/albums` — your albums and those shared with you.
 #[utoipa::path(
     get,
-    path = "/api/albums",
+    path = "/api/v1/photos/albums",
     tag = "photos",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your albums and albums shared with you", body = [AlbumRow]))
 )]
-pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<Vec<AlbumRow>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn list(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<Vec<AlbumRow>>> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows = collection_rows(&state, user_id, "album").await?;
     let ids: Vec<Uuid> = rows
         .iter()
@@ -72,11 +75,11 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Js
     ))
 }
 
-/// `POST /api/albums` — a new album: the body is a new collection's, without
+/// `POST /api/v1/photos/albums` — a new album: the body is a new collection's, without
 /// a parent (albums are not inside folders).
 #[utoipa::path(
     post,
-    path = "/api/albums",
+    path = "/api/v1/photos/albums",
     tag = "photos",
     security(("BearerAuth" = [])),
     request_body = CreateCollectionRequest,
@@ -84,10 +87,10 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Js
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CreateCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     create_owned_collection(&state, user_id, request, "album").await
 }
 
@@ -135,10 +138,10 @@ async fn owned_album(state: &AppState, user_id: Uuid, album_id: &str) -> AppResu
     Ok((access.id, access.epoch))
 }
 
-/// `DELETE /api/albums/{id}` — the album goes; its photos stay where they are.
+/// `DELETE /api/v1/photos/albums/{id}` — the album goes; its photos stay where they are.
 #[utoipa::path(
     delete,
-    path = "/api/albums/{id}",
+    path = "/api/v1/photos/albums/{id}",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -146,10 +149,10 @@ async fn owned_album(state: &AppState, user_id: Uuid, album_id: &str) -> AppResu
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let (id, _) = owned_album(&state, user_id, &album).await?;
     sqlx::query("DELETE FROM drive_collections WHERE id = $1 AND kind = 'album'")
         .bind(id)
@@ -174,10 +177,10 @@ pub struct AlbumItem {
     pub added_at: OffsetDateTime,
 }
 
-/// `GET /api/albums/{id}/items` — the album's photos (those in the trash are left out).
+/// `GET /api/v1/photos/albums/{id}/items` — the album's photos (those in the trash are left out).
 #[utoipa::path(
     get,
-    path = "/api/albums/{id}/items",
+    path = "/api/v1/photos/albums/{id}/items",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -185,10 +188,10 @@ pub struct AlbumItem {
 )]
 pub async fn items(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
 ) -> AppResult<Json<Vec<AlbumItem>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = album_access(&state, user_id, &album).await?.id;
     let files = file_rows(
         &state.pool,
@@ -208,7 +211,7 @@ pub async fn items(
         added_at: OffsetDateTime,
     }
     let rows: Vec<Item> = sqlx::query_as(
-        "SELECT file_id, file_key_envelope, key_generation, album_epoch, added_by_account_id, added_at
+        "SELECT file_id, kutup_b64(file_key_envelope) AS file_key_envelope, key_generation, album_epoch, added_by_account_id, added_at
          FROM photos_album_items WHERE album_id = $1",
     )
     .bind(id)
@@ -236,11 +239,11 @@ pub async fn items(
     ))
 }
 
-/// `DELETE /api/albums/{id}/membership` — leave an album shared with you.
+/// `DELETE /api/v1/photos/albums/{id}/membership` — leave an album shared with you.
 /// The photos you put in leave with you (they are yours).
 #[utoipa::path(
     delete,
-    path = "/api/albums/{id}/membership",
+    path = "/api/v1/photos/albums/{id}/membership",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -248,10 +251,10 @@ pub async fn items(
 )]
 pub async fn leave(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let access = album_access(&state, user_id, &album).await?;
     if access.owner {
         return Err(AppError::bad_request(
@@ -284,11 +287,11 @@ pub struct AlbumItemKey {
     pub album_epoch: i32,
 }
 
-/// `GET /api/albums/{id}/keys` — every photo's sealed key, those in the
+/// `GET /api/v1/photos/albums/{id}/keys` — every photo's sealed key, those in the
 /// trash too: what the owner re-seals when the album moves to a new key.
 #[utoipa::path(
     get,
-    path = "/api/albums/{id}/keys",
+    path = "/api/v1/photos/albums/{id}/keys",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -296,13 +299,13 @@ pub struct AlbumItemKey {
 )]
 pub async fn keys(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
 ) -> AppResult<Json<Vec<AlbumItemKey>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let (id, _) = owned_album(&state, user_id, &album).await?;
     let rows: Vec<(Uuid, String, i32, i32)> = sqlx::query_as(
-        "SELECT file_id, file_key_envelope, key_generation, album_epoch FROM photos_album_items WHERE album_id = $1",
+        "SELECT file_id, kutup_b64(file_key_envelope), key_generation, album_epoch FROM photos_album_items WHERE album_id = $1",
     )
     .bind(id)
     .fetch_all(&state.pool)
@@ -336,14 +339,14 @@ pub struct AddAlbumItems {
     pub items: Vec<AlbumItemInput>,
 }
 
-/// `POST /api/albums/{id}/items` — put photos in the album (or re-seal ones
+/// `POST /api/v1/photos/albums/{id}/items` — put photos in the album (or re-seal ones
 /// already in it): its owner, or a member allowed to add. Each must be one
 /// of the caller's own files (it stays in their storage), not in the trash,
 /// with its key sealed at its current generation and the album's current
 /// epoch.
 #[utoipa::path(
     post,
-    path = "/api/albums/{id}/items",
+    path = "/api/v1/photos/albums/{id}/items",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -356,11 +359,11 @@ pub struct AddAlbumItems {
 )]
 pub async fn add_items(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
     Json(request): Json<AddAlbumItems>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if request.items.is_empty() || request.items.len() > MAX_ADD {
         return Err(AppError::bad_request(
             "add between 1 and 500 photos at a time",
@@ -407,7 +410,7 @@ pub async fn add_items(
         )?;
         sqlx::query(
             "INSERT INTO photos_album_items (album_id, file_id, file_key_envelope, key_generation, album_epoch, added_by_account_id)
-             VALUES ($1, $2, $3, $4, $5, $6)
+             VALUES ($1, $2, kutup_unb64($3), $4, $5, $6)
              ON CONFLICT (album_id, file_id) DO UPDATE SET
                  file_key_envelope = EXCLUDED.file_key_envelope,
                  key_generation = EXCLUDED.key_generation,
@@ -436,11 +439,11 @@ pub struct RemoveAlbumItems {
     pub file_ids: Vec<String>,
 }
 
-/// `POST /api/albums/{id}/items/remove` — take photos out of the album (the
+/// `POST /api/v1/photos/albums/{id}/items/remove` — take photos out of the album (the
 /// photos stay where they are): the owner any, a member those they added.
 #[utoipa::path(
     post,
-    path = "/api/albums/{id}/items/remove",
+    path = "/api/v1/photos/albums/{id}/items/remove",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -449,11 +452,11 @@ pub struct RemoveAlbumItems {
 )]
 pub async fn remove_items(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
     Json(request): Json<RemoveAlbumItems>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let access = album_access(&state, user_id, &album).await?;
     let album_id = access.id;
     let ids: Vec<Uuid> = request

@@ -58,7 +58,7 @@ pub struct ChatAccount {
     pub head: Option<AccountManifestV3>,
     /// The `session` hash of the token's sign-in, which every device of this
     /// account lists: from the token's `sid` (a test signs in as a root
-    /// sign-in), checked against `GET /api/device-session` at registration.
+    /// sign-in), checked against `GET /api/v1/account/devices/session` at registration.
     pub session: String,
 }
 
@@ -150,7 +150,7 @@ impl ChatAccount {
             authority: keys.authority_signing_key().clone(),
             drive: AccountManifestDriveKeysV1 {
                 suite: AccountIdentitySuiteId::XWingEd25519V2,
-                hpke_public_key: b64(&keys.drive_hpke_public_key()),
+                xwing_public_key: b64(&keys.drive_xwing_public_key()),
                 share_signing_public_key: b64(&keys.drive_signing_public_key()),
             },
             identity: IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng),
@@ -161,26 +161,28 @@ impl ChatAccount {
     }
 
     /// The server's `session` hash for the token is the one this account
-    /// lists.
-    pub fn fetch_session(&self, c: &Client, base: &str) {
+    /// lists; the account's device counter.
+    pub fn fetch_session(&self, c: &Client, base: &str) -> u32 {
         let r = c
-            .get(format!("{base}/api/device-session"))
+            .get(format!("{base}/api/v1/account/devices/session"))
             .bearer_auth(&self.token)
             .send()
             .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "device session");
+        let answer = r.json::<Value>().unwrap();
         assert_eq!(
-            r.json::<Value>().unwrap()["session"].as_str().unwrap(),
+            answer["session"].as_str().unwrap(),
             self.session,
             "the token's sign-in"
         );
+        answer["nextDeviceId"].as_u64().expect("the device counter") as u32
     }
 
     pub fn identity_key(&self) -> String {
         b64(&self.identity.identity_key().serialize())
     }
 
-    /// The account's next manifest listing `devices`, signed by its authority.
+    /// The account's next manifest listing `account_devices`, signed by its authority.
     pub fn next_manifest(&self, devices: &[&ChatDevice]) -> AccountManifestV3 {
         let public = self.authority.verifying_key();
         let mut incarnation = Hasher::new(Suite::V1);
@@ -242,7 +244,7 @@ impl ChatAccount {
         manifest.signature = b64(&self.authority.sign(&manifest.signing_bytes().unwrap()));
     }
 
-    /// `POST /api/chat/manifest` of `manifest` as `by`, as it is.
+    /// `POST /api/v1/chat/manifest` of `manifest` as `by`, as it is.
     pub fn post_manifest(
         &self,
         c: &Client,
@@ -250,7 +252,7 @@ impl ChatAccount {
         by: &ChatDevice,
         manifest: &AccountManifestV3,
     ) -> Response {
-        by.auth(c.post(format!("{base}/api/chat/manifest")))
+        by.auth(c.post(format!("{base}/api/v1/chat/manifest")))
             .bearer_auth(&self.token)
             .json(manifest)
             .send()
@@ -285,15 +287,16 @@ impl ChatAccount {
         base: &str,
         body: &RegisterChatDeviceRequestV2,
     ) -> Response {
-        c.post(format!("{base}/api/chat/device"))
+        c.post(format!("{base}/api/v1/chat/devices"))
             .bearer_auth(&self.token)
             .json(body)
             .send()
             .unwrap()
     }
 
-    /// The account's first device, or a new identity for it: device 1 under
-    /// a manifest listing it alone; every other device is dropped.
+    /// The account's first device, or a new identity for it: the account's
+    /// next device id (1 on a new account) under a manifest listing it
+    /// alone; every other device is dropped.
     pub fn reregister(&mut self, c: &Client, base: &str) -> ChatDevice {
         let (registration_id, credential) = new_device_secrets();
         self.reregister_as(c, base, registration_id, credential)
@@ -307,12 +310,12 @@ impl ChatAccount {
         registration_id: u32,
         credential: [u8; 32],
     ) -> ChatDevice {
+        let counter = self.fetch_session(c, base);
         let device = ChatDevice {
-            id: kutup_chat_proto::REREGISTRATION_DEVICE_ID,
+            id: kutup_chat_proto::next_device_id(counter, &[]).unwrap(),
             registration_id,
             credential,
         };
-        self.fetch_session(c, base);
         let manifest = self.next_manifest(&[&device]);
         let body = self.registration(
             registration_id,
@@ -334,7 +337,7 @@ impl ChatAccount {
     /// A link token asked for by `by`.
     pub fn link_token(&self, c: &Client, base: &str, by: &ChatDevice) -> String {
         let r = by
-            .auth(c.post(format!("{base}/api/chat/link-tokens")))
+            .auth(c.post(format!("{base}/api/v1/chat/link-tokens")))
             .bearer_auth(&self.token)
             .send()
             .unwrap();

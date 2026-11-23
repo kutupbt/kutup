@@ -4,7 +4,7 @@ import type { Session } from '@kutup/session/store'
 
 /**
  * An address's first key and its first signed key list (sequence 1, that key
- * primary), as `POST /api/mail/addresses/{id}/keys` and a rename's
+ * primary), as `POST /api/v1/mail/addresses/{id}/keys` and a rename's
  * `mailAddress` take them.
  */
 export interface FirstAddressKey {

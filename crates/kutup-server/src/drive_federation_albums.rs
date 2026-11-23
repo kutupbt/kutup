@@ -27,8 +27,8 @@ use crate::drive_federation::{
     OCTET_STREAM_CONTENT_TYPE,
 };
 use crate::error::{AppError, AppResult};
-use crate::handlers::file_thumbnails::thumbnail_storage_path;
-use crate::middleware::AuthUser;
+use crate::handlers::file_thumbnails::current_object;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Thumbnails are small pictures; anything larger is refused on the way in.
@@ -63,11 +63,11 @@ pub(crate) async fn share_reaches(
     .await?)
 }
 
-/// `GET /api/fed/drive/album` — the shared album's photos. Signed.
+/// `GET /api/fed/v2/drive/folder-shares/album` — the shared album's photos. Signed.
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/album",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/folder-shares/album",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized album items", body = Vec<FederatedAlbumItem>))
 )]
 pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
@@ -76,7 +76,7 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
         .authenticate_inbound(
             &headers,
             "GET",
-            "/api/fed/drive/album",
+            "/api/fed/v2/drive/folder-shares/album",
             None,
             &[],
             FederationFeature::DriveV1,
@@ -94,8 +94,10 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
             return Err(AppError::not_found("not an album"));
         }
         let files: Vec<FederatedDriveFile> = sqlx::query_as(&format!(
-            "SELECT f.id, f.collection_id, f.uploader_account_id, f.metadata_envelope,
-                f.file_key_envelope, f.key_epoch, f.key_generation, f.metadata_revision,
+            "SELECT f.id, f.collection_id, f.uploader_account_id,
+                kutup_b64(f.metadata_envelope) AS metadata_envelope,
+                kutup_b64(f.file_key_envelope) AS file_key_envelope, f.key_epoch,
+                f.key_generation, f.metadata_revision,
                 f.encrypted_size_bytes, f.created_at, f.updated_at, f.original_key_generation,
                 {} AS key_history, {} AS content_key_generation
              FROM drive_files f
@@ -120,7 +122,8 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
             thumb_lg_generation: Option<i32>,
         }
         let items: Vec<Item> = sqlx::query_as(
-            "SELECT i.file_id, i.file_key_envelope, i.key_generation, i.album_epoch,
+            "SELECT i.file_id, kutup_b64(i.file_key_envelope) AS file_key_envelope,
+                    i.key_generation, i.album_epoch,
                     sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                     sm.key_generation AS thumb_sm_generation, lg.key_generation AS thumb_lg_generation
              FROM photos_album_items i
@@ -160,12 +163,12 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
     }
 }
 
-/// `GET /api/fed/drive/files/{fileId}/thumbnails/{variant}` — a thumbnail of
+/// `GET /api/fed/v2/drive/folder-shares/files/{fileId}/thumbnails/{variant}` — a thumbnail of
 /// a file the share reaches (sealed under the file key). Signed.
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/files/{fileId}/thumbnails/{variant}",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/folder-shares/files/{fileId}/thumbnails/{variant}",
+    tag = "drive.federation",
     params(("fileId" = String, Path), ("variant" = String, Path, description = "sm or lg")),
     responses((status = 200, description = "Signed sealed thumbnail"))
 )]
@@ -175,7 +178,7 @@ pub async fn thumbnail(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let path = format!("/api/fed/drive/files/{file_id}/thumbnails/{variant}");
+    let path = format!("/api/fed/v2/drive/folder-shares/files/{file_id}/thumbnails/{variant}");
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -195,19 +198,12 @@ pub async fn thumbnail(
         if !share_reaches(&state.pool, share.collection_id, file_id).await? {
             return Err(AppError::not_found("file not found"));
         }
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM drive_file_thumbnails WHERE file_id = $1 AND variant = $2)",
-        )
-        .bind(file_id)
-        .bind(variant.as_str())
-        .fetch_one(&state.pool)
-        .await?;
-        if !exists {
+        let Some(path) = current_object(&state.pool, file_id, variant).await? else {
             return Err(AppError::not_found("not found"));
-        }
+        };
         let (object, _) = state
             .storage
-            .get_object(&thumbnail_storage_path(file_id, variant))
+            .get_object(&path)
             .await
             .map_err(|_| AppError::not_found("not found"))?;
         let bytes = object
@@ -235,26 +231,26 @@ pub async fn thumbnail(
     }
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/album` — the photos of an
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/album` — the photos of an
 /// album on another server, relayed.
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/album",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/album",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 200, description = "Verified remote album items", body = Vec<FederatedAlbumItem>))
 )]
 pub async fn proxy_album_items(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -263,7 +259,7 @@ pub async fn proxy_album_items(
             &share.remote_domain,
             drive_spec(
                 Method::GET,
-                "/api/fed/drive/album".into(),
+                "/api/fed/v2/drive/folder-shares/album".into(),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(&share.remote_capability),
@@ -280,26 +276,26 @@ pub async fn proxy_album_items(
         .into_response())
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/files/{fileId}/thumbnails/{variant}`
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/thumbnails/{variant}`
 /// — a thumbnail from another server, relayed (still sealed).
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/files/{fileId}/thumbnails/{variant}",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/thumbnails/{variant}",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path), ("fileId" = String, Path), ("variant" = String, Path)),
     responses((status = 200, description = "Digest-verified sealed thumbnail"))
 )]
 pub async fn proxy_thumbnail(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((share_id, file_id, variant)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -312,7 +308,7 @@ pub async fn proxy_thumbnail(
             drive_spec(
                 Method::GET,
                 format!(
-                    "/api/fed/drive/files/{file_id}/thumbnails/{}",
+                    "/api/fed/v2/drive/folder-shares/files/{file_id}/thumbnails/{}",
                     variant.as_str()
                 ),
                 JSON_CONTENT_TYPE.into(),

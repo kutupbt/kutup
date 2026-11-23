@@ -22,7 +22,7 @@ use serde::Serialize;
 use sha1::Sha1;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
@@ -89,7 +89,7 @@ fn turn_credential(secret: &str, user_id: &str, expires_at: i64) -> (String, Str
 
 #[utoipa::path(
     get,
-    path = "/api/chat/call-servers",
+    path = "/api/v1/chat/call-servers",
     tag = "chat",
     operation_id = "getChatCallServers",
     responses(
@@ -100,9 +100,9 @@ fn turn_credential(secret: &str, user_id: &str, expires_at: i64) -> (String, Str
 )]
 pub async fn call_servers(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
 ) -> AppResult<Json<CallServersResponse>> {
-    if !REQUESTS.allow(&auth.user_id) {
+    if !REQUESTS.allow(&auth.account_id) {
         return Err(AppError::too_many_requests("too many call server requests"));
     }
     let config = &state.config;
@@ -121,7 +121,7 @@ pub async fn call_servers(
     if relay {
         let until = time::OffsetDateTime::now_utc().unix_timestamp() + CREDENTIAL_TTL_SECONDS;
         let (username, credential) =
-            turn_credential(&config.chat_turn_secret, &auth.user_id, until);
+            turn_credential(&config.chat_turn_secret, &auth.account_id, until);
         ice_servers.push(IceServer {
             urls: turn,
             username: Some(username),

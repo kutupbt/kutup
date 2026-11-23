@@ -38,7 +38,7 @@ pub struct Peer {
     pub device_id: u32,
     /// The tab's id: tabs of one browser share a device.
     pub tab: String,
-    pub user_id: String,
+    pub account_id: String,
     /// The account its frames name (`aci:<uuid>@<server>`).
     pub account: String,
     pub username: String,
@@ -292,7 +292,7 @@ impl Hub {
             rooms
                 .values()
                 .flat_map(|r| r.peers.values())
-                .filter(|p| p.user_id == user_id && p.device_id == device_id)
+                .filter(|p| p.account_id == user_id && p.device_id == device_id)
                 .cloned()
                 .collect()
         };
@@ -317,7 +317,7 @@ pub fn new_peer(
         conn_id: hub.next_conn_id(),
         device_id,
         tab,
-        user_id,
+        account_id: user_id,
         account,
         username,
         color,

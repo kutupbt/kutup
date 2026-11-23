@@ -28,7 +28,7 @@ test('a favourite is kept in the library record and survives a reload', async ({
   const heart = (name: string) => tile(name).locator('xpath=..').getByLabel('Favourite', { exact: true })
   const favourite = async (name: string) => {
     await page.getByRole('checkbox', { name: `Select ${name}` }).click()
-    const stored = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/account/records')
+    const stored = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/account/records')
     await page.getByRole('button', { name: 'Favourite', exact: true }).click()
     expect((await stored).status()).toBe(200)
     await expect(page.getByText('Added to favourites')).toBeVisible()

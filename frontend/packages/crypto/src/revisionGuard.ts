@@ -28,6 +28,7 @@
 import type { MasterKeys } from './masterKeys'
 import type { ObjectIdKey } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
+import { storageReady } from './storageGate'
 
 /** The account's keys for the store (Rust `revision_guard::GuardKeys`). */
 export interface GuardKeys {
@@ -66,7 +67,7 @@ export function memoryRevisionStore(): RevisionStore {
   }
 }
 
-const DB_NAME = 'kutup-revisions-v2'
+const DB_NAME = 'kutup.account.revisionsSeen'
 const STORE = 'seen'
 
 function request<T>(req: IDBRequest<T>): Promise<T> {
@@ -84,7 +85,7 @@ export function indexedDbRevisionStore(): RevisionStore {
   let opened: Promise<IDBDatabase | null> | null = null
   const fallback = memoryRevisionStore()
   const db = () =>
-    (opened ??= new Promise<IDBDatabase | null>((resolve) => {
+    (opened ??= storageReady().then(() => new Promise<IDBDatabase | null>((resolve) => {
       try {
         const open = indexedDB.open(DB_NAME, 1)
         open.onupgradeneeded = () => open.result.createObjectStore(STORE)
@@ -94,7 +95,7 @@ export function indexedDbRevisionStore(): RevisionStore {
       } catch {
         resolve(null)
       }
-    }))
+    })))
   return {
     async get(key) {
       const database = await db()
@@ -181,7 +182,7 @@ const chains = new Map<string, Promise<unknown>>()
  */
 export function serialized<T>(entry: string, task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  const run = (): Promise<T> => (locks ? (locks.request(`kutup-revision:${entry}`, task) as Promise<T>) : task())
+  const run = (): Promise<T> => (locks ? (locks.request(`kutup.account.revision:${entry}`, task) as Promise<T>) : task())
   const result = (chains.get(entry) ?? Promise.resolve()).then(run, run)
   const settled = result.catch(() => undefined)
   chains.set(entry, settled)
@@ -195,14 +196,14 @@ let shared: RevisionStore | null = null
 /** By account: the guard, for the master key it was made with. */
 const guards = new Map<string, { masterKeys: MasterKeys; binding: string; guard: RevisionGuard }>()
 /** Set by tests: keys that need no WASM. */
-let testKeys: ((userId: string) => GuardKeys) | null = null
+let testKeys: ((accountId: string) => GuardKeys) | null = null
 
 /**
  * The account's guard over the browser's store: its entries are sealed for
  * the account's master key and key binding (`envelopeBinding`).
  */
 export function revisionGuard(session: {
-  userId: string
+  accountId: string
   masterKeys: MasterKeys
   roots: { objectIdKey: ObjectIdKey }
   envelopeBinding: string
@@ -210,14 +211,14 @@ export function revisionGuard(session: {
   const masterKeys = session.masterKeys
   const objectIdKey = session.roots.objectIdKey
   const binding = session.envelopeBinding
-  const known = guards.get(session.userId)
+  const known = guards.get(session.accountId)
   // Made again when the master key or the binding is another (the keys are both).
   if (known && known.masterKeys === masterKeys && known.binding === binding) return known.guard
   shared ??= indexedDbRevisionStore()
   let keys: Promise<GuardKeys> | null = null
   const forTests = testKeys
   const load = (): Promise<GuardKeys> => {
-    if (forTests) return Promise.resolve(forTests(session.userId))
+    if (forTests) return Promise.resolve(forTests(session.accountId))
     keys ??= getCryptoWasm()
       .then((wasm): GuardKeys => new wasm.RevisionGuardKeys(masterKeys, objectIdKey, binding))
       .catch((error: unknown) => {
@@ -228,7 +229,7 @@ export function revisionGuard(session: {
     return keys
   }
   const guard = new RevisionGuard(shared, load)
-  guards.set(session.userId, { masterKeys, binding, guard })
+  guards.set(session.accountId, { masterKeys, binding, guard })
   return guard
 }
 

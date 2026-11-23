@@ -30,7 +30,7 @@ vi.mock('@kutup/drive-core/identity', () => ({ useDriveIdentity: vi.fn() }))
 
 const { changeMarks, loadMarks, withMark } = await import('./marks')
 
-const me = { userId: 'u', binding: 'b', masterKeys: 'keys', roots: {} } as never
+const me = { accountId: 'u', binding: 'b', masterKeys: 'keys', roots: {} } as never
 
 describe('the Photos library record, as read', () => {
   beforeEach(() => {

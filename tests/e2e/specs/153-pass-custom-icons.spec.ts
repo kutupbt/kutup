@@ -30,7 +30,7 @@ test('pass: entries and groups take their own pictures, kept in the vault', asyn
   const context = await browser.newContext()
   await registerAccount(context, newAccount('pass153', PASSWORD))
   const page = await context.newPage()
-  await page.route('**/api/pass/icon', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: PNG }))
+  await page.route('**/api/v1/pass/icon', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: PNG }))
   await openPass(page)
   await createVault(page, 'Kişisel', VAULT_PASSWORD)
   await addEntry(page, { title: 'GitHub', url: 'https://github.com/login' })

@@ -27,7 +27,7 @@ use time::OffsetDateTime;
 use crate::config::Config;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One online certificate this server can issue sender certificates under.
@@ -202,6 +202,17 @@ impl SealedSenderService {
         self.current().policy.clone()
     }
 
+    /// How long a sender certificate issued now may still be taken: its
+    /// lifetime and the clock skew allowed. A removed device's id is held
+    /// that long before another device takes it
+    /// ([`crate::account_devices::take_device_id`]), so a certificate of the
+    /// removed device never names the id's next holder.
+    pub(crate) fn certificate_reach_seconds(&self) -> i64 {
+        let policy = &self.current().policy;
+        i64::from(policy.sender_certificate_lifetime_seconds)
+            + i64::from(policy.maximum_clock_skew_seconds)
+    }
+
     fn current(&self) -> Arc<ActiveSealedSender> {
         Arc::clone(
             &self
@@ -309,7 +320,7 @@ pub(crate) struct SenderCertificateQuery {
 #[tracing::instrument(name = "chat.sealed_sender.certificate.issue", skip_all)]
 pub(crate) async fn issue_sender_certificate(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: axum::http::HeaderMap,
     Query(query): Query<SenderCertificateQuery>,
 ) -> AppResult<Response> {
@@ -317,7 +328,7 @@ pub(crate) async fn issue_sender_certificate(
         .sealed_sender
         .as_ref()
         .ok_or_else(|| AppError::not_found("sealed sender is not enabled"))?;
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     // Issued to the device that asks, under the account's identity (Signal's
     // certificate carries the ACI identity key and the device id).
     crate::handlers::chat_identity::authenticate_device(
@@ -328,9 +339,9 @@ pub(crate) async fn issue_sender_certificate(
     )
     .await?;
     let row: Option<String> = sqlx::query_scalar(
-        "SELECT i.identity_key FROM chat_account_identities i
+        "SELECT kutup_b64(i.identity_key) FROM chat_account_identities i
            JOIN accounts u ON u.id = i.account_id
-          WHERE i.account_id = $1 AND u.is_active = true",
+          WHERE i.account_id = $1 AND u.state = 'active'",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -384,7 +395,7 @@ pub(crate) async fn issue_sender_certificate(
 
 pub(crate) async fn get_domain_policy(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    _auth: AuthAccount,
     Path(domain): Path<String>,
 ) -> AppResult<Response> {
     kutup_federation_proto::validate_server_name(&domain)

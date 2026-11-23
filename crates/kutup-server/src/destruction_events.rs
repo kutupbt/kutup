@@ -40,10 +40,10 @@ pub enum Category {
 impl Category {
     fn as_str(self) -> &'static str {
         match self {
-            Category::SecurityEvents => "security_events",
-            Category::AdminAudit => "admin_audit",
+            Category::SecurityEvents => "securityEvents",
+            Category::AdminAudit => "adminAudit",
             Category::Sessions => "sessions",
-            Category::DestructionEvents => "destruction_events",
+            Category::DestructionEvents => "destructionEvents",
         }
     }
 }
@@ -97,7 +97,7 @@ pub async fn record_account(
     sqlx::query(
         "INSERT INTO account_keys.destruction_events
              (category, subject_key_ids, subjects, method, actor, reference)
-         VALUES ('account', $1, $2, 'crypto_shred', $3, $4)",
+         VALUES ('account', $1, $2, 'cryptoShred', $3, $4)",
     )
     .bind(&ids)
     .bind(&subjects)
@@ -248,17 +248,12 @@ mod tests {
 
     async fn user(pool: &PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
-        )
-        .bind(user_id)
-        .bind(format!("replay{}", &user_id.simple().to_string()[..12]))
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(user_id)
+            .bind(format!("replay{}", &user_id.simple().to_string()[..12]))
+            .execute(pool)
+            .await
+            .unwrap();
         user_id
     }
 
@@ -291,7 +286,7 @@ mod tests {
         }
         // The log, after the dump: `destroyed` was deleted.
         let mut conn = pool.acquire().await.unwrap();
-        record_account(&mut conn, &keys, destroyed, Actor::Admin, "user.delete")
+        record_account(&mut conn, &keys, destroyed, Actor::Admin, "account.delete")
             .await
             .unwrap();
         drop(conn);

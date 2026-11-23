@@ -13,7 +13,7 @@ test('remote images: the setting, and senders whose images always load', async (
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 } })
   await registerAccount(context, newAccount('rimages', PASSWORD))
   const mail = await context.newPage()
-  const signedIn = mail.waitForRequest((r) => new URL(r.url()).pathname.startsWith('/api/mail/') && !!r.headers().authorization)
+  const signedIn = mail.waitForRequest((r) => new URL(r.url()).pathname.startsWith('/api/v1/mail/') && !!r.headers().authorization)
   await mail.goto(appUrl('mail'))
   await expect(mail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 120_000 })
   const authorization = (await signedIn).headers().authorization

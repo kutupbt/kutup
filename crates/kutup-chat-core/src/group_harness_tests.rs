@@ -107,6 +107,9 @@ impl HostedDevice {
 #[derive(Default)]
 struct HostedAccount {
     devices: BTreeMap<u32, HostedDevice>,
+    /// The account's device counter (`accounts.next_device_id`; 0 counts
+    /// from 1), as the server keeps it.
+    next_device_id: u32,
     manifests: Vec<AccountManifestV3>,
     profile: Option<PutChatProfileRequest>,
 }
@@ -1258,13 +1261,24 @@ impl ChatTransport for Client {
                 manifest
                     .verify_successor(hosted.manifests.last())
                     .map_err(ChatError::Transport)?;
-                hosted.devices.clear();
-                hosted.manifests.push((**manifest).clone());
-                manifest
+                let id = manifest
                     .chat_devices()
                     .map(|(id, _)| id)
                     .next()
-                    .expect("validated: one Chat device")
+                    .expect("validated: one Chat device");
+                // The account's next id the kept entries leave free.
+                let kept: Vec<u32> = manifest
+                    .devices
+                    .iter()
+                    .map(|device| device.device_id)
+                    .filter(|other| *other != id)
+                    .collect();
+                if kutup_chat_proto::next_device_id(hosted.next_device_id, &kept) != Some(id) {
+                    return Err(ChatError::Transport("devicesMismatch".into()));
+                }
+                hosted.devices.clear();
+                hosted.manifests.push((**manifest).clone());
+                id
             }
             kutup_chat_proto::DeviceRegistrationV1::Link { link_token } => {
                 let owner = self.world.link_tokens.borrow_mut().remove(link_token);
@@ -1279,9 +1293,12 @@ impl ChatTransport for Client {
                 {
                     return Err(ChatError::Transport("not the account's identity".into()));
                 }
-                (1..).find(|id| !hosted.devices.contains_key(id)).unwrap()
+                let taken: Vec<u32> = hosted.devices.keys().copied().collect();
+                kutup_chat_proto::next_device_id(hosted.next_device_id, &taken)
+                    .ok_or_else(|| ChatError::Transport("deviceLimit".into()))?
             }
         };
+        hosted.next_device_id = kutup_chat_proto::device_id_after(device_id);
         hosted.devices.insert(
             device_id,
             HostedDevice {
@@ -1422,8 +1439,17 @@ impl ChatTransport for Client {
         self.world.bundles(account, Some(current_device_id))
     }
 
-    async fn fetch_device_session(&self) -> Result<String> {
-        Ok(DEVICE_SESSION.into())
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
+        let next_device_id = self
+            .world
+            .accounts
+            .borrow()
+            .get(&self.account)
+            .map_or(1, |hosted| hosted.next_device_id);
+        Ok(kutup_chat_proto::DeviceSessionResponseV1 {
+            session: DEVICE_SESSION.into(),
+            next_device_id,
+        })
     }
 
     async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV3>> {

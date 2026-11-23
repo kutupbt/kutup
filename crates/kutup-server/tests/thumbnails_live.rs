@@ -46,7 +46,7 @@ fn token_of(c: &Client, base: &str, a: &User) -> String {
 }
 
 fn me(c: &Client, base: &str, token: &str) -> Value {
-    bearer(c.get(format!("{base}/api/user/me")), token)
+    bearer(c.get(format!("{base}/api/v1/account")), token)
         .send()
         .unwrap()
         .json()
@@ -80,7 +80,8 @@ fn put_thumb(
     revision: &str,
     source: Option<&str>,
 ) -> StatusCode {
-    let mut url = format!("{base}/api/files/{file_id}/thumbnails/{variant}?revision={revision}");
+    let mut url =
+        format!("{base}/api/v1/drive/files/{file_id}/thumbnails/{variant}?revision={revision}");
     if let Some(s) = source {
         url.push_str(&format!("&source={s}"));
     }
@@ -94,7 +95,9 @@ fn put_thumb(
 
 fn listed(c: &Client, base: &str, token: &str, collection_id: &str, file_id: &str) -> Value {
     let rows: Vec<Value> = bearer(
-        c.get(format!("{base}/api/collections/{collection_id}/files")),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{collection_id}/files"
+        )),
         token,
     )
     .send()
@@ -125,7 +128,7 @@ fn thumbnails_contract() {
     let ctx = |purpose, object: &str, parent: &str| {
         DriveEnvelopeContextV1::new(purpose, 1, 1, object, parent).unwrap()
     };
-    let created = bearer(c.post(format!("{base}/api/collections")), &token)
+    let created = bearer(c.post(format!("{base}/api/v1/drive/collections")), &token)
         .json(&json!({
             "id": collection_id,
             "ownerKeyEnvelope": common::owner_collection_key(&collection_key, &owner, &collection_id, 1),
@@ -180,7 +183,7 @@ fn thumbnails_contract() {
             "file",
             reqwest::blocking::multipart::Part::bytes(blob).file_name("encrypted"),
         );
-    let uploaded = bearer(c.post(format!("{base}/api/files/upload")), &token)
+    let uploaded = bearer(c.post(format!("{base}/api/v1/drive/files")), &token)
         .multipart(form)
         .send()
         .unwrap();
@@ -220,7 +223,7 @@ fn thumbnails_contract() {
     );
     assert_eq!(used(&c, &base, &token), baseline + first.len() as i64);
     let got = bearer(
-        c.get(format!("{base}/api/files/{file_id}/thumbnails/sm")),
+        c.get(format!("{base}/api/v1/drive/files/{file_id}/thumbnails/sm")),
         &token,
     )
     .send()
@@ -366,7 +369,7 @@ fn thumbnails_contract() {
         "unknown revision"
     );
     let mut unnamed = bearer(
-        c.put(format!("{base}/api/files/{file_id}/thumbnails/sm")),
+        c.put(format!("{base}/api/v1/drive/files/{file_id}/thumbnails/sm")),
         &token,
     )
     .header("content-type", "application/octet-stream")
@@ -381,7 +384,7 @@ fn thumbnails_contract() {
     );
     unnamed = bearer(
         c.put(format!(
-            "{base}/api/files/{file_id}/thumbnails/sm?revision=x"
+            "{base}/api/v1/drive/files/{file_id}/thumbnails/sm?revision=x"
         )),
         &token,
     )
@@ -485,7 +488,7 @@ fn thumbnails_contract() {
     let stranger_token = token_of(&c, &base, &stranger);
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/files/{file_id}/thumbnails/sm")),
+            c.get(format!("{base}/api/v1/drive/files/{file_id}/thumbnails/sm")),
             &stranger_token
         )
         .send()
@@ -521,7 +524,7 @@ fn thumbnails_contract() {
     .len() as i64;
     assert_eq!(
         bearer(
-            c.delete(format!("{base}/api/files/{file_id}/thumbnails")),
+            c.delete(format!("{base}/api/v1/drive/files/{file_id}/thumbnails")),
             &token
         )
         .send()
@@ -532,7 +535,7 @@ fn thumbnails_contract() {
     assert_eq!(used(&c, &base, &token), with_version - second_len);
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/files/{file_id}/thumbnails/sm")),
+            c.get(format!("{base}/api/v1/drive/files/{file_id}/thumbnails/sm")),
             &token
         )
         .send()

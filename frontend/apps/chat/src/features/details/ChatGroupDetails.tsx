@@ -40,8 +40,8 @@ import { Section } from './DetailsPanel'
 const TITLE_MAX = 32
 
 /** Whether this member may do what `required` guards (the home checks it too). */
-function allowed(required: ChatGroupAccessRequired | undefined, isAdmin: boolean): boolean {
-  return required === 'any' || required === 'member' || (required === 'administrator' && isAdmin)
+function allowed(required: ChatGroupAccessRequired | undefined, administrator: boolean): boolean {
+  return required === 'any' || required === 'member' || (required === 'administrator' && administrator)
 }
 
 /**

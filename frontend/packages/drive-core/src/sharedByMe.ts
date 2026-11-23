@@ -31,7 +31,7 @@ export function useSharedByMe() {
   const rows = useQuery({
     queryKey: sharedByMeKey,
     refetchOnMount: 'always',
-    queryFn: async () => (await api.get<SharedByMeRow[]>('/shared-by-me')).data,
+    queryFn: async () => (await api.get<SharedByMeRow[]>('/drive/shared-by-me')).data,
   })
   // The folders whose files are shared, listed to name them.
   const index = folders.data

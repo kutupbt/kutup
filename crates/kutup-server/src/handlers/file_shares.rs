@@ -29,7 +29,7 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::files::{file_rows, validate_envelope};
 use crate::handlers::folder_access::same_membership;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::FileRow;
 use crate::AppState;
 
@@ -40,7 +40,7 @@ const MAX_ENVELOPE_CHARS: usize = 4096;
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShareFileRequest {
-    pub recipient_user_id: Uuid,
+    pub recipient_account_id: Uuid,
     /// `FileShareEnvelopeV1` for the file's current key generation.
     pub share_envelope: String,
     pub can_edit: bool,
@@ -49,7 +49,7 @@ pub struct ShareFileRequest {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileAccessMember {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub account: String,
     pub account_incarnation_id: String,
     /// Their Drive HPKE key, to seal them the file's next key.
@@ -82,7 +82,7 @@ pub struct FileAccess {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MemberEnvelope {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub share_envelope: String,
 }
 
@@ -146,7 +146,7 @@ pub struct FileLink {
     pub expires_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    /// Why an operator blocked what the link reaches (`legal_order`,
+    /// Why an operator blocked what the link reaches (`legalOrder`,
     /// `abuse`, `other`): it doesn't open, and stays until they lift it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,
@@ -209,13 +209,13 @@ pub struct SharedFile {
     /// The server of the owner and the sharer (this one): with their user
     /// ids, who they are; the envelope names them so.
     pub server: String,
-    pub owner_user_id: Uuid,
+    pub owner_account_id: Uuid,
     /// Shown only: the owner's address now.
     pub owner_account: String,
     pub owner_incarnation_id: String,
     pub owner_signing_public_key: String,
     /// Who sealed the envelope: the owner, or an editor the owner lets share.
-    pub sharer_user_id: Uuid,
+    pub sharer_account_id: Uuid,
     /// Shown only: the sharer's address now.
     pub sharer_account: String,
     pub sharer_incarnation_id: String,
@@ -235,8 +235,8 @@ struct Party {
 
 async fn party(pool: &PgPool, user_id: Uuid, domain: &str) -> AppResult<Party> {
     let row: Option<(Option<String>, String, Option<String>)> = sqlx::query_as(
-        "SELECT username, account_incarnation_id, drive_signing_public_key
-         FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT username, COALESCE(encode(account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(drive_signing_public_key), '')
+         FROM accounts WHERE id = $1 AND state = 'active'",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -332,12 +332,12 @@ fn verify_envelope(
         .map_err(|_| AppError::bad_request("the file share does not match the file or the person"))
 }
 
-/// `POST /api/files/{id}/share` — share a file with someone here, or change
+/// `POST /api/v1/drive/files/{id}/share` — share a file with someone here, or change
 /// what they may do. Owner only.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/share",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/share",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = ShareFileRequest,
@@ -349,19 +349,19 @@ fn verify_envelope(
 )]
 pub async fn share_file(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<ShareFileRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    if req.recipient_user_id == user_id {
+    if req.recipient_account_id == user_id {
         return Err(AppError::bad_request("a file is shared with someone else"));
     }
     let domain = state.config.chat_server_name.as_str();
     let sharer = party(&state.pool, user_id, domain).await?;
-    let recipient = party(&state.pool, req.recipient_user_id, domain).await?;
-    crate::handlers::identity::require_sealable(&state.pool, req.recipient_user_id).await?;
+    let recipient = party(&state.pool, req.recipient_account_id, domain).await?;
+    crate::handlers::identity::require_sealable(&state.pool, req.recipient_account_id).await?;
     let mut tx = state.pool.begin().await?;
     let generation = match owned_file(&mut tx, file_id, user_id).await {
         Ok((_, generation, _, _)) => generation,
@@ -376,7 +376,7 @@ pub async fn share_file(
                                WHERE f.id = $1 AND c.owner_account_id = $2)",
             )
             .bind(file_id)
-            .bind(req.recipient_user_id)
+            .bind(req.recipient_account_id)
             .fetch_one(&mut *tx)
             .await?;
             if taken {
@@ -395,7 +395,7 @@ pub async fn share_file(
     sqlx::query(
         "INSERT INTO drive_file_shares (file_id, sharer_account_id, recipient_account_id, share_envelope,
                                   key_generation, can_edit)
-         VALUES ($1, $2, $3, $4, $5, $6)
+         VALUES ($1, $2, $3, kutup_unb64($4), $5, $6)
          ON CONFLICT (file_id, recipient_account_id) DO UPDATE SET
              sharer_account_id = EXCLUDED.sharer_account_id,
              share_envelope = EXCLUDED.share_envelope,
@@ -404,7 +404,7 @@ pub async fn share_file(
     )
     .bind(file_id)
     .bind(user_id)
-    .bind(req.recipient_user_id)
+    .bind(req.recipient_account_id)
     .bind(&req.share_envelope)
     .bind(generation)
     .bind(req.can_edit)
@@ -421,11 +421,11 @@ pub struct FileSharingSettings {
     pub editors_can_share: bool,
 }
 
-/// `PUT /api/files/{id}/sharing` — the owner's sharing settings for a file.
+/// `PUT /api/v1/drive/files/{id}/sharing` — the owner's sharing settings for a file.
 #[utoipa::path(
     put,
-    path = "/api/files/{id}/sharing",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/sharing",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = FileSharingSettings,
@@ -433,11 +433,11 @@ pub struct FileSharingSettings {
 )]
 pub async fn set_sharing(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<FileSharingSettings>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     owned_file(&mut tx, file_id, user_id).await?;
@@ -463,8 +463,8 @@ async fn members(pool: &PgPool, file_id: Uuid, domain: &str) -> AppResult<Vec<Fi
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.identity_suite,
-                u.drive_signing_public_key, fs.can_edit, fs.key_generation, fs.created_at
+        "SELECT u.id, u.username, COALESCE(encode(u.account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(u.drive_xwing_public_key), ''),
+                u.identity_suite, COALESCE(kutup_b64(u.drive_signing_public_key), ''), fs.can_edit, fs.key_generation, fs.created_at
          FROM drive_file_shares fs JOIN accounts u ON u.id = fs.recipient_account_id
          WHERE fs.file_id = $1 ORDER BY fs.created_at",
     )
@@ -486,7 +486,7 @@ async fn members(pool: &PgPool, file_id: Uuid, domain: &str) -> AppResult<Vec<Fi
                 created_at,
             )| {
                 FileAccessMember {
-                    user_id,
+                    account_id: user_id,
                     account: format!("{}@{domain}", username.unwrap_or_default()),
                     account_incarnation_id: incarnation,
                     drive_public_key: public_key,
@@ -501,21 +501,21 @@ async fn members(pool: &PgPool, file_id: Uuid, domain: &str) -> AppResult<Vec<Fi
         .collect())
 }
 
-/// `GET /api/files/{id}/access` — who the file itself is shared with. Owner only.
+/// `GET /api/v1/drive/files/{id}/access` — who the file itself is shared with. Owner only.
 #[utoipa::path(
     get,
-    path = "/api/files/{id}/access",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/access",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     responses((status = 200, description = "The file's people", body = FileAccess))
 )]
 pub async fn file_access(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<FileAccess>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     // The owner, or an editor who may share (to see who has it already).
@@ -573,7 +573,8 @@ async fn file_links(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FileLink>> {
         Option<String>,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, token, owner_link_key_envelope, collection_key_epoch, expires_at, created_at,
+        "SELECT id, token, kutup_b64(owner_link_key_envelope), collection_key_epoch, expires_at,
+                created_at,
                 kutup_target_blocked(share_type, target_id)
          FROM drive_public_shares WHERE share_type = 'file' AND target_id = $1
            AND owner_removed_at IS NULL
@@ -619,9 +620,14 @@ async fn federated_members(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<Federa
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, recipient_username, recipient_server, recipient_account_id,
-                recipient_incarnation_id, can_edit, key_generation, created_at
-         FROM drive_federated_outgoing_file_shares WHERE file_id = $1 ORDER BY created_at",
+        "SELECT s.id, split_part(r.current_address, '@', 1), s.recipient_server,
+                s.recipient_account_id, encode(s.recipient_incarnation_id, 'hex'), s.can_edit,
+                s.key_generation, s.created_at
+         FROM drive_federated_outgoing_file_shares s
+         -- Their address now (remote_renames): the share names them by id.
+         JOIN remote_account_renames r
+           ON r.server = s.recipient_server AND r.account_id = s.recipient_account_id
+         WHERE s.file_id = $1 ORDER BY s.created_at",
     )
     .bind(file_id)
     .fetch_all(pool)
@@ -665,7 +671,7 @@ async fn store_federated_envelopes(
 ) -> AppResult<()> {
     for member in envelopes {
         let target: Option<(Uuid, String, String)> = sqlx::query_as(
-            "SELECT recipient_account_id, recipient_server, recipient_incarnation_id
+            "SELECT recipient_account_id, recipient_server, encode(recipient_incarnation_id, 'hex')
              FROM drive_federated_outgoing_file_shares WHERE id = $1 AND file_id = $2",
         )
         .bind(member.id)
@@ -688,7 +694,7 @@ async fn store_federated_envelopes(
             &recipient,
         )?;
         sqlx::query(
-            "UPDATE drive_federated_outgoing_file_shares SET share_envelope = $2, key_generation = $3 WHERE id = $1",
+            "UPDATE drive_federated_outgoing_file_shares SET share_envelope = kutup_unb64($2), key_generation = $3 WHERE id = $1",
         )
         .bind(member.id)
         .bind(&member.share_envelope)
@@ -716,7 +722,7 @@ async fn store_link_envelopes(
     for link in links {
         validate_envelope(&link.key_envelope, context)?;
         let updated = sqlx::query(
-            "UPDATE drive_public_shares SET collection_key_envelope = $3, collection_key_epoch = $4
+            "UPDATE drive_public_shares SET collection_key_envelope = kutup_unb64($3), collection_key_epoch = $4
              WHERE id = $1 AND share_type = 'file' AND target_id = $2",
         )
         .bind(link.id)
@@ -743,7 +749,7 @@ async fn store_envelopes(
     envelopes: &[MemberEnvelope],
 ) -> AppResult<()> {
     for member in envelopes {
-        let recipient = party(pool, member.user_id, domain).await?;
+        let recipient = party(pool, member.account_id, domain).await?;
         verify_envelope(
             &member.share_envelope,
             file_id,
@@ -752,13 +758,13 @@ async fn store_envelopes(
             &recipient,
         )?;
         let updated = sqlx::query(
-            "UPDATE drive_file_shares SET share_envelope = $3, key_generation = $4,
+            "UPDATE drive_file_shares SET share_envelope = kutup_unb64($3), key_generation = $4,
                     sharer_account_id = (SELECT c.owner_account_id FROM drive_files f
                                       JOIN drive_collections c ON c.id = f.collection_id WHERE f.id = $1)
              WHERE file_id = $1 AND recipient_account_id = $2",
         )
         .bind(file_id)
-        .bind(member.user_id)
+        .bind(member.account_id)
         .bind(&member.share_envelope)
         .bind(generation)
         .execute(&mut **tx)
@@ -770,12 +776,12 @@ async fn store_envelopes(
     Ok(())
 }
 
-/// `PUT /api/files/{id}/shares` — re-seal the shares left at an older key
+/// `PUT /api/v1/drive/files/{id}/shares` — re-seal the shares left at an older key
 /// generation (someone else moved the file to a new key). Owner only.
 #[utoipa::path(
     put,
-    path = "/api/files/{id}/shares",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/shares",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = ResealRequest,
@@ -783,11 +789,11 @@ async fn store_envelopes(
 )]
 pub async fn reseal(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<ResealRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let domain = state.config.chat_server_name.clone();
     let owner = party(&state.pool, user_id, &domain).await?;
@@ -809,14 +815,14 @@ pub async fn reseal(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/files/{id}/rotate` — remove people from a shared file: the file
+/// `POST /api/v1/drive/files/{id}/rotate` — remove people from a shared file: the file
 /// moves to a new key (as a folder rotation does), re-sealed for everyone who
 /// stays, all at once or not at all. Owner only; the request must name
 /// exactly the file's current people.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/rotate",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/rotate",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = RotateFileAccessRequest,
@@ -827,11 +833,11 @@ pub async fn reseal(
 )]
 pub async fn rotate(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<RotateFileAccessRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let domain = state.config.chat_server_name.clone();
     let owner = party(&state.pool, user_id, &domain).await?;
@@ -846,7 +852,7 @@ pub async fn rotate(
             .bind(file_id)
             .fetch_all(&mut *tx)
             .await?;
-    let kept: Vec<Uuid> = req.members.iter().map(|m| m.user_id).collect();
+    let kept: Vec<Uuid> = req.members.iter().map(|m| m.account_id).collect();
     let current_links: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM drive_public_shares
           WHERE share_type = 'file' AND target_id = $1 AND owner_removed_at IS NULL",
@@ -898,7 +904,7 @@ pub async fn rotate(
     sqlx::query(
         "INSERT INTO drive_file_key_history (file_id, generation, previous_key_envelope,
                                        previous_metadata_envelope, previous_metadata_revision)
-         SELECT $1, $2, $3, metadata_envelope, metadata_revision FROM drive_files WHERE id = $1",
+         SELECT $1, $2, kutup_unb64($3), metadata_envelope, metadata_revision FROM drive_files WHERE id = $1",
     )
     .bind(file_id)
     .bind(next)
@@ -906,8 +912,8 @@ pub async fn rotate(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE drive_files SET key_epoch = $2, key_generation = $3, file_key_envelope = $4,
-                metadata_envelope = $5
+        "UPDATE drive_files SET key_epoch = $2, key_generation = $3, file_key_envelope = kutup_unb64($4),
+                metadata_envelope = kutup_unb64($5)
          WHERE id = $1",
     )
     .bind(file_id)
@@ -968,21 +974,21 @@ pub async fn rotate(
     Ok(Json(file_access_of(&state, file_id, next, true).await?).into_response())
 }
 
-/// `GET /api/shared-files` — files shared with you by themselves, with the
+/// `GET /api/v1/drive/shared-with-me` — files shared with you by themselves, with the
 /// envelope and the owner's identity keys to open and check them. A file in
 /// the trash is left out.
 #[utoipa::path(
     get,
-    path = "/api/shared-files",
-    tag = "files",
+    path = "/api/v1/drive/shared-with-me",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Files shared with you", body = Vec<SharedFile>))
 )]
 pub async fn shared_with_me(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<SharedFile>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let domain = state.config.chat_server_name.as_str();
     let files = file_rows(
         &state.pool,
@@ -1002,31 +1008,30 @@ pub async fn shared_with_me(
         key_generation: i32,
         folder_key_current: bool,
         shared_at: OffsetDateTime,
-        #[sqlx(rename = "owner_account_id")]
-        owner_user_id: Uuid,
+        owner_account_id: Uuid,
         owner_username: Option<String>,
         owner_incarnation_id: String,
         owner_signing_public_key: Option<String>,
         metadata_envelope: Option<String>,
         metadata_revision: Option<i64>,
-        #[sqlx(rename = "sharer_account_id")]
-        sharer_user_id: Uuid,
+        sharer_account_id: Uuid,
         sharer_username: Option<String>,
         sharer_incarnation_id: String,
         sharer_signing_public_key: Option<String>,
         editors_can_share: bool,
     }
     let shares: Vec<Row> = sqlx::query_as(
-        "SELECT fs.file_id, fs.share_envelope, fs.can_edit, fs.key_generation,
+        "SELECT fs.file_id, kutup_b64(fs.share_envelope) AS share_envelope, fs.can_edit,
+                fs.key_generation,
                 f.key_epoch = c.key_epoch AS folder_key_current, fs.created_at AS shared_at,
                 c.owner_account_id, o.username AS owner_username,
-                o.account_incarnation_id AS owner_incarnation_id,
-                o.drive_signing_public_key AS owner_signing_public_key,
-                h.previous_metadata_envelope AS metadata_envelope,
+                encode(o.account_incarnation_id, 'hex') AS owner_incarnation_id,
+                kutup_b64(o.drive_signing_public_key) AS owner_signing_public_key,
+                kutup_b64(h.previous_metadata_envelope) AS metadata_envelope,
                 h.previous_metadata_revision AS metadata_revision,
                 fs.sharer_account_id, s.username AS sharer_username,
-                s.account_incarnation_id AS sharer_incarnation_id,
-                s.drive_signing_public_key AS sharer_signing_public_key,
+                encode(s.account_incarnation_id, 'hex') AS sharer_incarnation_id,
+                kutup_b64(s.drive_signing_public_key) AS sharer_signing_public_key,
                 f.editors_can_share
          FROM drive_file_shares fs
          JOIN drive_files f ON f.id = fs.file_id
@@ -1059,11 +1064,11 @@ pub async fn shared_with_me(
                     key_generation: row.key_generation,
                     folder_key_current: row.folder_key_current,
                     server: domain.to_owned(),
-                    owner_user_id: row.owner_user_id,
+                    owner_account_id: row.owner_account_id,
                     owner_account: format!("{}@{domain}", row.owner_username?),
                     owner_incarnation_id: row.owner_incarnation_id,
                     owner_signing_public_key: row.owner_signing_public_key?,
-                    sharer_user_id: row.sharer_user_id,
+                    sharer_account_id: row.sharer_account_id,
                     sharer_account: format!("{}@{domain}", row.sharer_username?),
                     sharer_incarnation_id: row.sharer_incarnation_id,
                     sharer_signing_public_key: row.sharer_signing_public_key?,
@@ -1086,22 +1091,22 @@ pub struct PendingFileShare {
     pub collection_id: Uuid,
 }
 
-/// `GET /api/file-shares/pending` — your files whose shares wait for you:
+/// `GET /api/v1/drive/shared-with-me/pending` — your files whose shares wait for you:
 /// someone else moved the file to a new key, or the folder moved past the
 /// key the file is wrapped at. Your app re-keys the file if needed and
-/// re-seals the shares (`PUT /api/files/{id}/shares`).
+/// re-seals the shares (`PUT /api/v1/drive/files/{id}/shares`).
 #[utoipa::path(
     get,
-    path = "/api/file-shares/pending",
-    tag = "files",
+    path = "/api/v1/drive/shared-with-me/pending",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Files with shares to bring up to date", body = Vec<PendingFileShare>))
 )]
 pub async fn pending(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<PendingFileShare>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
         "SELECT f.id, f.collection_id
          FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
@@ -1146,23 +1151,23 @@ pub struct SharedByMeItem {
     pub links: i64,
 }
 
-/// `GET /api/shared-by-me` — what you share: your folders shared with people
+/// `GET /api/v1/drive/shared-by-me` — what you share: your folders shared with people
 /// (here or on other servers) or by link, and your files shared by
 /// themselves, with how many of each. Names stay encrypted; the app decrypts
 /// them from your own folder listings. Folders and files in the trash are
 /// left out.
 #[utoipa::path(
     get,
-    path = "/api/shared-by-me",
-    tag = "files",
+    path = "/api/v1/drive/shared-by-me",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "What you share", body = Vec<SharedByMeItem>))
 )]
 pub async fn shared_by_me(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<SharedByMeItem>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     type Row = (Uuid, Option<Uuid>, i64, i64, i64);
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT c.id, NULL::uuid,

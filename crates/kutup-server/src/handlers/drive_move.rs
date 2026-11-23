@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::files::validate_envelope;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -75,14 +75,14 @@ pub(crate) async fn writable_folder(
     }
 }
 
-/// `POST /api/files/{id}/move` — move a file to another folder of the same
+/// `POST /api/v1/drive/files/{id}/move` — move a file to another folder of the same
 /// owner. Needs edit rights on both. The client re-seals only the file's
 /// key for the destination; a file its source folder has rotated past is
 /// re-keyed first, so no one removed from the source can follow it.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/move",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/move",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = MoveFileRequest,
@@ -94,11 +94,11 @@ pub(crate) async fn writable_folder(
 )]
 pub async fn move_file(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<MoveFileRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let from = Uuid::parse_str(&req.from_collection_id)
         .map_err(|_| AppError::bad_request("invalid request"))?;
@@ -153,8 +153,8 @@ pub async fn move_file(
     crate::drive_names::lock_place(&mut tx, place).await?;
     crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(file_id)).await?;
     sqlx::query(
-        "UPDATE drive_files SET collection_id = $2, key_epoch = $3, file_key_envelope = $4,
-                          name_hash = $5, content_hash = $6
+        "UPDATE drive_files SET collection_id = $2, key_epoch = $3, file_key_envelope = kutup_unb64($4),
+                          name_hash = decode($5, 'hex'), content_hash = decode($6, 'hex')
          WHERE id = $1",
     )
     .bind(file_id)
@@ -190,13 +190,13 @@ pub struct MoveCollectionRequest {
     pub name_hash_generation: Option<u32>,
 }
 
-/// `POST /api/collections/{id}/move` — put a folder under another of the
+/// `POST /api/v1/drive/collections/{id}/move` — put a folder under another of the
 /// owner's folders, or at the top level. Owner only. A folder never goes
 /// into itself or anything under it.
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/move",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/move",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = MoveCollectionRequest,
@@ -207,11 +207,11 @@ pub struct MoveCollectionRequest {
 )]
 pub async fn move_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<MoveCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let folder = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let parent = req
         .parent_collection_id
@@ -271,7 +271,7 @@ pub async fn move_collection(
     let generation =
         crate::drive_names::hash_generation(&mut tx, place, req.name_hash_generation).await?;
     sqlx::query(
-        "UPDATE drive_collections SET parent_collection_id = $2, name_hash = $3, name_hash_generation = $4
+        "UPDATE drive_collections SET parent_collection_id = $2, name_hash = decode($3, 'hex'), name_hash_generation = $4
          WHERE id = $1",
     )
         .bind(folder)

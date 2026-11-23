@@ -183,7 +183,7 @@ export default function TextCollabEditor({
   // Live preview (Obsidian's editing mode) or source mode, remembered here.
   const [sourceMode, setSourceMode] = useState(() => {
     try {
-      return localStorage.getItem('kutup.notes.sourceMode') === '1'
+      return localStorage.getItem('kutup.office.notesSourceMode') === '1'
     } catch {
       return false
     }
@@ -340,7 +340,7 @@ export default function TextCollabEditor({
   // Source mode on or off, without rebuilding the editor.
   useEffect(() => {
     try {
-      localStorage.setItem('kutup.notes.sourceMode', sourceMode ? '1' : '0')
+      localStorage.setItem('kutup.office.notesSourceMode', sourceMode ? '1' : '0')
     } catch {
       // Private windows may refuse; the choice holds for this visit.
     }

@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
-import type { SuspendedReason, UserRow } from '@kutup/session/api-types'
+import { administers, type SuspendedReason, type UserRow } from '@kutup/session/api-types'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
@@ -115,7 +115,7 @@ function Quotas({ user }: { user: UserRow }) {
   )
 }
 
-const SUSPENDED_REASONS: SuspendedReason[] = ['admin', 'operator_order', 'security']
+const SUSPENDED_REASONS: SuspendedReason[] = ['admin', 'operatorOrder', 'security']
 
 type Pending =
   | { kind: 'disable' }
@@ -131,9 +131,9 @@ type Pending =
   | { kind: 'release' }
 
 /** Which referral code the account signed up with (docs/plans/registration-codes.md). */
-function SignedUpWithFact({ userId }: { userId: string }) {
+function SignedUpWithFact({ accountId }: { accountId: string }) {
   const { t, i18n } = useTranslation()
-  const code = useUserRegistrationCode(userId)
+  const code = useUserRegistrationCode(accountId)
   if (code.isPending || code.isError) return null
   return (
     <Fact label={t('admin.user.signedUpWith')}>
@@ -195,8 +195,8 @@ export function UserPage() {
     )
   }
 
-  const self = user.id === me.userId
-  const locked = user.isProtected
+  const self = user.id === me.accountId
+  const locked = user.role === 'breakGlassAdmin'
   const close = () => {
     setPending(null)
     for (const m of [update, disable2fa, rotate, wipe, remove, closeAccount, legalHold]) m.reset()
@@ -238,7 +238,7 @@ export function UserPage() {
             pending={update.isPending} error={update.error} errorFallback={t('admin.user.saveFailed')}
             onConfirm={() =>
               update.mutate(
-                { id: user.id, patch: disabling ? { isActive: false, suspendedReason: reason } : { isActive: true } },
+                { id: user.id, patch: disabling ? { state: 'suspended', suspendedReason: reason } : { state: 'active' } },
                 { onSuccess: close },
               )} />
         )
@@ -252,7 +252,7 @@ export function UserPage() {
             description={t(promoting ? 'admin.user.promoteDescription' : 'admin.user.demoteDescription', { name: user.username })}
             submit={t(promoting ? 'admin.user.promote' : 'admin.user.demote')}
             pending={update.isPending} error={update.error} errorFallback={t('admin.user.saveFailed')}
-            onConfirm={() => update.mutate({ id: user.id, patch: { isAdmin: promoting } }, { onSuccess: close })} />
+            onConfirm={() => update.mutate({ id: user.id, patch: { role: promoting ? 'admin' : 'member' } }, { onSuccess: close })} />
         )
       }
       case 'twoFactor':
@@ -353,7 +353,7 @@ export function UserPage() {
         <PageHeader title={user.username} />
         <div className="flex flex-wrap items-center gap-2">
           <UserStatus user={user} />
-          {user.isAdmin ? <Badge>{t('admin.users.admin')}</Badge> : null}
+          {administers(user.role) ? <Badge>{t('admin.users.admin')}</Badge> : null}
           {locked ? <Badge variant="neutral">{t('admin.user.protected')}</Badge> : null}
         </div>
       </div>
@@ -366,8 +366,8 @@ export function UserPage() {
           <Fact label={t('settings.account.storage')}>
             {formatBytes(user.storageUsedBytes, lang)} / {formatBytes(user.storageQuotaBytes, lang)}
           </Fact>
-          <Fact label={t('admin.users.columns.twoFactor')}>{user.totpEnabled ? t('admin.users.on') : t('admin.users.off')}</Fact>
-          <SignedUpWithFact userId={user.id} />
+          <Fact label={t('admin.users.columns.twoFactor')}>{t(`admin.users.twoFactor.${user.twoFactor}`)}</Fact>
+          <SignedUpWithFact accountId={user.id} />
           {user.state === 'closing' && user.closesAt ? (
             <Fact label={t('admin.user.closesAt')}>{formatInstant(user.closesAt, lang)}</Fact>
           ) : null}
@@ -399,12 +399,12 @@ export function UserPage() {
             />
           ) : (
             <ActionRow
-              title={user.isActive ? t('admin.user.disable') : t('admin.user.enable')}
-              description={user.isActive ? t('admin.user.disableHint') : t('admin.user.enableHint')}
+              title={user.state === 'active' ? t('admin.user.disable') : t('admin.user.enable')}
+              description={user.state === 'active' ? t('admin.user.disableHint') : t('admin.user.enableHint')}
               action={
                 <Button variant="outline" size="sm" disabled={locked || self}
-                  onClick={() => setPending({ kind: user.isActive ? 'disable' : 'enable' })}>
-                  {user.isActive ? t('admin.user.disable') : t('admin.user.enable')}
+                  onClick={() => setPending({ kind: user.state === 'active' ? 'disable' : 'enable' })}>
+                  {user.state === 'active' ? t('admin.user.disable') : t('admin.user.enable')}
                 </Button>
               }
             />
@@ -440,12 +440,12 @@ export function UserPage() {
             }
           />
           <ActionRow
-            title={user.isAdmin ? t('admin.user.demote') : t('admin.user.promote')}
-            description={user.isAdmin ? t('admin.user.demoteHint') : t('admin.user.promoteHint')}
+            title={administers(user.role) ? t('admin.user.demote') : t('admin.user.promote')}
+            description={administers(user.role) ? t('admin.user.demoteHint') : t('admin.user.promoteHint')}
             action={
-              <Button variant="outline" size="sm" disabled={locked || (self && user.isAdmin)}
-                onClick={() => setPending({ kind: user.isAdmin ? 'demote' : 'promote' })}>
-                {user.isAdmin ? t('admin.user.demote') : t('admin.user.promote')}
+              <Button variant="outline" size="sm" disabled={locked || (self && administers(user.role))}
+                onClick={() => setPending({ kind: administers(user.role) ? 'demote' : 'promote' })}>
+                {administers(user.role) ? t('admin.user.demote') : t('admin.user.promote')}
               </Button>
             }
           />
@@ -453,11 +453,11 @@ export function UserPage() {
       </Section>
 
       <Section title={t('admin.mailSending.title')} description={t('admin.mailSending.cardHint')}>
-        <MailSendingCard userId={user.id} />
+        <MailSendingCard accountId={user.id} />
       </Section>
 
       <Section title={t('admin.mailDomains.overrides.title')}>
-        <MailDomainOverridesCard userId={user.id} />
+        <MailDomainOverridesCard accountId={user.id} />
       </Section>
 
       <Section title={t('admin.user.quotas')} description={t('admin.user.quotasHint')}>
@@ -465,16 +465,16 @@ export function UserPage() {
       </Section>
 
       <Section title={t('admin.limits.title')} description={t('admin.limits.hint')}>
-        <AccountLimits userId={user.id} />
+        <AccountLimits accountId={user.id} />
       </Section>
 
       <Section title={t('admin.user.recovery')} description={t('admin.user.recoveryHint')}>
         <Card className="divide-y divide-border p-0">
-          {user.totpEnabled ? (
+          {user.twoFactor === 'on' ? (
             <ActionRow title={t('admin.user.twoFactorOff')} description={t('admin.user.twoFactorHint')}
               action={<Button variant="outline" size="sm" onClick={() => setPending({ kind: 'twoFactor' })}>{t('admin.user.twoFactorOff')}</Button>} />
           ) : null}
-          {user.isFirstLogin ? (
+          {!user.keysSetUp ? (
             <ActionRow title={t('admin.user.rotate')} description={t('admin.user.rotateHint')}
               action={<Button variant="outline" size="sm" onClick={() => setPending({ kind: 'rotate', password: generateTempPassword() })}>{t('admin.user.rotate')}</Button>} />
           ) : (

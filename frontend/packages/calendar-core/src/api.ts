@@ -75,7 +75,7 @@ export interface DefaultReminders {
 export interface CalendarRow {
   id: string
   /** The owner's account id (on this server): who shared the passphrase. */
-  ownerId: string
+  ownerAccountId: string
   publicKey: string
   fingerprint: string
   lockedSecretKey: string
@@ -255,10 +255,10 @@ async function unlockOne(session: Session, calendarId: string, key: CalendarKeyR
 
 /** A calendar's keys, newest last, every one unlocked: the row's own when it lists no generations. */
 async function unlock(session: Session, row: CalendarRow): Promise<{ newest: UnlockedCalendar; generation: number; keyring: Map<string, UnlockedCalendar> }> {
-  const owned = row.ownerId === session.userId
+  const owned = row.ownerAccountId === session.accountId
   let owner: CalendarOwner | null = null
   if (!owned) {
-    if (!row.owner || row.owner.accountId !== row.ownerId) throw new Error('a shared calendar without its owner')
+    if (!row.owner || row.owner.accountId !== row.ownerAccountId) throw new Error('a shared calendar without its owner')
     if (!ownerCheck) throw new Error('shared calendars need the owner check')
     owner = await ownerCheck(session, row.owner)
   }
@@ -357,7 +357,7 @@ export async function loadCalendars(
       if (own) await guard.accept(GUARD_SCOPE, row.id, own.revision)
       else if ((await guard.seen(GUARD_SCOPE, row.id)) === DELETED) throw new OlderThanSeenError(GUARD_SCOPE, 0, DELETED)
       const keys = await unlock(session, row)
-      const owned = row.ownerId === session.userId
+      const owned = row.ownerAccountId === session.accountId
       const signers = owned ? account.ownPublicKeys : await authorKeys(account, row.owner!.address, row.owner)
       const metadata = keys.newest.openMetadata(row.metadata, row.id, signers)
       // A name its owner didn't sign is never shown: the calendar counts
@@ -623,7 +623,7 @@ export async function loadEvents(
 
 /**
  * One change refused by an events sync, with its code (`uidTaken`,
- * `eventLimit`, `revision_conflict` when another device saved first,
+ * `eventLimit`, `revisionConflict` when another device saved first,
  * `sequenceBehind`…).
  */
 export class EventRefusedError extends Error {
@@ -699,7 +699,7 @@ export async function deleteEvent(
   await syncOne(calendar, addressId, { delete: { id: existing.id, baseRevision: existing.revision } })
 }
 
-/** One of the caller's alarms (`GET /api/calendar/alarms`). */
+/** One of the caller's alarms (`GET /api/v1/calendar/alarms`). */
 export interface Alarm {
   calendarId: string
   eventId: string

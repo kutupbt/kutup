@@ -106,7 +106,7 @@ interface Props {
 interface CursorPayload {
   color: string | null
   username: string | null
-  userId: string | null
+  accountId: string | null
   pointer?: { x: number; y: number; tool: 'pointer' | 'laser' }
   button?: 'up' | 'down'
   selectedElementIds?: Record<string, true>
@@ -123,7 +123,7 @@ function WhiteboardEditorBase(
   const [deviceLimit, setDeviceLimit] = useState(false)
   const userColor = session.color
   const username = session.username
-  const userId = session.userId
+  const userId = session.accountId
   const theme = useResolvedTheme()
 
   // Push kutup's theme into Excalidraw on every change. The `theme` prop
@@ -186,7 +186,7 @@ function WhiteboardEditorBase(
   // upstream Excalidraw's status-driven flow:
   //   1. Image element appears with status "pending" + binary in
   //      appState.files. We encrypt the binary client-side and PUT it to
-  //      /api/files/:fileId/assets/:assetId, then flip the element's
+  //      /api/v1/drive/files/:fileId/assets/:assetId, then flip the element's
   //      status to "saved" via updateScene.
   //   2. The status flip bumps versionNonce → broadcasts via the normal
   //      EXCALIDRAW_OP channel.
@@ -360,7 +360,7 @@ function WhiteboardEditorBase(
               if (me && senderId === peerKey(me.account, me.deviceId)) return
               const stroke = data.color ?? '#94a3b8'
               const collaborator: Record<string, unknown> = {
-                id: data.userId ?? senderId,
+                id: data.accountId ?? senderId,
                 socketId: senderId,
                 username: data.username ?? null,
                 color: { background: stroke, stroke },
@@ -447,7 +447,7 @@ function WhiteboardEditorBase(
         // tabs of the same account are distinguishable in the cursor
         // label instead of both reading just "admin".
         username: buildAwarenessName(usernameRef.current),
-        userId: userIdRef.current,
+        accountId: userIdRef.current,
         button: localButtonRef.current,
         selectedElementIds: localSelectionRef.current,
       }

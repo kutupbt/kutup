@@ -33,7 +33,7 @@ export function useUploadActions() {
     void queryClient.invalidateQueries({ queryKey: foldersKey })
     // Storage used changes with every upload; the sidebar meter reads the session.
     void api
-      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/user/me')
+      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/account')
       .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes, storageQuotaBytes: data.storageQuotaBytes }))
       .catch(() => {})
   }, [queryClient])
@@ -42,7 +42,7 @@ export function useUploadActions() {
   const reloadFolder = useCallback(
     async (folder: Folder): Promise<Folder> => {
       // A folder on another server: bring its stored share up to the new key.
-      if (folder.remoteShareId) await api.post(`/drive/federation/shares/${folder.remoteShareId}/refresh`)
+      if (folder.remoteShareId) await api.post(`/drive/federation/folder-shares/${folder.remoteShareId}/refresh`)
       await queryClient.invalidateQueries({ queryKey: foldersKey })
       const fresh = cachedFolderIndex(queryClient)?.byId.get(folder.id)
       if (!fresh?.key) throw new Error('the folder is no longer available')

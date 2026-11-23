@@ -24,7 +24,7 @@ export interface IncomingShare {
   nameRevision: number
   epochStatement: string
   epochStatementHash: string
-  ownerUserId: string
+  ownerAccountId: string
   ownerAccount: string
   ownerIncarnationId: string
   ownerSigningPublicKey: string
@@ -55,7 +55,7 @@ function openOnce(cacheKey: string, open: () => Promise<{ collectionKey: Uint8Ar
 
 /** A collection as this account opens it: its own, or one shared with it. */
 export async function openRow(row: CollectionRowWithTimes, me: DriveIdentity): Promise<Folder> {
-  const owned = row.ownerUserId === me.userId
+  const owned = row.ownerAccountId === me.accountId
   const result = owned
     ? await openOnce(`o:${row.ownerKeyEnvelope}:${row.nameEnvelope}`, () =>
         openOwnedCollectionV1(row, me),
@@ -82,7 +82,7 @@ export async function openRow(row: CollectionRowWithTimes, me: DriveIdentity): P
     name: result?.name ?? null,
     key: result?.collectionKey ?? null,
     keyEpoch: row.keyEpoch,
-    ownerUserId: row.ownerUserId,
+    ownerAccountId: row.ownerAccountId,
     ownerAuthorityPublicKey: owned ? me.authorityPublicKey : (row.ownerAuthorityPublicKey ?? ''),
     epochStatementHash: row.epochStatementHash,
     nameRevision: row.nameRevision,
@@ -105,7 +105,7 @@ export async function openRemote(share: IncomingShare, me: DriveIdentity): Promi
     openSharedCollectionV1(
       {
         id: share.remoteCollectionId,
-        ownerUserId: share.ownerUserId,
+        ownerAccountId: share.ownerAccountId,
         nameEnvelope: share.nameEnvelope,
         namedShareEnvelope: share.namedShareEnvelope,
         keyEpoch: share.keyEpoch,
@@ -133,7 +133,7 @@ export async function openRemote(share: IncomingShare, me: DriveIdentity): Promi
     name: result.name,
     key: result.collectionKey,
     keyEpoch: share.keyEpoch,
-    ownerUserId: share.ownerUserId,
+    ownerAccountId: share.ownerAccountId,
     ownerAuthorityPublicKey: share.ownerAuthorityPublicKey,
     epochStatementHash: share.epochStatementHash,
     nameRevision: share.nameRevision,
@@ -187,8 +187,8 @@ function index(folders: Folder[]): FolderIndex {
 async function loadFolders(me: DriveIdentity): Promise<FolderIndex> {
   const fetchAll = async () => {
     const [{ data: rows }, { data: shares }] = await Promise.all([
-      api.get<CollectionRowWithTimes[]>('/collections'),
-      api.get<IncomingShare[]>('/drive/federation/shares'),
+      api.get<CollectionRowWithTimes[]>('/drive/collections'),
+      api.get<IncomingShare[]>('/drive/federation/folder-shares'),
     ])
     const local = await Promise.all(rows.map((row) => openRow(row, me)))
     const remote = (await Promise.all(shares.map((s) => openRemote(s, me)))).filter((f): f is Folder => f !== null)
@@ -197,9 +197,9 @@ async function loadFolders(me: DriveIdentity): Promise<FolderIndex> {
   let folders = await fetchAll()
   if (!folders.some((f) => f.isRoot)) {
     // First visit: every account keeps its top-level files in one root folder.
-    const created = await createOwnedCollectionV1(me, me.userId, ROOT_NAME, null)
+    const created = await createOwnedCollectionV1(me, me.accountId, ROOT_NAME, null)
     try {
-      await api.post('/collections', { ...created.payload, ...(await nameFieldsIn(atTopLevel(me.roots), ROOT_NAME)) })
+      await api.post('/drive/collections', { ...created.payload, ...(await nameFieldsIn(atTopLevel(me.roots), ROOT_NAME)) })
     } catch (error) {
       // Another tab made it first: its name is taken at the top level.
       if (!(isAxiosError(error) && error.response?.status === 409)) throw error
@@ -224,7 +224,7 @@ export function cachedFolderIndex(queryClient: QueryClient): FolderIndex | undef
 export function useFolders() {
   const identity = useDriveIdentity()
   return useQuery({
-    queryKey: [...foldersKey, identity.data?.userId],
+    queryKey: [...foldersKey, identity.data?.accountId],
     enabled: identity.isSuccess,
     queryFn: async () => {
       const folders = await loadFolders(identity.data!)

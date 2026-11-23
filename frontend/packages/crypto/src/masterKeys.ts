@@ -71,7 +71,7 @@ export function masterKeysBytes(keys: MasterKeys): MasterKeysBytes {
  * The account's set after a sign-in: `masterKey`, which `envelope` (the
  * password or recovery wrap) held, at the generation its header names, and
  * every older key through `keyring` (`masterKeyring` of the sign-in answer
- * or `GET /api/account/roots`). Throws on a broken or newer keyring.
+ * or `GET /api/v1/account/roots`). Throws on a broken or newer keyring.
  */
 export async function openMasterKeys(masterKey: Uint8Array, envelope: string, binding: string, keyring: readonly string[]): Promise<MasterKeys> {
   return (await getCryptoWasm()).openMasterKeys(toBase64(masterKey), envelope, binding, [...keyring]) as MasterKeys

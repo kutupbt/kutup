@@ -19,7 +19,7 @@ export function DataStateSection() {
   const { t, i18n } = useTranslation()
   const session = useRequiredSession()
   const state = useQuery({
-    queryKey: ['account-head', 'data-state', session.userId],
+    queryKey: ['account-head', 'data-state', session.accountId],
     queryFn: async () => {
       const client = await accountHead(session)
       // A blocked head still has a state to show; the banner says the rest.

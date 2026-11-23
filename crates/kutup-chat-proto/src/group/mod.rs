@@ -66,7 +66,7 @@ pub const MAX_CHANGE_BYTES: usize = crate::group_route::MAX_REQUEST_BODY;
 /// The format's ceiling for `GroupLimits::max_members` (§7): Signal's hard
 /// limit, so a state a home with a higher working limit serves still reads
 /// on every client (docs/plans/format-evolution.md, group row). The working
-/// limit is each home's site setting (`chat_group_max_members`).
+/// limit is each home's site setting (`chat.group_max_members`).
 pub const MAX_GROUP_MEMBERS: usize = 1000;
 pub const INVITE_LINK_PASSWORD_LEN: usize = 16;
 

@@ -67,8 +67,8 @@ function snapshot(): JoinedMeeting[] {
 const JOINED_QUERY = ['chat-joined-meetings'] as const
 
 /** The stays in this browser's storage that belong in `userId`'s list: the ones joined while it was signed in here. */
-function theirs(local: JoinedMeeting[], userId: string): JoinedMeeting[] {
-  return local.filter((entry) => entry.account === userId)
+function theirs(local: JoinedMeeting[], accountId: string): JoinedMeeting[] {
+  return local.filter((entry) => entry.account === accountId)
 }
 
 /**
@@ -82,7 +82,7 @@ export function useJoinedMeetingsSync(): void {
   const queryClient = useQueryClient()
   const local = useSyncExternalStore(subscribeJoinedMeetings, snapshot)
   const moving = useRef(false)
-  const { userId } = session
+  const { accountId: userId } = session
 
   useEffect(() => {
     const pending = theirs(local, userId)
@@ -126,9 +126,9 @@ export function useJoinedMeetings() {
   })
   const entries = useMemo(() => {
     const byId = new Map<string, JoinedMeeting>()
-    for (const entry of [...theirs(local, session.userId), ...(list.data ?? [])]) byId.set(entry.id, entry)
+    for (const entry of [...theirs(local, session.accountId), ...(list.data ?? [])]) byId.set(entry.id, entry)
     return [...byId.values()].sort((a, b) => b.joinedAtMs - a.joinedAtMs)
-  }, [local, list.data, session.userId])
+  }, [local, list.data, session.accountId])
   const settle = {
     onMutate: () => queryClient.cancelQueries({ queryKey: JOINED_QUERY }),
     onSettled: () => queryClient.invalidateQueries({ queryKey: JOINED_QUERY }),
@@ -145,7 +145,7 @@ export function useJoinedMeetings() {
   const clear = useMutation({
     ...settle,
     mutationFn: async () => {
-      forgetJoinedMeetings(new Set(theirs(joinedMeetings(), session.userId).map((entry) => entry.id)))
+      forgetJoinedMeetings(new Set(theirs(joinedMeetings(), session.accountId).map((entry) => entry.id)))
       await clearJoinedMeetings(session)
     },
     onSuccess: () => queryClient.setQueryData<JoinedMeeting[]>(JOINED_QUERY, []),

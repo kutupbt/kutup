@@ -89,7 +89,7 @@ fn write_vectors() {
         &second_account,
         &second_keys.authority_public_key(),
         1,
-        &second_keys.drive_hpke_public_key(),
+        &second_keys.drive_xwing_public_key(),
         &second_keys.drive_signing_public_key(),
         &binding,
     )
@@ -179,7 +179,7 @@ fn checked_in_vectors_hold() {
         &v.organization_id,
         &id,
         &second,
-        second_keys.drive_hpke_private_key(),
+        second_keys.drive_xwing_private_key(),
         &admin_keys.authority_public_key(),
     )
     .unwrap();

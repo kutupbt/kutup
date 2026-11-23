@@ -227,6 +227,6 @@ export function useEndToEndForwardings() {
     queryKey: ['mail-keys', 'end-to-end-forwardings'],
     queryFn: async () =>
       (await api.get<{ outgoing: { forwarderAddress: string; kind: string; state: string }[] }>('/mail/forwardings')).data.outgoing,
-    select: (outgoing) => outgoing.filter((forwarding) => forwarding.kind === 'end_to_end' && forwarding.state !== 'rejected'),
+    select: (outgoing) => outgoing.filter((forwarding) => forwarding.kind === 'endToEnd' && forwarding.state !== 'rejected'),
   })
 }

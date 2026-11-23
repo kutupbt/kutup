@@ -66,9 +66,28 @@ export function addressString(address: TypedAddress): string {
   return `${address.username}@${address.server}`
 }
 
-/** A link that shares an address (what a QR code or a profile shows). */
-export function contactUri(address: TypedAddress): string {
-  return `kutup://contact/${encodeURIComponent(addressString(address))}`
+const CONTACT = 'kutup://contact/'
+const ACCOUNT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/**
+ * A link that shares an account (what a QR code or a profile shows):
+ * `kutup://contact/<server>/<accountId>`, by its permanent id, so a rename
+ * never breaks a printed code nor, after the name's hold, sends it to
+ * someone else (docs/plans/api-surface.md §7). The app shows the address
+ * the id has now.
+ */
+export function contactUri(account: AccountRef): string {
+  return `${CONTACT}${account.server}/${account.accountId}`
+}
+
+/** The account a `kutup://contact/<server>/<accountId>` link names; null for anything else. */
+export function parseContactUri(value: string): AccountRef | null {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith(CONTACT)) return null
+  const [server, accountId, ...rest] = trimmed.slice(CONTACT.length).split('/')
+  if (rest.length || !server || !accountId || !ACCOUNT_ID.test(accountId)) return null
+  // The server part is an address's server: the same rules.
+  return parseAddress(`user@${server}`) ? { server: server.toLowerCase(), accountId } : null
 }
 
 /** An account's key, `aci:<uuid>@<server>`: store keys, routes, senders. Never shown. */

@@ -26,7 +26,7 @@ function protectionOf(message: MailMessage, opened?: OpenedMessage): Kind {
     if (pgp.encrypted) return opened.signed ? 'pgpEncryptedSigned' : 'pgpEncrypted'
     if (opened.signed) return 'pgpSigned'
   }
-  if (message.protection === 'end_to_end') {
+  if (message.protection === 'endToEnd') {
     if (opened?.signed && !opened.verified) return 'failed'
     return opened?.verified ? 'verified' : 'endToEnd'
   }

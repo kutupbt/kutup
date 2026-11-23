@@ -80,7 +80,7 @@ export interface CalendarMetadata {
   rest?: Record<string, unknown>
 }
 
-/** What `createCalendar` makes, for `POST /api/calendar/calendars`. */
+/** What `createCalendar` makes, for `POST /api/v1/calendar/calendars`. */
 export interface NewCalendar {
   publicKey: string
   lockedSecretKey: string

@@ -20,6 +20,20 @@ export type WasmModule = 'crypto' | 'crypto-calendar' | 'chat' | 'pass' | 'mail-
  * A WASM runtime's content hash (16 hex digits): its directory's files, in
  * name order. Missing (not built yet) is the empty string.
  */
+/**
+ * The release this build stamps (`KUTUP_RELEASE`, docs/plans/api-surface.md
+ * §1.2): CalVer in semver shape, `YYYY.MDD.N`, or `0.0.0-dev` when unset. A
+ * malformed one fails the build: the server could not compare it, and the
+ * apps would go out unable to say how old they are.
+ */
+function releaseVersion(): string {
+  const release = process.env.KUTUP_RELEASE || '0.0.0-dev'
+  const id = '(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)'
+  const semver = new RegExp(`^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-${id}(?:\\.${id})*)?$`)
+  if (!semver.test(release)) throw new Error(`KUTUP_RELEASE is not a version like 2026.1120.0: ${release}`)
+  return release
+}
+
 export function wasmHash(module: WasmModule): string {
   const dir = path.join(WASM_ROOT, `${module}-wasm`)
   if (!existsSync(dir)) return ''
@@ -88,7 +102,19 @@ const EXCALIDRAW_ASSETS = 'excalidraw-assets'
  * does not allow. An app whose bundle holds Excalidraw gets the fonts in its
  * own `excalidraw-assets/fonts/`, and @kutup/editors points Excalidraw there
  * before it loads (packages/editors/src/whiteboard/assets.ts).
+ *
+ * Excalidraw also lists esm.sh after that path in every font's `src`
+ * (`ASSETS_FALLBACK_URL`), and Chrome checks every URL of a FontFace's
+ * `src` against font-src as the face is made: each whiteboard opened
+ * reported a violation per font, and a font our origin failed to serve
+ * would have gone to the CDN. The fallback is rewritten to this origin's
+ * own path; the build fails if esm.sh is left in Excalidraw, as when an
+ * upgrade changes the code (scripts/check-app-bundles.mjs checks the
+ * built apps too).
  */
+const EXCALIDRAW_FALLBACK = '`https://esm.sh/${M.PKG_NAME?`${M.PKG_NAME}@${M.PKG_VERSION}`:"@excalidraw/excalidraw"}/dist/prod/`'
+const EXCALIDRAW_OWN_FALLBACK = `\`\${typeof window<"u"?window.location.origin:""}/${EXCALIDRAW_ASSETS}/\``
+
 function excalidrawFonts(): Plugin {
   const fonts = () => {
     const index = createRequire(path.join(FRONTEND, 'packages/editors/package.json')).resolve('@excalidraw/excalidraw')
@@ -99,6 +125,14 @@ function excalidrawFonts(): Plugin {
   let used = false
   return {
     name: 'kutup-excalidraw-fonts',
+    transform(code, id) {
+      if (!/\/@excalidraw\/excalidraw\/dist\/(prod|dev)\/[^/]+\.js$/.test(id.split('?')[0]) || !code.includes('esm.sh')) return null
+      const out = code.split(EXCALIDRAW_FALLBACK).join(EXCALIDRAW_OWN_FALLBACK)
+      if (out.includes('esm.sh')) {
+        throw new Error(`kutup-excalidraw-fonts: ${path.basename(id)} still loads from esm.sh (Excalidraw upgraded?): update EXCALIDRAW_FALLBACK in frontend/packages/config/vite.ts`)
+      }
+      return { code: out, map: null }
+    },
     configResolved(config) {
       outDir = path.resolve(config.root, config.build.outDir)
     },
@@ -309,6 +343,9 @@ export function kutupApp(opts: {
       ...(opts.serviceWorker ? [kutupServiceWorker()] : []),
     ],
     worker: { format: 'es' },
+    // The release this build belongs to (docs/plans/api-surface.md §1.2),
+    // stamped by scripts/publish-images.sh; `0.0.0-dev` otherwise.
+    define: { __KUTUP_RELEASE__: JSON.stringify(releaseVersion()) },
     resolve: {
       alias: {
         // The ESM build of libsodium-wrappers-sumo has a broken relative

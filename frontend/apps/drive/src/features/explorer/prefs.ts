@@ -13,7 +13,7 @@ export interface ExplorerPrefs {
   showPreviews: boolean
 }
 
-const STORAGE_KEY = 'kutup-drive-view'
+const STORAGE_KEY = 'kutup.drive.view'
 const ALL_KINDS: readonly ItemKind[] = ['folder', ...FILE_KINDS]
 
 interface Stored {

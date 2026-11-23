@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // checks are tested in @kutup/session/accountHead.test.ts.
 
 vi.mock('@kutup/session/client', () => ({ default: { get: vi.fn(), put: vi.fn() } }))
-vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'u1', masterKey: new Uint8Array(32), roots: { identityGeneration: 1, identityRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', driveGeneration: 1, driveRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', pseudonymGeneration: 1, pseudonymRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', callLinkGeneration: 1, callLinkRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', objectIdGeneration: 1, objectIdKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }, envelopeBinding: 'b' }) }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ accountId: 'u1', masterKey: new Uint8Array(32), roots: { identityGeneration: 1, identityRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', driveGeneration: 1, driveRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', pseudonymGeneration: 1, pseudonymRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', callLinkGeneration: 1, callLinkRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', objectIdGeneration: 1, objectIdKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }, envelopeBinding: 'b' }) }))
 
 const head = vi.hoisted(() => ({
   /** The `pins` record the verified copy holds, per attempt (null: none). */
@@ -35,7 +35,7 @@ vi.mock('@kutup/session/accountHead', async () => {
           return change.done
         } catch (error) {
           const code = (error as { response?: { data?: { code?: string } } }).response?.data?.code
-          if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < 5) continue
+          if ((code === 'headConflict' || code === 'revisionConflict') && attempt < 5) continue
           throw error
         }
       }
@@ -84,7 +84,7 @@ describe('Chat pins under the account head', () => {
     // Only another value moved: sent again on the new head.
     head.record = () => ({ revision: 5, envelope: 'D' })
     head.send.mockReset()
-    head.send.mockRejectedValueOnce(conflict('head_conflict')).mockResolvedValue()
+    head.send.mockRejectedValueOnce(conflict('headConflict')).mockResolvedValue()
     expect(await transport.storeIdentityPins({ baseRevision: 5, envelope: 'E', revision: 6 })).toBe(true)
     expect(head.send).toHaveBeenCalledTimes(2)
 

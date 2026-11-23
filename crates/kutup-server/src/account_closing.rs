@@ -3,7 +3,7 @@
 //! itself.
 //!
 //! - An account asked to be deleted (by its owner, after a reauth, or by an
-//!   admin) is `closing` until `closes_at` (`account_closing_days` after the
+//!   admin) is `closing` until `closes_at` (`account.closing_days` after the
 //!   ask). Its sign-ins end; a sign-in that passes every step is offered to
 //!   keep it instead of a session.
 //! - Then [`run_due`] deletes it: everything it holds, bytes included, its
@@ -52,7 +52,7 @@ pub fn on_hold() -> AppError {
         .with_details(serde_json::json!({ "code": "legalHold" }))
 }
 
-/// The accounts that may sign in, as SQL over `users`: active ones, and
+/// The accounts that may sign in, as SQL over `accounts`: active ones, and
 /// closing ones (to keep them) unless they were suspended when they closed.
 pub const SIGNS_IN: &str =
     "(state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))";
@@ -333,7 +333,7 @@ pub async fn run_due(state: &AppState) -> AppResult<u64> {
             state,
             account,
             ClosingBy::actor(&by),
-            "account-closing",
+            "accountClosing",
             true,
         )
         .await
@@ -391,7 +391,7 @@ async fn resume_stale(state: &AppState) -> AppResult<()> {
             continue;
         }
         tracing::warn!(%account, "an admin's deletion stopped part way: finishing it");
-        if let Err(error) = destroy(state, account, Actor::Admin, "user.delete", false).await {
+        if let Err(error) = destroy(state, account, Actor::Admin, "account.delete", false).await {
             tracing::error!(%account, "finishing an admin's deletion: {}", error.message);
         }
     }
@@ -500,17 +500,12 @@ mod tests {
 
     async fn account(pool: &sqlx::PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
-        )
-        .bind(user_id)
-        .bind(format!("closing{}", &user_id.simple().to_string()[..12]))
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(user_id)
+            .bind(format!("closing{}", &user_id.simple().to_string()[..12]))
+            .execute(pool)
+            .await
+            .unwrap();
         user_id
     }
 
@@ -538,7 +533,7 @@ mod tests {
             .unwrap();
         let suspended = account(&pool).await;
         sqlx::query(
-            "UPDATE accounts SET state = 'suspended', suspended_reason = 'operator_order' WHERE id = $1",
+            "UPDATE accounts SET state = 'suspended', suspended_reason = 'operatorOrder' WHERE id = $1",
         )
         .bind(suspended)
         .execute(&pool)
@@ -565,7 +560,7 @@ mod tests {
         tx.commit().await.unwrap();
         assert_eq!(
             state_of(&pool, suspended).await,
-            ("suspended".into(), Some("operator_order".into()))
+            ("suspended".into(), Some("operatorOrder".into()))
         );
 
         // Claimed for deletion: no keep, no hold, no second claim.

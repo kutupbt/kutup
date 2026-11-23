@@ -34,8 +34,8 @@ use crate::AppState;
 
 const JSON: &str = "application/json";
 const OCTETS: &str = "application/octet-stream";
-const OFFER_PATH: &str = "/api/fed/chat/media/offers";
-const OBJECT_PATH: &str = "/api/fed/chat/media/objects";
+const OFFER_PATH: &str = "/api/fed/v2/chat/media/offers";
+const OBJECT_PATH: &str = "/api/fed/v2/chat/media/objects";
 
 fn canonical_uuid(value: &str) -> Option<Uuid> {
     Uuid::parse_str(value)
@@ -149,9 +149,9 @@ async fn send_offer(
         return Ok(Err(if unanswered || retryable_status(response.status) {
             OfferFailure::Retry(
                 if response.status == StatusCode::CONFLICT {
-                    "sequence_conflict"
+                    "sequenceConflict"
                 } else {
-                    "remote_error"
+                    "remoteError"
                 },
                 message,
             )
@@ -178,7 +178,7 @@ async fn send_offer(
             }
     }) else {
         return Ok(Err(OfferFailure::Retry(
-            "remote_error",
+            "remoteError",
             "remote Chat-media receipt does not match the offer".into(),
         )));
     };
@@ -219,12 +219,12 @@ impl MediaAnswer {
             MediaAnswer::Receipt { receipt }
                 if receipt.status == ChatMediaDeliveryStatusV1::StorageFull =>
             {
-                ("storage_full", false, Some("storage_full"))
+                ("storage_full", false, Some("storageFull"))
             }
             MediaAnswer::Receipt { .. } => ("delivered", true, None),
             MediaAnswer::Refused { status: 404, .. } => ("unavailable", false, Some("unavailable")),
-            MediaAnswer::Refused { .. } => ("rejected", false, Some("remote_rejection")),
-            MediaAnswer::Withdrawn => ("withdrawn", false, Some("federation_off")),
+            MediaAnswer::Refused { .. } => ("rejected", false, Some("remoteRejection")),
+            MediaAnswer::Withdrawn => ("withdrawn", false, Some("federationOff")),
         }
     }
 }
@@ -357,7 +357,7 @@ pub(crate) async fn stage_remote_delivery(
     } else {
         type ObjectRow = (i16, i64, String, Vec<u8>);
         let object: Option<ObjectRow> = sqlx::query_as(
-            "SELECT suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
+            "SELECT suite,ciphertext_bytes,encode(ciphertext_sha256,'hex'),retrieval_token_hash
              FROM chat_media_objects
              WHERE attachment_id=$1 AND origin_account_id=$2 AND origin_server=$3",
         )
@@ -473,11 +473,25 @@ async fn attempt_media(
     if head != Some(row.sequence) {
         return Ok(None);
     }
-    let transaction: FederatedChatMediaTransactionV1 =
-        serde_json::from_value(row.transaction.clone())
-            .map_err(|_| AppError::internal("stored Chat-media transaction is malformed"))?;
-    let operation_id = canonical_uuid(&transaction.offer.operation_id)
-        .ok_or_else(|| AppError::internal("stored Chat-media operation is malformed"))?;
+    // A row this server can no longer read never stalls the queue.
+    let decoded =
+        serde_json::from_value::<FederatedChatMediaTransactionV1>(row.transaction.clone())
+            .ok()
+            .and_then(|transaction| {
+                canonical_uuid(&transaction.offer.operation_id).map(|id| (transaction, id))
+            });
+    let Some((transaction, operation_id)) = decoded else {
+        crate::federation_stream_control::settle_undecodable(
+            state,
+            kutup_chat_proto::FederationStreamV1::Media,
+            row.id,
+            &row.destination,
+            row.sequence,
+            row.attempts,
+        )
+        .await?;
+        return Ok(None);
+    };
     // Its sender's federation went off since it was queued: the offer never
     // leaves; its sequence is withdrawn instead (crate::federation_stream_control).
     if let Some(sender) = row.sender_user_id {
@@ -504,7 +518,7 @@ async fn attempt_media(
                         row.id,
                         Some(row.sequence),
                         row.attempts,
-                        "sequence_gap",
+                        "sequenceGap",
                         &format!("remote expects media sequence {expected}"),
                     )
                     .await?;
@@ -760,7 +774,7 @@ async fn reserve_inbound_offer(
     let lease_id = Uuid::new_v4();
     type Pending = (String, Uuid, Uuid, i64);
     let pending: Option<Pending> = sqlx::query_as(
-        "SELECT transaction_digest,recipient_account_id,attachment_id,ciphertext_bytes
+        "SELECT encode(transaction_digest,'hex'),recipient_account_id,attachment_id,ciphertext_bytes
          FROM chat_media_federation_inbound_pending
          WHERE origin=$1 AND sequence=$2",
     )
@@ -826,7 +840,7 @@ async fn reserve_inbound_offer(
     let recipient_user_id: Option<Uuid> = sqlx::query_scalar(
         // An account that doesn't talk to other servers is, to them, no
         // account (crate::federation_switch).
-        "SELECT id FROM accounts WHERE id = $1 AND is_active AND kutup_account_federates(id)",
+        "SELECT id FROM accounts WHERE id = $1 AND state = 'active' AND kutup_account_federates(id)",
     )
     .bind(recipient)
     .fetch_optional(&mut *tx)
@@ -855,14 +869,14 @@ async fn reserve_inbound_offer(
     };
     chat_media::consume_media_rate(
         &mut tx,
-        "capability_minute",
+        crate::ratelimit::counters::Scope::MediaCapabilityMinute,
         &capability_digest,
         crate::ratelimit::Limit::MediaCapabilityMinute,
     )
     .await?;
     chat_media::consume_media_rate(
         &mut tx,
-        "federation_origin",
+        crate::ratelimit::counters::Scope::MediaFederationOrigin,
         &hash(
             Suite::V1,
             [
@@ -932,7 +946,7 @@ async fn reserve_inbound_offer(
         "INSERT INTO chat_media_federation_inbound_pending
              (origin,sequence,operation_id,transaction_digest,recipient_account_id,
               attachment_id,ciphertext_bytes,lease_id,lease_until)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '2 minutes')",
+         VALUES ($1,$2,$3,decode($4,'hex'),$5,$6,$7,$8,now()+interval '2 minutes')",
     )
     .bind(origin)
     .bind(sequence)
@@ -962,7 +976,7 @@ async fn check_object_identity(
 ) -> AppResult<bool> {
     type ExistingObject = (String, i16, i64, String, Vec<u8>);
     let existing: Option<ExistingObject> = sqlx::query_as(
-        "SELECT origin_server,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
+        "SELECT origin_server,suite,ciphertext_bytes,encode(ciphertext_sha256,'hex'),retrieval_token_hash
          FROM chat_media_objects WHERE attachment_id=$1 FOR UPDATE",
     )
     .bind(attachment_id)
@@ -1204,7 +1218,7 @@ async fn process_reserved_offer_inner(
                 "INSERT INTO chat_media_objects
                      (attachment_id,origin_account_id,origin_server,suite,ciphertext_bytes,
                       ciphertext_sha256,retrieval_token_hash,storage_path)
-                 VALUES ($1,NULL,$2,$3,$4,$5,$6,$7)",
+                 VALUES ($1,NULL,$2,$3,$4,decode($5,'hex'),$6,$7)",
             )
             .bind(attachment_id)
             .bind(&transaction.origin_domain)
@@ -1563,7 +1577,7 @@ async fn serve_object_inner(
     type PullRow = (Vec<u8>, String, i64, String, i16);
     let row: Option<PullRow> = sqlx::query_as(
         "SELECT g.retrieval_token_hash,o.storage_path,o.ciphertext_bytes,
-                o.ciphertext_sha256,o.suite
+                encode(o.ciphertext_sha256,'hex'),o.suite
          FROM chat_media_federation_pull_grants g
          JOIN chat_media_objects o ON o.attachment_id=g.attachment_id
          WHERE g.destination=$1 AND g.recipient_account_id=$2 AND g.operation_id=$3

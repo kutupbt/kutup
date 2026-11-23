@@ -5,9 +5,9 @@
 //! The server cannot read what a link shows. A reporter may hand over the
 //! whole link, key included, so an administrator can look; it is kept only
 //! while the report is open. An administrator dismisses a report, takes the
-//! link down, or disables its owner's account (`PUT /api/admin/users/{id}`),
+//! link down, or disables its owner's account (`PUT /api/v1/admin/accounts/{id}`),
 //! which takes every link of theirs down with it. A link that is down answers
-//! `410` with `code: "link_removed"`.
+//! `410` with `code: "linkRemoved"`.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -20,9 +20,10 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::AppState;
 
 /// Why someone reports a link.
@@ -36,7 +37,7 @@ const MAX_OPEN_REPORTS_PER_LINK: i64 = 50;
 /// The `410` a link that was taken down answers, whatever is asked of it.
 pub(crate) fn link_removed() -> AppError {
     AppError::new(StatusCode::GONE, "this link was removed")
-        .with_details(json!({ "code": "link_removed" }))
+        .with_details(json!({ "code": "linkRemoved" }))
 }
 
 /// Refuses a link that may not be opened now (`crate::public_sharing`).
@@ -96,12 +97,12 @@ fn is_link_to(state: &AppState, link: &str, token: &str) -> bool {
         && path.next().is_none_or(|file| Uuid::parse_str(file).is_ok() && path.next().is_none())
 }
 
-/// `POST /api/share/{token}/report` — report a public link to the server's
+/// `POST /api/v1/drive/public-links/{token}/report` — report a public link to the server's
 /// administrators. Anonymous; rate-limited per address, which is not kept.
 #[utoipa::path(
     post,
-    path = "/api/share/{token}/report",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/report",
+    tag = "drive",
     params(("token" = String, Path, description = "Share token (the capability)")),
     request_body = ReportLinkRequest,
     responses(
@@ -179,10 +180,10 @@ pub struct LinkReport {
     share_created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
     share_removed_at: Option<OffsetDateTime>,
-    /// Why an operator blocked the link (`legal_order`, `abuse`, `other`);
+    /// Why an operator blocked the link (`legalOrder`, `abuse`, `other`);
     /// none while it isn't blocked.
     share_blocked_reason: Option<String>,
-    owner_user_id: Uuid,
+    owner_account_id: Uuid,
     owner_username: String,
     owner_is_active: bool,
     /// Open reports on the same link, this one included.
@@ -216,11 +217,11 @@ type ReportRow = (
     i64,
 );
 
-/// `GET /api/admin/reports` — reports on public links, oldest open first
+/// `GET /api/v1/admin/reports` — reports on public links, oldest open first
 /// (or the latest resolved).
 #[utoipa::path(
     get,
-    path = "/api/admin/reports",
+    path = "/api/v1/admin/reports",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("status" = Option<String>, Query, description = "`open` (default) or `resolved`")),
@@ -228,7 +229,7 @@ type ReportRow = (
 )]
 pub async fn list_reports(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Query(q): Query<ReportsQuery>,
 ) -> AppResult<Response> {
     let resolved = match q.status.as_deref() {
@@ -239,7 +240,7 @@ pub async fn list_reports(
     let rows: Vec<ReportRow> = sqlx::query_as(if resolved {
         "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
                 p.id, p.share_type, p.created_at, p.removed_at, p.blocked_reason,
-                u.id, u.username, u.is_active,
+                u.id, u.username, u.state = 'active',
                 (SELECT COUNT(*) FROM drive_public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
            FROM drive_public_link_reports r
            JOIN drive_public_shares p ON p.id = r.share_id
@@ -249,7 +250,7 @@ pub async fn list_reports(
     } else {
         "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
                 p.id, p.share_type, p.created_at, p.removed_at, p.blocked_reason,
-                u.id, u.username, u.is_active,
+                u.id, u.username, u.state = 'active',
                 (SELECT COUNT(*) FROM drive_public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
            FROM drive_public_link_reports r
            JOIN drive_public_shares p ON p.id = r.share_id
@@ -275,7 +276,7 @@ pub async fn list_reports(
                 share_created_at,
                 share_removed_at,
                 share_blocked_reason,
-                owner_user_id,
+                owner_account_id,
                 owner_username,
                 owner_is_active,
                 open_reports_on_link,
@@ -292,7 +293,7 @@ pub async fn list_reports(
                 share_created_at,
                 share_removed_at,
                 share_blocked_reason,
-                owner_user_id,
+                owner_account_id,
                 owner_username: owner_username.unwrap_or_default(),
                 owner_is_active,
                 open_reports_on_link,
@@ -303,30 +304,29 @@ pub async fn list_reports(
 }
 
 /// The open report `id`'s link and its owner.
-async fn open_report(pool: &PgPool, id: &str) -> AppResult<(Uuid, Uuid, Uuid, String)> {
+async fn open_report(pool: &PgPool, id: &str) -> AppResult<(Uuid, Uuid, Uuid)> {
     let id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
-    let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT p.id, p.owner_account_id, COALESCE(u.username, '')
+    let row: Option<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT p.id, p.owner_account_id
            FROM drive_public_link_reports r
            JOIN drive_public_shares p ON p.id = r.share_id
-           JOIN accounts u ON u.id = p.owner_account_id
           WHERE r.id = $1 AND r.resolved_at IS NULL",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    let (share, owner, username) = row.ok_or_else(|| AppError::not_found("not found"))?;
-    Ok((id, share, owner, username))
+    let (share, owner) = row.ok_or_else(|| AppError::not_found("not found"))?;
+    Ok((id, share, owner))
 }
 
-fn admin_id(admin: &AdminUser) -> AppResult<Uuid> {
-    Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("unauthorized"))
+fn admin_id(admin: &AdminAccount) -> AppResult<Uuid> {
+    Uuid::parse_str(&admin.account_id).map_err(|_| AppError::unauthorized("unauthorized"))
 }
 
-/// `POST /api/admin/reports/{id}/dismiss` — nothing wrong: close the report.
+/// `POST /api/v1/admin/reports/{id}/dismiss` — nothing wrong: close the report.
 #[utoipa::path(
     post,
-    path = "/api/admin/reports/{id}/dismiss",
+    path = "/api/v1/admin/reports/{id}/dismiss",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Report id")),
@@ -334,10 +334,10 @@ fn admin_id(admin: &AdminUser) -> AppResult<Uuid> {
 )]
 pub async fn dismiss_report(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let (report, share, owner, username) = open_report(&state.pool, &id).await?;
+    let (report, share, owner) = open_report(&state.pool, &id).await?;
     sqlx::query(
         "UPDATE drive_public_link_reports
             SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'dismissed', link = NULL
@@ -349,20 +349,20 @@ pub async fn dismiss_report(
     .await?;
     audit(
         &state.pool,
-        &admin.user_id,
-        "report.dismiss",
+        &admin.account_id,
+        AdminAction::ReportDismiss,
         Some(owner),
-        json!({ "username": username, "reportId": report, "shareId": share }),
+        json!({ "reportId": report, "shareId": share }),
     )
     .await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/admin/reports/{id}/remove-link` — take the reported link down
+/// `POST /api/v1/admin/reports/{id}/remove-link` — take the reported link down
 /// and close every open report on it.
 #[utoipa::path(
     post,
-    path = "/api/admin/reports/{id}/remove-link",
+    path = "/api/v1/admin/reports/{id}/remove-link",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Report id")),
@@ -370,10 +370,10 @@ pub async fn dismiss_report(
 )]
 pub async fn remove_reported_link(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let (report, share, owner, username) = open_report(&state.pool, &id).await?;
+    let (report, share, owner) = open_report(&state.pool, &id).await?;
     let mut tx = state.pool.begin().await?;
     sqlx::query(
         "UPDATE drive_public_shares SET removed_at = COALESCE(removed_at, NOW()) WHERE id = $1",
@@ -393,35 +393,35 @@ pub async fn remove_reported_link(
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
-        "share.remove",
+        &admin.account_id,
+        AdminAction::ShareRemove,
         Some(owner),
-        json!({ "username": username, "reportId": report, "shareId": share }),
+        json!({ "reportId": report, "shareId": share }),
     )
     .await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// Why an operator blocks a link (docs/plans/server-personal-data.md, A11).
-const BLOCK_REASONS: [&str; 3] = ["legal_order", "abuse", "other"];
+const BLOCK_REASONS: [&str; 3] = ["legalOrder", "abuse", "other"];
 
-/// `POST /api/admin/shares/{id}/block` body.
+/// `POST /api/v1/admin/public-links/{id}/block` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BlockLinkRequest {
-    /// `legal_order` (the link answers 451), `abuse` or `other` (410).
+    /// `legalOrder` (the link answers 451), `abuse` or `other` (410).
     reason: String,
     /// An order's number or another reference, for the administrators only.
     reference: Option<String>,
 }
 
-/// `POST /api/admin/shares/{id}/block` — block one public link: it answers
-/// `451` (a legal order) or `410` (another reason) with `link_blocked`, and
+/// `POST /api/v1/admin/public-links/{id}/block` — block one public link: it answers
+/// `451` (a legal order) or `410` (another reason) with `linkBlocked`, and
 /// its open reports are closed as `blocked`. Blocking again changes the
 /// reason. Audited.
 #[utoipa::path(
     post,
-    path = "/api/admin/shares/{id}/block",
+    path = "/api/v1/admin/public-links/{id}/block",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Public link (share) id")),
@@ -430,14 +430,14 @@ pub struct BlockLinkRequest {
 )]
 pub async fn block_link(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(req): Json<BlockLinkRequest>,
 ) -> AppResult<Response> {
     let share = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     if !BLOCK_REASONS.contains(&req.reason.as_str()) {
         return Err(AppError::bad_request(
-            "reason must be legal_order, abuse or other",
+            "reason must be legalOrder, abuse or other",
         ));
     }
     let reference = req
@@ -450,12 +450,11 @@ pub async fn block_link(
     }
     let admin_uuid = admin_id(&admin)?;
     let mut tx = state.pool.begin().await?;
-    let owner: Option<(Uuid, Option<String>)> = sqlx::query_as(
+    let owner: Option<Uuid> = sqlx::query_scalar(
         "UPDATE drive_public_shares p
             SET blocked_at = now(), blocked_reason = $2, blocked_reference = $3, blocked_by_account_id = $4
-           FROM accounts u
-          WHERE p.id = $1 AND u.id = p.owner_account_id
-          RETURNING p.owner_account_id, u.username",
+          WHERE p.id = $1
+          RETURNING p.owner_account_id",
     )
     .bind(share)
     .bind(&req.reason)
@@ -463,7 +462,7 @@ pub async fn block_link(
     .bind(admin_uuid)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((owner, username)) = owner else {
+    let Some(owner) = owner else {
         return Err(AppError::not_found("not found"));
     };
     sqlx::query(
@@ -479,11 +478,10 @@ pub async fn block_link(
     // In the block's own transaction: the record of who blocked what, why.
     crate::audit_log::append_in(
         &mut tx,
-        admin_uuid,
-        "share.block",
+        crate::audit_log::Actor::Admin(admin_uuid),
+        AdminAction::ShareBlock,
         Some(owner),
         &json!({
-            "username": username.unwrap_or_default(),
             "shareId": share,
             "reason": req.reason,
             "reference": reference,
@@ -494,10 +492,10 @@ pub async fn block_link(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/admin/shares/{id}/block` — lift a link's block. Audited.
+/// `DELETE /api/v1/admin/public-links/{id}/block` — lift a link's block. Audited.
 #[utoipa::path(
     delete,
-    path = "/api/admin/shares/{id}/block",
+    path = "/api/v1/admin/public-links/{id}/block",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Public link (share) id")),
@@ -505,21 +503,21 @@ pub async fn block_link(
 )]
 pub async fn unblock_link(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let share = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let admin_uuid = admin_id(&admin)?;
     let mut tx = state.pool.begin().await?;
-    let row: Option<(Uuid, Option<String>, Option<String>, bool)> = sqlx::query_as(
-        "SELECT p.owner_account_id, u.username, p.blocked_reason, p.owner_removed_at IS NOT NULL
-           FROM drive_public_shares p JOIN accounts u ON u.id = p.owner_account_id
+    let row: Option<(Uuid, Option<String>, bool)> = sqlx::query_as(
+        "SELECT p.owner_account_id, p.blocked_reason, p.owner_removed_at IS NOT NULL
+           FROM drive_public_shares p
           WHERE p.id = $1 FOR UPDATE OF p",
     )
     .bind(share)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((owner, username, was, owner_removed)) = row else {
+    let Some((owner, was, owner_removed)) = row else {
         return Err(AppError::not_found("not found"));
     };
     let Some(reason) = was else {
@@ -544,10 +542,10 @@ pub async fn unblock_link(
     }
     crate::audit_log::append_in(
         &mut tx,
-        admin_uuid,
-        "share.unblock",
+        crate::audit_log::Actor::Admin(admin_uuid),
+        AdminAction::ShareUnblock,
         Some(owner),
-        &json!({ "username": username.unwrap_or_default(), "shareId": share, "reason": reason }),
+        &json!({ "shareId": share, "reason": reason }),
     )
     .await?;
     tx.commit().await?;

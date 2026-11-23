@@ -14,7 +14,7 @@ export function documentName(t: ReturnType<typeof useTranslation>['t'], kind: st
 
 export interface LegalDocument {
   id: string
-  /** The operator's kind: `terms`, `privacy_notice`, or a consent purpose. */
+  /** The operator's kind: `terms`, `privacyNotice`, or a consent purpose. */
   kind: string
   version: string
   language: string
@@ -53,7 +53,7 @@ export function oneEach(documents: LegalDocument[], language: string): LegalDocu
 
 /** The required documents this account hasn't confirmed in their current version. */
 export async function pendingDocuments(): Promise<LegalDocument[]> {
-  return (await api.get<LegalDocument[]>('/user/legal/pending')).data
+  return (await api.get<LegalDocument[]>('/account/legal/pending')).data
 }
 
 /**
@@ -70,5 +70,5 @@ export async function documentsToConfirm(): Promise<LegalDocument[]> {
 }
 
 export async function acknowledgeDocuments(ids: string[]): Promise<void> {
-  await api.post('/user/legal/acknowledge', { documentIds: ids })
+  await api.post('/account/legal/acknowledge', { documentIds: ids })
 }

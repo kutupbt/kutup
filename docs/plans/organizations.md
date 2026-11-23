@@ -263,7 +263,7 @@ UNIQUE (name) WHERE state IN (1, 2)              -- unchanged: one holder
 
 - **Who makes them:** owners and admins, for any enabled member, on a usable
   domain of the organization (`verified` or `warn`), as Proton's
-  `POST addresses {MemberID}`: `POST /api/orgs/{id}/members/{account}/addresses
+  `POST addresses {MemberID}`: `POST /api/v1/orgs/{id}/members/{account}/addresses
   {local, domainId}`. Members don't make addresses on the organization's
   domains themselves (Proton's can't either).
 - **Keys, by kind of member:**
@@ -362,7 +362,7 @@ can't tell a managed account from a private one, as at Proton.
 
 #### Consent: private → managed (Proton's unprivatization)
 
-1. An admin requests it (`POST /api/orgs/{id}/members/{account}/access-request`
+1. An admin requests it (`POST /api/v1/orgs/{id}/members/{account}/access-request`
    with a signed `OrganizationAccessRequestV1`).
 2. The member sees a banner in Account, as Proton's: "An administrator of
    {org} wants to enable admin access for your account." The modal says,
@@ -422,7 +422,7 @@ can't tell a managed account from a private one, as at Proton.
   the master key under its export key (purpose 1). As Proton, the member's
   two-factor is turned off. Every session of the member ends; the member
   sets their own password at next sign-in.
-- **Sign in as:** `POST /api/orgs/{id}/members/{account}/session` after the
+- **Sign in as:** `POST /api/v1/orgs/{id}/members/{account}/session` after the
   owner's reauth gives the owner's client a session for the member, marked
   as an administrator's; the client opens the escrow for the master key.
   The member's session list shows "Signed in by an administrator ({name})",
@@ -457,10 +457,10 @@ can't tell a managed account from a private one, as at Proton.
 #### Inviting an existing account (Proton's `members/invitations`)
 
 - An owner or admin invites a username on this server
-  (`POST /api/orgs/{id}/invitations {username}`); the server stores it
+  (`POST /api/v1/orgs/{id}/invitations {username}`); the server stores it
   against the account id, so a rename in between changes nothing.
 - The invitee sees a banner in Account and accepts or declines
-  (`POST /api/orgs/invitations/{id}/accept|decline`). The screen names the
+  (`POST /api/v1/orgs/invitations/{id}/accept|decline`). The screen names the
   organization and the inviting admin and says: "You join as a private
   member. Administrators can't access your data or reset your password."
 - **Refused at accept,** as Proton's `AcceptInvitationValidation`: the
@@ -547,8 +547,9 @@ can't tell a managed account from a private one, as at Proton.
   shares and escrows are deleted.
 - Each of these is a security event for the member (`orgJoined`, `orgLeft`,
   `orgRemoved`, `orgAccessGranted`, `orgAccessRevoked`, `orgReset`,
-  `orgSignIn`); the CHECK list on `account_security_events.kind` grows in
-  the same migration.
+  `orgSignIn`); the kind table in `src/security_events.rs` gains them
+  with the slice that writes them (W7 moved the kinds out of the database
+  CHECK, and left out these unwritten ones).
 
 ### 5b. Chat by custom-domain address (the user, 2026-11-03; builds with O5)
 
@@ -590,7 +591,7 @@ An account the organization creates has no username on the server's domain
 ### 7. Limits: settings, not plans
 
 Each limit is a registry setting ([`settings-registry.md`](settings-registry.md)),
-site-wide with a value per organization (`organization_setting_overrides`).
+site-wide with a value per organization (`organization_entitlements`).
 The per-account `mail_domain_overrides` goes (O1: the domain count and the
 catch-all become the organization's, the address count the account's own).
 The registry's generic organization scope (`per_organization`,
@@ -684,7 +685,7 @@ by the third session.
 
 | Slice | What | Tests |
 | --- | --- | --- |
-| **O1 server** (before the wipe) | tables; organization of one on the first domain; domains keyed by organization; the domain count and catch-all as the organization's own values (`organization_setting_overrides`) | live: an account adds a domain and owns its organization of one; limits read from the organization |
+| **O1 server** (before the wipe) | tables; organization of one on the first domain; domains keyed by organization; the domain count and catch-all as the organization's own values (`organization_entitlements`) | live: an account adds a domain and owns its organization of one; limits read from the organization |
 | **O2 crypto** (before the wipe) | the five formats, purpose 7, labels, vectors, WASM | unit and vectors: tampered AAD, wrong recipient, an escrow whose master key derives another authority, a share signed by a non-admin |
 | **O3 server** | invitations, roles, private members, admin-made addresses without keys, leaving and removal with addresses freed and reusable, catch-all on any member's address, security events | live (mail gate with CoreDNS): account 1 verifies `mail.t.co`, invites account 2, makes `b@mail.t.co`; account 2's client makes its key; both send and receive with `d=mail.t.co`; account 2 leaves; `b@` is refused, then made again for account 3, whose key list is a new account's |
 | **O4 server + web** | the organization key: setup, certificate, admin shares and activation, access requests and consent, escrow, privatize, rotation on admin removal, lost-key reset | live and browser: consent and decline; an escrow opened by an admin; privatize deletes it and refuses reset; a removed admin's share gone and escrows re-sealed |

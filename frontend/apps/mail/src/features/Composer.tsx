@@ -51,7 +51,7 @@ import { RecipientField } from './RecipientField'
 import { DateTimeDialog } from './DateTimeDialog'
 import { EmojiButton } from './EmojiPicker'
 import { ImageInsertDialog } from './ImageInsertDialog'
-import { InlineImage, newContentId, withContentIds, withoutMetadata } from './inlineImages'
+import { editorHtml, InlineImage, newContentId, withContentIds, withoutMetadata } from './inlineImages'
 import { fontFamily, plainToHtml, wrapHtml, type ComposerLook } from './composerLook'
 import { ScheduleSend } from './ScheduleSend'
 import { isAddress } from './recipients'
@@ -467,7 +467,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
       attributes: { role: 'textbox', 'aria-multiline': 'true', 'aria-label': t('compose.body'), class: 'mail-editor min-h-48 px-3 py-2 text-sm focus:outline-none [&_img]:max-w-full' },
     },
     onCreate: ({ editor }) => {
-      pristine.current = editor.getHTML()
+      pristine.current = editorHtml(editor)
     },
     onUpdate: () => setRevision((r) => r + 1),
   })
@@ -477,9 +477,9 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
     const [kind, id] = [value.slice(0, value.indexOf(':')), value.slice(value.indexOf(':') + 1)]
     // The new From's signature, while nothing is written yet.
     const restart = (signed: MailAccount) => {
-      if (editor && !plain && pristine.current !== null && editor.getHTML() === pristine.current) {
+      if (editor && !plain && pristine.current !== null && editorHtml(editor) === pristine.current) {
         editor.commands.setContent(initial(signed, target, t, i18n.language).html)
-        pristine.current = editor.getHTML()
+        pristine.current = editorHtml(editor)
       }
     }
     if (kind === 'group') {
@@ -511,7 +511,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
       subject,
       ...(plain
         ? { html: '', text: plainText, plain: true }
-        : { html: wrapHtml(withContentIds(editor?.getHTML() ?? ''), look), text: editor?.getText({ blockSeparator: '\n' }) ?? '', plain: false }),
+        : { html: wrapHtml(withContentIds(editor ? editorHtml(editor) : ''), look), text: editor?.getText({ blockSeparator: '\n' }) ?? '', plain: false }),
       // Files only: images in the text are not listed as attachments.
       attachments: attachments.filter((a) => a.id && !a.cid).map((a) => ({ id: a.id!, name: a.name, type: a.part ? describePart(a.part).type : '', size: a.size })),
       requestReceipt,
@@ -569,12 +569,12 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
         )
         setAttachments(loaded)
         // The draft's images show again: each cid: in the text gets this browser's URL.
-        const shown = new Map(loaded.filter((a) => a.cid).map((a) => [`cid:${a.cid}`, a]))
+        const shown = new Map(loaded.filter((a) => a.cid).map((a) => [a.cid!, a]))
         const editor = editorRef.current
         if (editor && shown.size) {
           const tr = editor.state.tr
           editor.state.doc.descendants((node, pos) => {
-            const found = node.type.name === 'image' ? shown.get(String(node.attrs.src)) : undefined
+            const found = node.type.name === 'image' ? shown.get(String(node.attrs.cid)) : undefined
             if (found) tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: found.url, cid: found.cid })
           })
           editor.view.dispatch(tr)
@@ -703,7 +703,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
     }
     if (!confirmed.includes('noSubject') && !subject.trim()) return { check: 'noSubject' }
     if (!confirmed.includes('noAttachment') && !attachments.some((a) => !a.publicKey)) {
-      const words = ownWords(plain ? { plain: plainText } : { html: editor?.getHTML() ?? '' }, (from ? sanitizeSignature(from.signature) : account.signature) || undefined)
+      const words = ownWords(plain ? { plain: plainText } : { html: editor ? editorHtml(editor) : '' }, (from ? sanitizeSignature(from.signature) : account.signature) || undefined)
       const keyword = mentionedAttachment(`${subject} ${words}`)
       if (keyword) return { check: 'noAttachment', detail: keyword }
     }

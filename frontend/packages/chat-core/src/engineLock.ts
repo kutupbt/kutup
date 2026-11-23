@@ -30,7 +30,7 @@ export class EngineLock {
     private readonly claimWriter: (takeOver: boolean) => Promise<unknown>,
     private readonly now: () => number = Date.now,
   ) {
-    this.channel = new BroadcastChannel(`${name}:alive`)
+    this.channel = new BroadcastChannel(name.replace('kutup.chat.engine:', 'kutup.chat.engineAlive:'))
     this.channel.onmessage = () => {
       this.lastAlive = this.now()
     }

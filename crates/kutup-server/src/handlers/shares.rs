@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::files::{canonical_uuid, validate_envelope};
 use crate::handlers::{octet_stream_response, random_token};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Default, Deserialize)]
@@ -38,22 +38,22 @@ pub struct CreateShareRequest {
     owner_link_key_envelope: String,
 }
 
-/// `POST /api/share` — mirrors `CreatePublicShare`. The link key is never sent here.
+/// `POST /api/v1/drive/public-links` — mirrors `CreatePublicShare`. The link key is never sent here.
 #[utoipa::path(
     post,
-    path = "/api/share",
-    tag = "shares",
+    path = "/api/v1/drive/public-links",
+    tag = "drive",
     security(("BearerAuth" = [])),
     request_body = crate::models::CreateShareRequest,
     responses((status = 201, description = "Share created", body = crate::models::CreateShareResult))
 )]
 pub async fn create_public_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<CreateShareRequest>,
 ) -> AppResult<Response> {
     let user_id =
-        Uuid::parse_str(&user.user_id).map_err(|_| AppError::internal("invalid user id"))?;
+        Uuid::parse_str(&user.account_id).map_err(|_| AppError::internal("invalid user id"))?;
     // Public links off, for the site or this account: none is made.
     crate::public_sharing::ensure_may_share(&state.pool, user_id).await?;
     let target = canonical_uuid(&req.target_id)?;
@@ -142,7 +142,7 @@ pub async fn create_public_share(
         r#"INSERT INTO drive_public_shares (id, share_type, target_id, token,
                                       collection_key_envelope, collection_key_epoch,
                                       owner_account_id, expires_at, owner_link_key_envelope)
-           VALUES ($9,$1,$2,$3,$4,$5,$6,$7,$8)
+           VALUES ($9,$1,$2,$3,kutup_unb64($4),$5,$6,$7,kutup_unb64($8))
            RETURNING id"#,
     )
     .bind(&req.share_type)
@@ -206,7 +206,7 @@ struct PublicShareResponse {
     target_id: Uuid,
     collection_key_envelope: String,
     collection_key_epoch: i32,
-    owner_user_id: Uuid,
+    owner_account_id: Uuid,
     /// The owner's account address (`alice@example.org`): a public page says
     /// who shared it, so a link cannot pass its content off as the server's.
     owner_account: String,
@@ -219,7 +219,7 @@ struct PublicShareResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     file: Option<PublicFileRow>,
     /// A link to a collection: `folder`, or `album` (docs/plans/photos.md),
-    /// whose photos are listed by `GET /api/share/{token}/album`.
+    /// whose photos are listed by `GET /api/v1/drive/public-links/{token}/album`.
     #[serde(skip_serializing_if = "Option::is_none")]
     collection_kind: Option<String>,
     /// A collection's name, sealed under its key (the link page shows it).
@@ -229,11 +229,11 @@ struct PublicShareResponse {
     name_revision: Option<i64>,
 }
 
-/// `GET /api/share/{token}` — mirrors `GetPublicShare`. Anonymous.
+/// `GET /api/v1/drive/public-links/{token}` — mirrors `GetPublicShare`. Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}",
+    tag = "drive",
     params(("token" = String, Path, description = "Share token (the capability)")),
     responses((status = 200, description = "Share metadata + wrapped key", body = crate::models::PublicShareResponse))
 )]
@@ -257,8 +257,8 @@ pub async fn get_public_share(
     );
     let row: Option<ShareRow> = sqlx::query_as(
         r#"SELECT p.id, p.share_type, p.target_id,
-                  p.collection_key_envelope, p.collection_key_epoch, p.owner_account_id, p.expires_at,
-                  u.account_authority_public_key, u.username
+                  kutup_b64(p.collection_key_envelope), p.collection_key_epoch, p.owner_account_id,
+                  p.expires_at, kutup_b64(u.account_authority_public_key), u.username
            FROM drive_public_shares p JOIN accounts u ON u.id = p.owner_account_id WHERE p.token = $1"#,
     )
     .bind(&token)
@@ -270,7 +270,7 @@ pub async fn get_public_share(
         target_id,
         envelope,
         epoch,
-        owner_user_id,
+        owner_account_id,
         expires_at,
         authority,
         owner_username,
@@ -294,7 +294,7 @@ pub async fn get_public_share(
     };
     let (collection_kind, name_envelope, name_revision) = if share_type == "collection" {
         let row: Option<(String, String, i64)> = sqlx::query_as(
-            "SELECT kind, name_envelope, name_revision FROM drive_collections WHERE id = $1",
+            "SELECT kind, kutup_b64(name_envelope), name_revision FROM drive_collections WHERE id = $1",
         )
         .bind(target_id)
         .fetch_optional(&state.pool)
@@ -312,7 +312,7 @@ pub async fn get_public_share(
         target_id,
         collection_key_envelope: envelope,
         collection_key_epoch: epoch,
-        owner_user_id,
+        owner_account_id,
         owner_account: format!("{owner_username}@{}", state.config.chat_server_name),
         owner_authority_public_key: authority,
         expires_at,
@@ -324,13 +324,13 @@ pub async fn get_public_share(
     .into_response())
 }
 
-/// `GET /api/share/{token}/epochs` — the shared folder's key history, so a
+/// `GET /api/v1/drive/public-links/{token}/epochs` — the shared folder's key history, so a
 /// link holder can open files sealed before the folder's last rotation.
 /// Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/epochs",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/epochs",
+    tag = "drive",
     params(("token" = String, Path, description = "Share token (the capability)")),
     responses((status = 200, description = "Key history, oldest first", body = Vec<crate::handlers::folder_access::EpochLink>))
 )]
@@ -383,11 +383,11 @@ struct PublicFileRow {
     key_history: Vec<crate::models::FileKeyHistoryEntry>,
 }
 
-/// `GET /api/share/{token}/files` — mirrors `ListPublicShareFiles`. Anonymous.
+/// `GET /api/v1/drive/public-links/{token}/files` — mirrors `ListPublicShareFiles`. Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/files",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/files",
+    tag = "drive",
     params(("token" = String, Path, description = "Share token (the capability)")),
     responses((status = 200, description = "Files in the shared collection", body = Vec<PublicFileRow>))
 )]
@@ -441,7 +441,8 @@ async fn public_files(state: &AppState, filter: &str, id: Uuid) -> AppResult<Vec
         sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
     );
     let rows: Vec<PubFileTuple> = sqlx::query_as(&format!(
-        r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
+        r#"SELECT f.id, f.collection_id, kutup_b64(f.metadata_envelope),
+                  kutup_b64(f.file_key_envelope),
                   f.key_epoch, f.key_generation, f.metadata_revision, f.encrypted_size_bytes,
                   f.created_at, f.original_key_generation, {}, {}
            FROM drive_files f WHERE {} AND f.deleted_at IS NULL
@@ -558,7 +559,7 @@ pub struct StateQuery {
     revision: Option<String>,
 }
 
-/// `GET /api/share/{token}/state/{fileId}` — a note's or place list's saved
+/// `GET /api/v1/drive/public-links/{token}/files/{fileId}/state` — a note's or place list's saved
 /// state (a Yjs version, sealed under the file key of the generation in
 /// `X-Kutup-Key-Generation`; `X-Kutup-Revision` names the version and
 /// `X-Kutup-Revision-Content` carries its sealed content record, which the
@@ -569,8 +570,8 @@ pub struct StateQuery {
 /// without it, the latest. `404` when there is no such state. Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/state/{fileId}",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/files/{fileId}/state",
+    tag = "drive",
     params(
         ("token" = String, Path, description = "Share token (the capability)"),
         ("fileId" = String, Path, description = "File id"),
@@ -590,8 +591,9 @@ pub async fn public_share_state(
         .as_deref()
         .map(|value| Uuid::parse_str(value).map_err(|_| AppError::bad_request("invalid revision")))
         .transpose()?;
-    let latest: Option<(Uuid, String, i32, Option<String>)> = sqlx::query_as(
-        "SELECT id, storage_path, key_generation, revision_content_envelope FROM drive_file_versions
+    let latest: Option<(Uuid, i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, key_generation, kutup_b64(revision_content_envelope)
+         FROM drive_file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0 AND ($2::uuid IS NULL OR id = $2)
          ORDER BY created_at DESC LIMIT 1",
     )
@@ -599,9 +601,10 @@ pub async fn public_share_state(
     .bind(revision)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((version_id, path, key_generation, revision_content)) = latest else {
+    let Some((version_id, key_generation, revision_content)) = latest else {
         return Err(AppError::not_found("no saved state"));
     };
+    let path = crate::file_content::revision_path(fid, version_id);
     let (body, size) = state
         .storage
         .get_object(&path)
@@ -616,14 +619,14 @@ pub async fn public_share_state(
     Ok(octet_stream_response(body, size, &headers))
 }
 
-/// `GET /api/share/{token}/files/{fileId}/assets/{assetId}` — a picture in a
+/// `GET /api/v1/drive/public-links/{token}/files/{fileId}/assets/{assetId}` — a picture in a
 /// note reached by the link (sealed under the note's file key, the generation
 /// in `X-Kutup-Key-Generation`), so the public page shows the note as its
 /// owner sees it. Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/files/{fileId}/assets/{assetId}",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/files/{fileId}/assets/{assetId}",
+    tag = "drive",
     params(
         ("token" = String, Path, description = "Share token (the capability)"),
         ("fileId" = String, Path, description = "File id"),
@@ -640,7 +643,7 @@ pub async fn public_share_asset(
     crate::handlers::file_assets::asset_response(&state, fid, &asset_id).await
 }
 
-/// `GET /api/share/{token}/download/{fileId}` — streams the encrypted blob. Anonymous:
+/// `GET /api/v1/drive/public-links/{token}/files/{fileId}/download` — streams the encrypted blob. Anonymous:
 /// the token is the capability, and the content is E2EE (the link key that unwraps it
 /// lives only in the URL fragment, never reaching the server).
 ///
@@ -650,8 +653,8 @@ pub async fn public_share_asset(
 /// matches every other download path.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/download/{fileId}",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/files/{fileId}/download",
+    tag = "drive",
     params(
         ("token" = String, Path, description = "Share token (the capability)"),
         ("fileId" = String, Path, description = "File id")
@@ -690,12 +693,12 @@ pub struct PublicAlbumItem {
     album_epoch: i32,
 }
 
-/// `GET /api/share/{token}/album` — an album link's photos (docs/plans/photos.md).
+/// `GET /api/v1/drive/public-links/{token}/album` — an album link's photos (docs/plans/photos.md).
 /// Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/album",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/album",
+    tag = "drive",
     params(("token" = String, Path, description = "Share token (the capability)")),
     responses((status = 200, description = "The album's photos", body = Vec<PublicAlbumItem>))
 )]
@@ -745,7 +748,8 @@ pub async fn public_album_items(
         thumb_lg_generation: Option<i32>,
     }
     let items: Vec<Item> = sqlx::query_as(
-        "SELECT i.file_id, i.file_key_envelope, i.key_generation, i.album_epoch,
+        "SELECT i.file_id, kutup_b64(i.file_key_envelope) AS file_key_envelope,
+                i.key_generation, i.album_epoch,
                 sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                 sm.key_generation AS thumb_sm_generation, lg.key_generation AS thumb_lg_generation
          FROM photos_album_items i
@@ -779,12 +783,12 @@ pub async fn public_album_items(
     Ok(Json(out).into_response())
 }
 
-/// `GET /api/share/{token}/thumbnails/{fileId}/{variant}` — a thumbnail of a
+/// `GET /api/v1/drive/public-links/{token}/files/{fileId}/thumbnails/{variant}` — a thumbnail of a
 /// file the link reaches (sealed; the link's page opens it). Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/thumbnails/{fileId}/{variant}",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/files/{fileId}/thumbnails/{variant}",
+    tag = "drive",
     params(
         ("token" = String, Path, description = "Share token (the capability)"),
         ("fileId" = String, Path, description = "File id"),

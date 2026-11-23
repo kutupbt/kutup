@@ -9,19 +9,19 @@
     "authorityPublicKey": "eYfen0GgcbJ7PEdEgpsPFRSB9Mi55ZfV+O7e6/P1Kfw=",
     "authorityKeyId": "19c53cf8e1cf6790e78bd859ad391db080cc5b3fec885eb345e76b664ce694d3",
     "incarnationId": "52d7989c9e0b29849cda0fad9f8fabcdd48b7512626889c3f2c79943777b6879",
-    "driveHpkePublicKey": "+cBVrhuiBqGFRLgUvYAa/Lgir2BEK+ER/Cs/FghMcIQ6iwRalwqcQTVPjUW3vwtKTFh9agBnqjaN1ulXo5dITiy4o7PIZQyFJ6VifgiNjQc6Cni0bLPL66UDKpZQG8isTsPDFHdwyMgqOtM6hjZ0PZh0YjyxNMCkJ4EBl9weqFfLABDC25qeQ0ZdRabEtlLO6pWA0MVsDjm8gaWO3xxhjAwOx7K8RvuKm6KjAAvIuKw0SmSO20weDFNzxIyEF7QJKtKCjTwL1DAvu5kSv0l/6kld8Pd0x7xSn5ONg0Jq2JUSVAplohEE7onPSaKs2RIRFACSSCMxjQdMYCM42dk/2ux66bFnZEPKtgiaQyvCjec7wPatF2tFLJqu0JkIhoxFZhYf7ScGz+gmIVdCSKYkKIVVLTdaQ0VFRMVFVARabmu+y+FfjKwD7AyTiYCoh2wlHFwWlSKVUZgHpfBHyhABSKtK1zCfSIJy5PEza0Z3grPMvnVQAIsCsEctmmGuORU9LIB/VVeEIdG6HJhDK+R4ladkc9muK2U9nIACbSCU+pnNh2tVKwCG85Cv/6UdATMWIatk/sR6raJX3OCpQKRIssmK6Qi3NZEZeaUr1hy3tuyTi9BafmJpi9kxuviACQoOJpEUBQsCQgspcCtBCYXJ+0qKdHWmvAVfR6xGghiTBcacwAYDDzievtkc/zyjGUoAuhrMOkVINBWV6IMtPKsWLhhSxMeXFph+aNmzAGO6LUgomTuHYMcp5JxaX0q2DBUoj/lgiNcUR6gpBBB+WIgmiYQ1guVwqqZqd4cCPQMV8dCdqczExGxFIDEL1wAwgtka1DkmgyQm15bAr2WfJYA7+aKxQQUhxXtBxWsXWMobk2Rid+mLNQahfvgDrpA0c6mLTQc9OepiqCYZ4Xp6VOp2L3kFCiEwu/odX2SXzzKc2iohssAcfgBBizt/Z4W1hud0rAJ/QUC4E5htCbE2BQjGcvccf0aS2LDApsQGQWdYfjRyy8y9oZwS7vatZ1SImNur15U8BCS4WhHNw6uitIuvvWDD1CG9ceUOASMmUvzIapIczno6AMp0Zsk28xSXp/CfrGA0ZKs1YGhYq5KjarHBT2Kw5ONfB3bLkll1EAVcDCwm7Lu059utmuDO2CBUGoc3HzixZLhrZmKjwSNDLhO8Q1kqbMQsw/gZzCGoxAoZlOK/EueySvNeGzkbo1QBs5oWSoBfhUFNySmrLiQaDzBDmLIsxRKQibedu1nFXWEV0KlSZKsSZ3hns3okLpsJ+FhcXmBD/5ihInEtJkyHo6d8+Ganw0KkfHQURjxqHqy4Q+MvLyq/z4YdK5fIkoGir9pKp9yJwAgQnSGva5wI/Ei3ZPi+O2BjZgtXN3LFjIVP+5dofrMotdYx3GI8piTINnzLe6aggCgSBnRMp0NMMVmWslJHqRNQNJcdT2RtdFhxJ0qEd1o3vSZp3KYy3gKagpqOP/YdYfFZYhmvAYeABHcrQ5yVRIcSHZVv7+SXbqLLeZCFPYw+8+F+SmlRkjSNGVG8XUCK0v/Cdj4OriQKjLu5oVhE3gchf+XCbYJgXPLv1lJNyYidOLY+8Rlukf/Iw6XqdZwvEYf8y+83c3EFubqhEw==",
-    "driveHpkePrivateKey": "3AcU81D8HUFAQ1oF/fBU9D0KS9NMVyS92HQhJvaGusg=",
+    "driveXwingPublicKey": "+cBVrhuiBqGFRLgUvYAa/Lgir2BEK+ER/Cs/FghMcIQ6iwRalwqcQTVPjUW3vwtKTFh9agBnqjaN1ulXo5dITiy4o7PIZQyFJ6VifgiNjQc6Cni0bLPL66UDKpZQG8isTsPDFHdwyMgqOtM6hjZ0PZh0YjyxNMCkJ4EBl9weqFfLABDC25qeQ0ZdRabEtlLO6pWA0MVsDjm8gaWO3xxhjAwOx7K8RvuKm6KjAAvIuKw0SmSO20weDFNzxIyEF7QJKtKCjTwL1DAvu5kSv0l/6kld8Pd0x7xSn5ONg0Jq2JUSVAplohEE7onPSaKs2RIRFACSSCMxjQdMYCM42dk/2ux66bFnZEPKtgiaQyvCjec7wPatF2tFLJqu0JkIhoxFZhYf7ScGz+gmIVdCSKYkKIVVLTdaQ0VFRMVFVARabmu+y+FfjKwD7AyTiYCoh2wlHFwWlSKVUZgHpfBHyhABSKtK1zCfSIJy5PEza0Z3grPMvnVQAIsCsEctmmGuORU9LIB/VVeEIdG6HJhDK+R4ladkc9muK2U9nIACbSCU+pnNh2tVKwCG85Cv/6UdATMWIatk/sR6raJX3OCpQKRIssmK6Qi3NZEZeaUr1hy3tuyTi9BafmJpi9kxuviACQoOJpEUBQsCQgspcCtBCYXJ+0qKdHWmvAVfR6xGghiTBcacwAYDDzievtkc/zyjGUoAuhrMOkVINBWV6IMtPKsWLhhSxMeXFph+aNmzAGO6LUgomTuHYMcp5JxaX0q2DBUoj/lgiNcUR6gpBBB+WIgmiYQ1guVwqqZqd4cCPQMV8dCdqczExGxFIDEL1wAwgtka1DkmgyQm15bAr2WfJYA7+aKxQQUhxXtBxWsXWMobk2Rid+mLNQahfvgDrpA0c6mLTQc9OepiqCYZ4Xp6VOp2L3kFCiEwu/odX2SXzzKc2iohssAcfgBBizt/Z4W1hud0rAJ/QUC4E5htCbE2BQjGcvccf0aS2LDApsQGQWdYfjRyy8y9oZwS7vatZ1SImNur15U8BCS4WhHNw6uitIuvvWDD1CG9ceUOASMmUvzIapIczno6AMp0Zsk28xSXp/CfrGA0ZKs1YGhYq5KjarHBT2Kw5ONfB3bLkll1EAVcDCwm7Lu059utmuDO2CBUGoc3HzixZLhrZmKjwSNDLhO8Q1kqbMQsw/gZzCGoxAoZlOK/EueySvNeGzkbo1QBs5oWSoBfhUFNySmrLiQaDzBDmLIsxRKQibedu1nFXWEV0KlSZKsSZ3hns3okLpsJ+FhcXmBD/5ihInEtJkyHo6d8+Ganw0KkfHQURjxqHqy4Q+MvLyq/z4YdK5fIkoGir9pKp9yJwAgQnSGva5wI/Ei3ZPi+O2BjZgtXN3LFjIVP+5dofrMotdYx3GI8piTINnzLe6aggCgSBnRMp0NMMVmWslJHqRNQNJcdT2RtdFhxJ0qEd1o3vSZp3KYy3gKagpqOP/YdYfFZYhmvAYeABHcrQ5yVRIcSHZVv7+SXbqLLeZCFPYw+8+F+SmlRkjSNGVG8XUCK0v/Cdj4OriQKjLu5oVhE3gchf+XCbYJgXPLv1lJNyYidOLY+8Rlukf/Iw6XqdZwvEYf8y+83c3EFubqhEw==",
+    "driveXwingPrivateKey": "3AcU81D8HUFAQ1oF/fBU9D0KS9NMVyS92HQhJvaGusg=",
     "driveSigningPublicKey": "q7EjHuex0qgzED93MUSVrAKqBU7mfJY48zjVt8xsp1c="
   },
   "accountRecord": {
     "plaintext": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
     "key": "JCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ=",
-    "purpose": 6,
+    "purpose": 27,
     "binding": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
     "objectId": "PxyaUmt+Tw6dGiw7TV5vcA==",
     "nonce": "ERERERERERERERERERERERERERERERER",
-    "envelope": "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",
-    "aeadKey": "PGVS01beoSH5fJmsY5942kmLi6AuzajpWv/2XyVFQSw="
+    "envelope": "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",
+    "aeadKey": "xOq27xIF8liJ9zNMCKe+EFZgJNRBnTkb7TDuDBl4+9g="
   },
   "driveEnvelope": {
     "plaintext": "cHJvamVjdHM=",
@@ -99,7 +99,7 @@
   },
   "collectionKeyring": {
     "collectionId": "11111111-1111-4111-8111-111111111111",
-    "ownerUserId": "22222222-2222-4222-8222-222222222222",
+    "ownerAccountId": "22222222-2222-4222-8222-222222222222",
     "authorityPublicKey": "DXVQdU4IAKXSN+71gmA1dmubPloVhoqUCrKJlYeI47A=",
     "keys": [
       "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
@@ -234,13 +234,13 @@
       "revision": 1,
       "plaintext": "{\"v\":1,\"favourites\":[\"22222222-2222-4222-8222-222222222222\"],\"archived\":[],\"hidden\":[\"33333333-3333-4333-8333-333333333333\"]}",
       "nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH",
-      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAE06PNN09e+XhKtMt25kIPc3f5O1+MZkyGH5em/6c+56AcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwAAARCWj1Ww2IzEqj12/tDjNEnkPGpLpRTHXHRL6ULuW05tR2ZqbaasRCVSgZophRc6Gh/HZR397IBFzazug5ccPuO3kNhqckmB0fCi3lfe0sOwHQKpUd8QJLD4VEibk/JpYupLXqhUk7PDigLJYtOav4gT8+CpDwKDrd7SLfonCqEstg4t5KTFJS1nmLx9CYiBkf6FMVKzd4bnEuggu1rqkjbmdWZCjSDn33e3L8JaUhlu6k1TWbmA9TMPCWYhTveWTzbWWwvN3Hq1ke6b+gE4Km2QhPqqX+GffWuopJ/jrnmETrp+NJpupKO9UJlT+hSDgm7svkOjzV3RxQx35vaFGqh9i8J68z1VNFcPpEp2/tSPew=="
+      "envelope": "S1VUUEFSMQAAAQAiAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAGYznK/is21G5eo7X028yJkj3Hr8B9DD4LMpR4rs10aKAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwAAARDGvd8CAaPgUPrP1yIaAnMuncqod5ediqhjT7+N87ZDva1USviGH1a709HI+1G4AFu429zjwqnt6eWmA67YD27o0i99WA8uWdkvzIW1nNxjxL+tGWDG9Hn2bUDnvisULYgwgzoqy9V/cLzHQEIgLXQtsOfB94YCEoT6V4CyHRgtd+xUJ2HdPwNEYDIYO+TdyClu6GO2m73hMM6ZVrBDQ0txRjs9rvap/ZV9woZN6txvpvl4L9SuQUx6ajD7iqeCjvkyUPgR6DSrfMZxxHxBaJF0zVDbmqYo3dlPJqafYKyhgOPGepZ0a9qfhbOx3//lf4uU6XFM05JWojNBT7/jetMocPXQTIQoz8iSF/bK4j4kHQ=="
     },
     "second": {
       "revision": 2,
       "plaintext": "{\"v\":1,\"favourites\":[],\"archived\":[],\"hidden\":[]}",
       "nonce": "CAgICAgICAgICAgICAgICAgICAgICAgI",
-      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAIGvs4tqLJGofbNBzeMlxNmREVEkH6XWgh1IDACuAHA7ggICAgICAgICAgICAgICAgICAgICAgICAAAARC1fnaw+jTdhVTACg9ZcjnXgh6sAj3QbN+bWMVYo+TOQ0BUcVokjjT87usKmff5HAPM/Gu1qS3unJnfoOwnd7xpNM30GtlwGRlCC4sTkw6ZFYmUmIikmzlaMfXcZVlc3r1wICyJpfk897kH2m0okOkEaYJVXhjSGIPKrMp6D3SxWk97XmLROFN85KEmyOKjxPcsxeosPhEdnbilnurYJfLMHNxh/AvedxdcaAFPigMhCh9nBf8+/IkB+qFopF/x1XEGvubNKi2WXCkzSexvFRq6gdOZLMWB5iXBJaDjdGTxAf4cy5l0h0ktg8lF6TMQUItbizxzRFr3aN9bRuVp8NfsgqW5FSgDiVZnu1/9PTVQhA=="
+      "envelope": "S1VUUEFSMQAAAQAiAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAALh/lItTs7+esQ/8pHJq1djB2csWGCC7aPzeUSt+UejxQgICAgICAgICAgICAgICAgICAgICAgICAAAARDfQonHz8WuUt44XRf7EPVoJW4NoYStnEhVkVvqmzz8OCuv3vUdqKo6FkPNGrG6WeNClTG7R41UMJFN6ChDp7ICJOiTFGZXUHbgWex0b5OD25hcK561UXrQO5mqOjHT0pEHouHNZpHx2Yu72jOJcENBoxATynnGdQAvs7EDHiY+iXLkrxtlv0sKCVc0dsSfM5gdSg2corIBJ6cW9u7ITLstxpOy9PpvRPKId1hRvPMefgB7ulnOO4jazAKdsFAcH3JLKmZ26dcuHUNmNh6P/wK3eQOvNFRUNiZyBtm4DQTtbJauXgyeqpRcEFlmfVjnWL9DfspycyFLvM64YVLiEN5AoO9R1bg5T6ZdA5tr4DahsQ=="
     }
   },
   "driveNames": {
@@ -337,7 +337,7 @@
     "description": "An owned folder's key and a link's owner copy under the Drive root; the revision slot is the root's generation (kutup-crypto/src/drive_envelope.rs).",
     "driveRoot": "Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2M=",
     "driveRootGeneration": 2,
-    "ownerUserId": "22222222-2222-4222-8222-222222222222",
+    "ownerAccountId": "22222222-2222-4222-8222-222222222222",
     "collectionId": "11111111-1111-4111-8111-111111111111",
     "collectionEpoch": 3,
     "collectionKey": "ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQ=",
@@ -363,29 +363,33 @@
     "otherAccountFingerprint": "09399 57463 96810 59485 92603 49622 96904 76825 74532 15988 36688 61790"
   },
   "accountRename": {
-    "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, chained 1, 2, …; a client accepts only chains that verify and extend what it saw.",
+    "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, binding the account id, chained 1, 2, …; a client accepts only chains that verify for the account id it looked up and extend what it saw.",
     "masterKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
+    "accountId": "00000000-0000-4000-8000-0000000000a1",
+    "otherAccountId": "00000000-0000-4000-8000-0000000000b2",
     "authorityPublicKey": "L7ufiPkKWVyJEEY4psjgc/s7U+udm/RqZdwwKcHfyDE=",
     "otherAuthorityPublicKey": "NtTt6Y2mlS7yLMBo1r/CJ6tnIMCecuIn4EHRlujaang=",
     "chain": [
       {
         "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+        "accountId": "00000000-0000-4000-8000-0000000000a1",
         "sequence": 1,
         "previous": "alice@kutup.dev",
         "current": "alicia@kutup.dev",
         "issuedAtMs": 1790000000000,
-        "signature": "qF7yedznSHVLNYtFDpm/LQjdytY3UVr05bmSK56LQCe08eff64EkmyxqXsgB0QauPF7BcbBa8gwPaJiuaL9gCA=="
+        "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
       },
       {
         "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+        "accountId": "00000000-0000-4000-8000-0000000000a1",
         "sequence": 2,
         "previous": "alicia@kutup.dev",
         "current": "ali@kutup.dev",
         "issuedAtMs": 1790000001000,
-        "signature": "B9+yBrLW+esOKzvn/sqr+UpdL6OXYafNEtw+13PGqJ9FLkbX+T7jy1Kc3O2Uz3ANO8M+o05nVVybqKnOKcgiDg=="
+        "signature": "n2ATxe6Gg8CKkkn9jEa0E6kVeUHqNP7Jbad/+K6720JnaKhIFnhGik5Ar6Yq9NOSN81p5jcAnFQVp9HRlQ6/AQ=="
       }
     ],
-    "firstSigningBytes": "6b757475702f6163636f756e742f72656e616d652f763100ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f40000000000000001000f616c696365406b757475702e6465760010616c69636961406b757475702e646576000001a0c4506c00",
+    "firstSigningBytes": "6b757475702f6163636f756e742f72656e616d652f763200ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4000000000000400080000000000000a10000000000000001000f616c696365406b757475702e6465760010616c69636961406b757475702e646576000001a0c4506c00",
     "first": "alice@kutup.dev",
     "current": "ali@kutup.dev",
     "invalidChains": [
@@ -394,11 +398,12 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 2,
             "previous": "alice@kutup.dev",
             "current": "alicia@kutup.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "+gPiIiu5tdeKMrK9q3uZdbKmPmNDM8uOOpEVz6PsjEa358kyFmQwYkwgMOOauTPFXc6qq9o+t4MFqLsB5YEwDw=="
+            "signature": "55GbfUBwGw1uQEX+6kqDlTpfCRtinWlvT6slFcRsXSzBZ6Q0UO/i0cmYZMkB+cdu/sBeEem3G31izf2omlorDg=="
           }
         ]
       },
@@ -407,19 +412,21 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 1,
             "previous": "alice@kutup.dev",
             "current": "alicia@kutup.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "qF7yedznSHVLNYtFDpm/LQjdytY3UVr05bmSK56LQCe08eff64EkmyxqXsgB0QauPF7BcbBa8gwPaJiuaL9gCA=="
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
           },
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 2,
             "previous": "bob@kutup.dev",
             "current": "ali@kutup.dev",
             "issuedAtMs": 1790000001000,
-            "signature": "LsVqX5E+a6F26CABAI8lDRXJySwvDwxDsrRz/+CxoG3V+mKtxU/QcAV9e97Szjp9M5TAnnHuTI/wRJTXuShYCQ=="
+            "signature": "eg/Th+fWdg6rgVK3epugBsoEWbUqBT5Hzy10vgperLt0cUJddFEFyJffyD0ont2Pk/5kMllp2fQ2RpZE6s0vBA=="
           }
         ]
       },
@@ -428,19 +435,21 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 1,
             "previous": "alice@kutup.dev",
             "current": "alicia@kutup.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "qF7yedznSHVLNYtFDpm/LQjdytY3UVr05bmSK56LQCe08eff64EkmyxqXsgB0QauPF7BcbBa8gwPaJiuaL9gCA=="
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
           },
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 2,
             "previous": "alicia@kutup.dev",
             "current": "ali@kutup.dev",
             "issuedAtMs": 1789999999000,
-            "signature": "SKeDOV14Noo+1XYSIjvQoHmkIFQkonFGFx8dlGtYStS3mQeHukDJ5pU+8HSbWK/mAdzQ6WTS5ESa4fkBcfL+BA=="
+            "signature": "VJ3XWH2WLOT3VqoVhvxE2papGi3z/7ybl2U9iMEkuXRIHsnzEGmulhrqVv/kgHGehGg7tO3Ue40Ce9nxAtu8CQ=="
           }
         ]
       },
@@ -449,19 +458,21 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 1,
             "previous": "alice@kutup.dev",
             "current": "alicia@kutup.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "qF7yedznSHVLNYtFDpm/LQjdytY3UVr05bmSK56LQCe08eff64EkmyxqXsgB0QauPF7BcbBa8gwPaJiuaL9gCA=="
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
           },
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 2,
             "previous": "alicia@kutup.dev",
             "current": "mallory@kutup.dev",
             "issuedAtMs": 1790000001000,
-            "signature": "B9+yBrLW+esOKzvn/sqr+UpdL6OXYafNEtw+13PGqJ9FLkbX+T7jy1Kc3O2Uz3ANO8M+o05nVVybqKnOKcgiDg=="
+            "signature": "n2ATxe6Gg8CKkkn9jEa0E6kVeUHqNP7Jbad/+K6720JnaKhIFnhGik5Ar6Yq9NOSN81p5jcAnFQVp9HRlQ6/AQ=="
           }
         ]
       },
@@ -470,11 +481,12 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 1,
             "previous": "alice@kutup.dev",
             "current": "alicia@kutup.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "1wKUXDJXcqB5nkjTj0Mp/P4qQoyxLhE4dlm3g1c4SlMkkEvV+Sj7O+DQDADuln9fivqBlFFnpEfR/yJWTNXsAQ=="
+            "signature": "F88gvs/ePkD+w5IUctohxluNkICtEnIlCrQOETpJQ+6mLgtg6IdkkdV7d/EMgobrkjl4K74RN79JcpYWUaMWAw=="
           }
         ]
       },
@@ -483,11 +495,58 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 1,
             "previous": "alice@kutup.dev",
             "current": "alicia@other.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "qF7yedznSHVLNYtFDpm/LQjdytY3UVr05bmSK56LQCe08eff64EkmyxqXsgB0QauPF7BcbBa8gwPaJiuaL9gCA=="
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
+          }
+        ]
+      },
+      {
+        "why": "names another account id",
+        "chain": [
+          {
+            "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
+            "sequence": 1,
+            "previous": "alice@kutup.dev",
+            "current": "alicia@kutup.dev",
+            "issuedAtMs": 1790000000000,
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
+          },
+          {
+            "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000b2",
+            "sequence": 2,
+            "previous": "alicia@kutup.dev",
+            "current": "ali@kutup.dev",
+            "issuedAtMs": 1790000001000,
+            "signature": "rpGPhlmwEbqsnHKrEpzsosmxp8iFv1eN+d+tTR716QgcX9D87Mc3jKJWn67d6TcuFHQr5EtSH2Fw5kQf6XZ7DQ=="
+          }
+        ]
+      },
+      {
+        "why": "account id relabelled",
+        "chain": [
+          {
+            "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
+            "sequence": 1,
+            "previous": "alice@kutup.dev",
+            "current": "alicia@kutup.dev",
+            "issuedAtMs": 1790000000000,
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
+          },
+          {
+            "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000b2",
+            "sequence": 2,
+            "previous": "alicia@kutup.dev",
+            "current": "ali@kutup.dev",
+            "issuedAtMs": 1790000001000,
+            "signature": "n2ATxe6Gg8CKkkn9jEa0E6kVeUHqNP7Jbad/+K6720JnaKhIFnhGik5Ar6Yq9NOSN81p5jcAnFQVp9HRlQ6/AQ=="
           }
         ]
       },

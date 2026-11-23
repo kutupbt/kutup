@@ -14,7 +14,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::account_heads::{self, Scope};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The account's head reads, limited per account.
@@ -35,16 +35,16 @@ pub struct HeadView {
     head: Option<String>,
 }
 
-/// `GET /api/account/head` — the account's newest head.
+/// `GET /api/v1/account/head` — the account's newest head.
 #[utoipa::path(
     get,
-    path = "/api/account/head",
+    path = "/api/v1/account/head",
     tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, body = HeadView))
 )]
-pub async fn head(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn head(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     allowed(user_id)?;
     let head = account_heads::latest(&state.pool, user_id).await?;
     Ok(Json(HeadView {
@@ -69,13 +69,13 @@ pub struct HeadsView {
     next: Option<i64>,
 }
 
-/// `GET /api/account/heads?from=n` — the chain from `n` toward the newest, a
+/// `GET /api/v1/account/heads?from=n` — the chain from `n` toward the newest, a
 /// page at a time, for a device to check that the current head descends from
 /// its last own write. `410` with `code: "tooOld"` when `n` is more than
 /// `RETENTION` heads behind the newest.
 #[utoipa::path(
     get,
-    path = "/api/account/heads",
+    path = "/api/v1/account/heads",
     tag = "account",
     security(("BearerAuth" = [])),
     params(HeadsQuery),
@@ -86,10 +86,10 @@ pub struct HeadsView {
 )]
 pub async fn heads(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<HeadsQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     allowed(user_id)?;
     if query.from < 1 {
         return Err(AppError::bad_request("from is a sequence of 1 or more"));
@@ -117,7 +117,7 @@ pub struct IndexView {
     #[schema(value_type = Vec<Vec<serde_json::Value>>)]
     values: Vec<(String, i64)>,
     /// Before the account's first head: what it holds, to start the chain on
-    /// (`POST /api/account/head`).
+    /// (`POST /api/v1/account/head`).
     basis: Option<String>,
 }
 
@@ -130,26 +130,26 @@ pub struct StartHead {
     basis: String,
 }
 
-/// `POST /api/account/head` — starts the account's chain: its first head,
-/// made on the `basis` an index answered with. `409 head_conflict` when the
+/// `POST /api/v1/account/head` — starts the account's chain: its first head,
+/// made on the `basis` an index answered with. `409 headConflict` when the
 /// account has a head already or a listed write landed since (read again).
 #[utoipa::path(
     post,
-    path = "/api/account/head",
+    path = "/api/v1/account/head",
     tag = "account",
     security(("BearerAuth" = [])),
     request_body = StartHead,
     responses(
         (status = 201, description = "The chain is started"),
-        (status = 409, description = "head_conflict")
+        (status = 409, description = "headConflict")
     )
 )]
 pub async fn start(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<StartHead>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let head = account_heads::NextHead::parse(Some(&req.head))?
         .ok_or_else(|| AppError::bad_request("head is required"))?;
     let mut tx = state.pool.begin().await?;
@@ -159,14 +159,14 @@ pub async fn start(
     Ok(StatusCode::CREATED.into_response())
 }
 
-/// `GET /api/account/index/{scope}` — a scope's `(id, revision)` pairs and
+/// `GET /api/v1/account/index/{scope}` — a scope's `(id, revision)` pairs and
 /// the head read with them (one snapshot). Scopes: `contacts`, `mailNames`,
 /// `pins`, `passSecrets`, `chatGroups`, `chatContacts`, `photosLibrary`,
 /// `chatAttachments`, `contactGroups`, `calendarSettings`, `joinedMeetings`;
 /// any other is `404` (a client treats it as a scope with no index yet).
 #[utoipa::path(
     get,
-    path = "/api/account/index/{scope}",
+    path = "/api/v1/account/index/{scope}",
     tag = "account",
     security(("BearerAuth" = [])),
     params(("scope" = String, Path, description = "contacts, mailNames, pins, passSecrets, chatGroups, chatContacts, photosLibrary, chatAttachments, contactGroups, calendarSettings or joinedMeetings")),
@@ -177,10 +177,10 @@ pub async fn start(
 )]
 pub async fn index(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(scope): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     allowed(user_id)?;
     let scope = Scope::parse(&scope).ok_or_else(|| AppError::not_found("no such scope"))?;
     let (head, values, basis) = account_heads::index(&state.pool, user_id, scope).await?;

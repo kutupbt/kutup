@@ -23,7 +23,7 @@ import { formatInstant } from '@kutup/ui/lib/format'
  */
 async function closeAccount(password: OneUseSecret): Promise<string> {
   const grant = await accountGrant(password.take(), 'close')
-  const { data } = await api.post<{ closesAt: string }>('/user/close', { grant })
+  const { data } = await api.post<{ closesAt: string }>('/account/close', { grant })
   return data.closesAt
 }
 

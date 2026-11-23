@@ -81,7 +81,7 @@ fn write_vectors() {
             account: &member,
             incarnation_id: &incarnation,
         },
-        &keys.drive_hpke_public_key(),
+        &keys.drive_xwing_public_key(),
     )
     .unwrap();
     let vectors = Vectors {
@@ -117,7 +117,7 @@ fn the_checked_in_share_opens_for_its_member_only() {
         &v.group_id,
         &fingerprint,
         &member,
-        keys.drive_hpke_private_key(),
+        keys.drive_xwing_private_key(),
     )
     .unwrap();
     assert_eq!(&*opened, secret.as_slice());
@@ -128,7 +128,7 @@ fn the_checked_in_share_opens_for_its_member_only() {
         &v.group_id,
         &fingerprint,
         &someone_else,
-        keys.drive_hpke_private_key(),
+        keys.drive_xwing_private_key(),
     )
     .is_err());
 }

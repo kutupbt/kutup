@@ -27,7 +27,7 @@ impl Client {
     /// Moves a file to its folder's current key (docs/plans/drive-share-revocation.md).
     /// `Ok(false)`: another editor moved it first; list it again.
     pub fn rekey_file(&self, file_id: &str, req: &super::RekeyRequest) -> Result<bool> {
-        let resp = self.post_json(&format!("/files/{file_id}/rekey"), req)?;
+        let resp = self.post_json(&format!("/drive/files/{file_id}/rekey"), req)?;
         if resp.status().as_u16() == 409 {
             return Ok(false);
         }
@@ -40,7 +40,7 @@ impl Client {
     /// destination's key changed, or the file moved — comes back as
     /// `MoveOutcome::Conflict` so the caller can reload and seal again.
     pub fn move_file(&self, file_id: &str, req: &super::MoveFileRequest) -> Result<MoveOutcome> {
-        let resp = self.post_json(&format!("/files/{file_id}/move"), req)?;
+        let resp = self.post_json(&format!("/drive/files/{file_id}/move"), req)?;
         if resp.status().as_u16() == 409 {
             let error: super::ApiError = super::api_error(resp).downcast()?;
             // A taken name is not cured by sealing again.
@@ -63,7 +63,7 @@ impl Client {
         name_hash_generation: Option<u32>,
     ) -> Result<()> {
         let resp = self.post_json(
-            &format!("/collections/{collection_id}/move"),
+            &format!("/drive/collections/{collection_id}/move"),
             &super::MoveCollectionRequest {
                 parent_collection_id: parent.map(str::to_string),
                 name_hash,

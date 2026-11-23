@@ -53,11 +53,11 @@ describe('the reload guard', () => {
     p.scriptFailed()
     p.scriptFailed()
     expect(p.reload).toHaveBeenCalledTimes(1)
-    expect(p.storage.get('kutup-reload:b1')).toBe('1')
+    expect(p.storage.get('kutup.ui.reload:b1')).toBe('1')
   })
 
   it('shows an error page with Reload, not a second reload, when it fails again', () => {
-    const storage = new Map([['kutup-reload:b1', '1']])
+    const storage = new Map([['kutup.ui.reload:b1', '1']])
     const p = page(storage)
     reloadGuard(p.win, 'b1')
     p.scriptFailed()
@@ -66,11 +66,11 @@ describe('the reload guard', () => {
     // Reload asked for by the person clears the flag.
     document.querySelector('button')!.click()
     expect(p.reload).toHaveBeenCalledTimes(1)
-    expect(storage.has('kutup-reload:b1')).toBe(false)
+    expect(storage.has('kutup.ui.reload:b1')).toBe(false)
   })
 
   it('leaves a page that has drawn alone, and clears the flag after it drew', () => {
-    const storage = new Map([['kutup-reload:b1', '1']])
+    const storage = new Map([['kutup.ui.reload:b1', '1']])
     const p = page(storage)
     reloadGuard(p.win, 'b1')
     document.getElementById('root')!.innerHTML = '<p>Inbox</p>'
@@ -79,7 +79,7 @@ describe('the reload guard', () => {
     expect(p.reload).not.toHaveBeenCalled()
     p.fire('load')
     p.timers.forEach((run) => run())
-    expect(storage.has('kutup-reload:b1')).toBe(false)
+    expect(storage.has('kutup.ui.reload:b1')).toBe(false)
   })
 
   it('ignores other origins, and reloads on a failed preload', () => {
@@ -92,7 +92,7 @@ describe('the reload guard', () => {
   })
 
   it('is a flag per build', () => {
-    const p = page(new Map([['kutup-reload:old', '1']]))
+    const p = page(new Map([['kutup.ui.reload:old', '1']]))
     reloadGuard(p.win, 'new')
     p.scriptFailed()
     expect(p.reload).toHaveBeenCalledTimes(1)
@@ -100,7 +100,7 @@ describe('the reload guard', () => {
 
   it('inlines as a self-contained script', () => {
     const script = reloadGuardScript('b3')
-    expect(script).toContain('kutup-reload:')
+    expect(script).toContain('kutup.ui.reload:')
     expect(script).toMatch(/\(window, "b3"\);$/)
     // It parses on its own.
     expect(() => new Script(script)).not.toThrow()
