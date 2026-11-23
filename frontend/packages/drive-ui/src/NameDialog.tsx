@@ -25,6 +25,7 @@ export function NameDialog({
   pending,
   error,
   taken,
+  creating = false,
   onClose,
   onSubmit,
 }: {
@@ -37,6 +38,9 @@ export function NameDialog({
   error: unknown
   /** Names already in the folder, in canonical form (`canonicalName`): the server's clash check. */
   taken?: ReadonlySet<string>
+  /** Naming something new: the suggested name is submitted as is (a rename
+   * left unchanged only closes). */
+  creating?: boolean
   onClose: () => void
   onSubmit: (name: string) => void
 }) {
@@ -61,14 +65,14 @@ export function NameDialog({
         ? t('nameDialog.tooLong', { max: MAX_NAME })
         : /[/\\]/.test(name)
           ? t('nameDialog.slash')
-          : canonicalName(name) !== canonicalName(initial) && taken?.has(canonicalName(name))
+          : (creating || canonicalName(name) !== canonicalName(initial)) && taken?.has(canonicalName(name))
             ? t('nameDialog.taken')
             : null
 
   function handle(event: FormEvent) {
     event.preventDefault()
-    if (!problem && name !== initial) onSubmit(name)
-    else if (name === initial) onClose()
+    if (!problem && (creating || name !== initial)) onSubmit(name)
+    else if (!creating && name === initial) onClose()
   }
 
   return (
