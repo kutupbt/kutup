@@ -16,6 +16,8 @@ serde_json = "1"
 kutup-chat-proto = { path = "../crates/kutup-chat-proto" }
 kutup-crypto = { path = "../crates/kutup-crypto", default-features = false, features = ["calendar", "test-vectors"] }
 kutup-federation-proto = { path = "../crates/kutup-federation-proto" }
+# The IMAP session only: no SQLCipher index in the fuzz build.
+kutup-mail-bridge = { path = "../crates/kutup-mail-bridge", default-features = false }
 
 [[bin]]
 name = "account_record_parser"
@@ -69,6 +71,13 @@ bench = false
 [[bin]]
 name = "block_object_parsers"
 path = "fuzz_targets/block_object_parsers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mail_bridge_imap"
+path = "fuzz_targets/mail_bridge_imap.rs"
 test = false
 doc = false
 bench = false

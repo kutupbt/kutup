@@ -2,7 +2,8 @@
 
 This standalone `cargo-fuzz` package drives the untrusted account-record,
 Drive/collaboration/profile-envelope, account-manifest,
-authenticated service-policy, sealed-sender, Chat media, calendar and block-format parsers. It is
+authenticated service-policy, sealed-sender, Chat media, calendar and block-format parsers,
+and the mail bridge's IMAP session. It is
 excluded from the normal workspace so release builds do not acquire a nightly
 toolchain or libFuzzer dependency.
 
@@ -34,7 +35,11 @@ The targets are:
   seeds, the small objects of `tests/vectors/blocks-v1.json` (under
   `seeds/block_object_parsers/`), pass the AEAD and reach the parsers behind
   it; it also seals each input as a manifest plaintext, as a key holder
-  could, seeded with a valid signed and unsigned one (`manifest-*`).
+  could, seeded with a valid signed and unsigned one (`manifest-*`);
+- `mail_bridge_imap`: the mail bridge's IMAP session
+  (docs/plans/mail-bridge.md): arbitrary bytes, cut at varying places,
+  through a signed-in session with a mailbox selected. Its seed, a short
+  session (`seeds/mail_bridge_imap/session`), is checked in.
 
 Install `cargo-fuzz`, then run the targets with a nightly toolchain:
 
@@ -48,6 +53,7 @@ cargo +nightly fuzz run account_policy_parsers -- -max_len=2097152
 cargo +nightly fuzz run sealed_sender_parsers -- -max_len=1048576
 cargo +nightly fuzz run calendar_parsers corpus/calendar_parsers seeds/calendar_parsers -- -max_len=65536
 cargo +nightly fuzz run block_object_parsers corpus/block_object_parsers seeds/block_object_parsers -- -max_len=65536
+cargo +nightly fuzz run mail_bridge_imap corpus/mail_bridge_imap seeds/mail_bridge_imap -- -max_len=65536
 ```
 
 CI and phase-gate smoke runs should add a bounded `-runs=10000`; scheduled
