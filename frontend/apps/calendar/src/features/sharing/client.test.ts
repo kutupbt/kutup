@@ -296,7 +296,7 @@ describe('replacing links, and a rotation that is due', () => {
       { id: 'full1', kind: 'full', secret: 'mine', createdAt: '' },
       { id: 'busy1', kind: 'busy', secret: null, createdAt: '' },
     ]
-    const replaced = await removeMember(session, me, account, { ...calendar, keyring: new Map() } as unknown as Calendar, BO, new Set(), true)
+    const replaced = await removeMember(session, me, account, { ...calendar, keyring: new Map() }, BO, new Set(), true)
     const order = server.calls.map((c) => `${c.method} ${c.url}`)
     const rotateAt = order.indexOf('post /calendar/calendars/cal-1/keys/rotate')
     expect(order.indexOf('delete /calendar/calendars/cal-1/links/full1')).toBeLessThan(rotateAt)
