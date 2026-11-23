@@ -1015,6 +1015,16 @@ other KeePass apps still working and a Kutup three-way merge that never loses
 an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 [`research/19-password-manager.md`](research/19-password-manager.md).
 
+- **New vault: gaps found after the wipe (user, 2026-11-23).**
+  - The location picker in *New vault* (`CreateVaultDialog.tsx`) lists only
+    existing Drive folders: it can't make a new folder or subfolder there, so
+    a vault can't be stored in a folder that doesn't exist yet without going
+    to Drive first. Add "New folder" in the picker (Drive's folder creation,
+    under the chosen parent).
+  - *New vault* can only take an existing key file (`KeyFileInput`); it can't
+    generate one. Generation (KeePassXC's XML v2 key file, downloaded once)
+    exists only in *Vault settings → Security* (`ChangeKeyDialog.tsx`). Offer
+    "Generate a key file" at creation too, reusing that code.
 - **K0** ✅: `crates/kutup-pass`, KDBX through the `keepass` crate and the
   three-way merge, with corpus and property tests.
 - **K1** ✅: conditional version saves (`basedOn`, `parentVersionId`,
