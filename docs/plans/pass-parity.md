@@ -22,22 +22,22 @@ said) · 🟡 partial (what is missing is said) · ❌ missing. "Kept" means
 Kutup reads and saves the data unchanged (other KeePass apps still see it)
 but offers no way to see or change it.
 
-**Summary** (rows per area, 2026-10-21):
+**Summary** (rows per area, counted from the rows below, 2026-11-19):
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| The database (vault) | 21 | 6 | 13 |
-| Groups (folders) | 5 | 1 | 6 |
-| Entries | 8 | 6 | 8 |
-| Bulk actions and the entry list | 8 | 1 | 6 |
-| Search | 1 | 3 | 3 |
-| Password generator | 2 | 2 | 3 |
-| One-time codes, passkeys, SSH, desktop integration | 5 | 3 | 10 |
-| Health report | 2 | 1 | 4 |
+| The database (vault) | 30 | 1 | 9 |
+| Groups (folders) | 9 | 1 | 2 |
+| Entries | 17 | 3 | 2 |
+| Bulk actions and the entry list | 12 | 0 | 3 |
+| Search | 5 | 1 | 1 |
+| Password generator | 7 | 0 | 0 |
+| One-time codes, passkeys, SSH, desktop integration | 10 | 0 | 8 |
+| Health report | 4 | 0 | 3 |
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
-| Platforms | 2 | 4 | 4 |
-| **All** | **66** | **28** | **61** |
+| Platforms | 4 | 5 | 1 |
+| **All** | **110** | **12** | **33** |
 
 ## The database (vault)
 
@@ -53,7 +53,7 @@ but offers no way to see or change it.
 | Duplicate a vault ("Save as") | Database → Save as / Save a copy | ✅ | the vault list's menu: a copy in the same folder sharing the vault's key (said so), its kept key kept for the copy too |
 | Move a vault to another folder | save elsewhere | ✅ | the vault list's menu, among the owner's writable folders (Drive's `moveFile`, now in `drive-core`); the file keeps its id, so its kept key still opens it |
 | Bring in an existing vault (`.kdbx` upload) | Database → Open | ✅ | "Upload a .kdbx" (`features/UploadVaultDialog.tsx`): checked by its header (KeePass 1, KDBX 3.0 and unknown formats refused with their own message) and that its password or key file opens it before anything is uploaded; up to the administrators' `passVaultMaxBytes` (64 MiB at first); its key kept in the account by default; a KDBX 3.1 or 4.0 file is said to be saved as 4.1 at its first change |
-| Description, default user name | Database settings → General | 🟡 | the default user name fills new entries (`EntryEditor.tsx`), but neither can be changed: `updateVault` carries them and the UI only passes the current values on |
+| Description, default user name | Database settings → General | ✅ | Vault settings → General (`features/VaultSettingsDialog.tsx`, [`pass-gaps-2.md`](pass-gaps-2.md) P2); the default user name fills new entries (`EntryEditor.tsx`) |
 | Public metadata (name, icon, colour on the unlock screen) | Database settings → General | ❌ | kept |
 | Change the password | Database settings → Security | ✅ | the vault's menu → "Change vault key…" (`features/ChangeKeyDialog.tsx`, rules in `lib/keyChange.ts`): keep, change (typed twice, or generated) or remove the password, one key part at least; saved straight to Drive or undone (`VaultSession.changeKey`, `abandonKeyChange`), then kept in the account again or the old kept key forgotten; says that Drive's earlier versions still open with the old key and copies already downloaded can't be revoked, and lets the owner delete the earlier versions and the first upload (`DELETE …/versions/original`); spec 168. Not in the CLI |
 | Key file: **create** (generate) | Security → Add Key File → Generate | ✅ | `kdbx::generate_key_file`: 32 random bytes in KeePass's XML v2, byte for byte as KeePassXC writes it (`Name.keyx`); downloaded only, never sent anywhere; the change waits until the person says it is saved |
@@ -63,23 +63,23 @@ but offers no way to see or change it.
 | Key file: **remove** from an existing vault | Security → Remove Key File | ✅ | as above, while a password stays |
 | Key file kept with the sign-in | (none) | ✅ | beyond KeePassXC: the derived key element sealed under the account key (`crates/kutup-pass/src/kept.rs`), so the website and `kutup sync` open it without the file |
 | YubiKey / OnlyKey challenge-response | `keys/ChallengeResponseKey.cpp`, `keys/drivers` | ❌ | neither open, create, add nor remove: the crate's challenge-response feature is off, and the web would need WebHID (Chromium only; research 19 "Unlocking…") |
-| KDF settings (Argon2d/id, AES-KDF; memory, iterations, parallelism; "1 second" benchmark) | Security → Encryption | ❌ | new vaults get Argon2id 64 MiB, 10 iterations, fixed (`crates/kutup-pass/src/edit.rs`); an existing vault's KDF is kept; no setting |
+| KDF settings (Argon2d/id, AES-KDF; memory, iterations, parallelism; "1 second" benchmark) | Security → Encryption | ✅ | Vault settings → Encryption (`setVaultConfig`): Argon2id, Argon2d or AES-KDF with their parameters; "Benchmark 1 s" times one derivation in the worker and scales the passes or rounds; refused below the administrators' minimums (`passKdfMinimums`, Server settings → Pass; 64 MiB and 2 passes, 100,000 rounds at first) and above what any device could open; a vault already below them opens with a warning and Strengthen. A change merges by `settingsChanged`, so another device's save never undoes it. New vaults get Argon2id 64 MiB, 10 passes |
 | Cipher (AES-256, ChaCha20, Twofish) | Encryption → advanced | ❌ | kept; new vaults the crate's default |
-| Recycle bin on/off | Settings → General | 🟡 | honoured (deletes go for good with it off), made when first needed; no switch |
-| History limits (items, size) | Settings → General | 🟡 | honoured on every edit; new vaults 10 items / 6 MiB as KeePassXC; no setting |
-| Compression | Settings → General | 🟡 | kept as it is; no setting |
+| Recycle bin on/off | Settings → General | ✅ | Vault settings → General; made when first needed; deletes go for good with it off. Choosing another group as the bin: not offered |
+| History limits (items, size) | Settings → General | ✅ | Vault settings → General: items (0–1000) and MiB per entry, each or no limit; a lower limit trims every entry's history at once (said before saving); new vaults 10 items / 6 MiB as KeePassXC |
+| Compression | Settings → General | ✅ | Vault settings → Encryption: GZip on or off |
 | Maintenance (purge unused icons) | Settings → Maintenance | ❌ | unused pictures stay in the vault, as KeePass apps do |
 | Autosave, backup before save | Settings → Saving | ✅ | every edit saves at once as a new Drive version (`sync/vaultSession.ts`); Drive's versions are the backups |
 | Merge another database into this one | Database → Merge from database | ❌ | versions of the **same** vault merge by themselves (below); there is no "merge this other `.kdbx` in" |
 | Import CSV (column mapping) | `ImportExport.adoc`, CSV wizard | ✅ | `features/ImportDialog.tsx`, `crates/kutup-pass/src/import.rs`: KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass, Dashlane, Chrome/Edge/Brave, Firefox, Safari, or any CSV with named columns, into a new group of an open vault; preview first (spec 150) |
-| Import 1Password (1PUX, OPVault) | `OPUXReader.cpp`, `OpVaultReader.cpp` | 🟡 | 1Password's CSV only |
-| Import Bitwarden JSON | `BitwardenReader.cpp` | 🟡 | Bitwarden's CSV only (no attachments, no passkeys) |
-| Import Proton Pass (ZIP/JSON) | `ProtonPassReader.cpp` | 🟡 | Proton Pass's CSV only |
+| Import 1Password (1PUX, OPVault) | `OPUXReader.cpp`, `OpVaultReader.cpp` | 🟡 | 1PUX (logins, sections, one-time codes, files as attachments, vaults as groups; `crates/kutup-pass/src/import_json.rs`) and 1Password's CSV; not OPVault |
+| Import Bitwarden JSON | `BitwardenReader.cpp` | ✅ | the unencrypted JSON: logins, cards, identities, SSH keys, custom fields, folders or collections as groups (as KeePassXC); a password-protected export is refused with its own message; earlier passwords and passkeys are reported, not imported |
+| Import Proton Pass (ZIP/JSON) | `ProtonPassReader.cpp` | ✅ | the ZIP or its `data.json`: logins, cards, Wi-Fi, SSH keys, extra fields, vaults as groups; aliases kept as entries (said so); a PGP-encrypted export is refused |
 | Import KeePass 1 (`.kdb`) | `KeePass1Reader.cpp` | ❌ | |
-| Import KeePass XML | Import → KeePass XML | ❌ | |
+| Import KeePass XML | Import → KeePass XML | ✅ | the import dialog (`crates/kutup-pass/src/import_xml.rs`, through the vendored crate's `from_plain_xml`): the whole tree under a new group, with history, attachments (Meta/Binaries, compressed or not), icons and custom data, new ids throughout; values protected as the file's `ProtectInMemory` and MemoryProtection say, the password always; the source's recycle bin left out; attachments a file names but doesn't hold (KeePassXC's own KDBX 4 XML export) reported |
 | Export KDBX (the file itself) | Save a copy | ✅ | the vault list's menu, "Download .kdbx", also while locked: Drive's layer opened, the KeePass file as it is; the key never in or beside it (said so), and where to see a generated one |
-| Export CSV | `CsvExporter.cpp` | ❌ | |
-| Export XML | `KdbxXmlWriter.cpp` | ❌ | |
+| Export CSV | `CsvExporter.cpp` | ✅ | the vault's menu → Export (`ExportDialog.tsx`, `crates/kutup-pass/src/export.rs`): KeePassXC's columns, made in the worker and only downloaded, after the account's password and a warning; the recycle bin left out (KeePassXC includes it) |
+| Export XML | `KdbxXmlWriter.cpp` | ✅ | Export → KeePass XML (`to_plain_xml`, a documented patch to the vendored crate): history, icons and custom data, protected values marked `ProtectInMemory`, and every attachment in Meta/Binaries so the file stands alone (KeePassXC's KDBX 4 XML leaves attachments out); the recycle bin left out |
 | Export HTML (paper backup) | `HtmlExporter.cpp` | ❌ | |
 | Auto-open other databases (AutoOpen group) | `DatabaseOperations.adoc` | ❌ | kept; Pass lists every vault anyway |
 | Statistics (counts, sizes, passkeys, TOTP) | Reports → Statistics | ❌ | |
@@ -91,12 +91,12 @@ but offers no way to see or change it.
 | Create a group | Groups → New | ✅ | `VaultPage.tsx` group menu, `GroupDialog.tsx` |
 | Nest groups | any depth | ✅ | "New group inside"; the tree indents by depth; phone width uses a picker |
 | Rename | Edit group | ✅ | group menu → Rename |
-| Move a group under another | drag and drop in the tree | ❌ | the core has `moveGroup` (`crates/kutup-pass/src/edit.rs`) and the merge handles moved groups, but no UI calls it |
+| Move a group under another | drag and drop in the tree | ✅ | group menu → Move to (any group outside the bin but itself and what it holds), or drag a group onto another; onto the recycle bin it is deleted (`recycleGroup`, never for good). `moveGroup` refuses the bin and moving the bin ([`pass-gaps-2.md`](pass-gaps-2.md) P1) |
 | Delete a group (to the recycle bin) | Delete group | ✅ | asks first; for good with the bin off |
-| Restore a deleted group | drag out of the bin | ❌ | the bin view lists entries only; a deleted group's entries can come back one at a time, each to the top level |
-| Group notes | Edit group → Notes | ❌ | kept (rename passes them on); not shown or edited |
+| Restore a deleted group | drag out of the bin | ✅ | the bin view lists its groups above the entries: Restore puts one back with everything in it where it was (KDBX's previous parent group, else the top group; `restoreGroups`), Move to another group, or Delete for good |
+| Group notes | Edit group → Notes | ✅ | the group menu's Edit (`GroupDialog.tsx`), shown above the group's entries |
 | Group icons: custom pictures | Edit group → Icon | ✅ | group menu → Change icon (`IconDialog.tsx`, spec 153) |
-| Group icons: KeePass's built-in set | 69 standard icons | ❌ | kept; no picker |
+| Group icons: KeePass's built-in set | 69 standard icons | ✅ | the icon dialog's KeePass icons (`lib/builtinIcons.ts`): drawn with lucide, the number kept, so other KeePass apps show theirs |
 | Per-group auto-type, search and browser settings, expiry | Edit group → Properties / Browser | ❌ | kept |
 | Sort groups A–Z | Groups → Sort | ❌ | tree in the file's order |
 | Show entries of subgroups | (a group shows its own entries) | 🟡 | as KeePassXC: a group shows its own entries only; "All entries" shows every entry outside the bin |
@@ -108,24 +108,24 @@ but offers no way to see or change it.
 | Title, user name, password, URL, notes | Edit entry | ✅ | `EntryEditor.tsx`, `EntryDetail.tsx`; copy buttons; the clipboard is cleared after 30 seconds if unchanged (`lib/copySecret.ts`) |
 | Additional attributes (custom fields) | Advanced → Additional attributes | ✅ | add, rename, remove, protect |
 | Protected fields (hidden, in-memory protection) | "Protect" per attribute | ✅ | protected values hidden with reveal; the password is always protected |
-| Attachments | Advanced → Attachments | 🟡 | add (up to 50 MB), download, remove; no rename, no preview, one file at a time |
+| Attachments | Advanced → Attachments | ✅ | add one or several (up to 50 MB each; names the entry has are listed once, to replace or skip), download, rename, remove; preview of images and text files in the page (no PDF: the page's CSP stays closed to it) |
 | History: list, compare, restore | History tab | ✅ | `HistoryDialog.tsx`, `restoreHistory` |
-| History: delete an item, delete all | History tab → Delete | ❌ | trimmed only by the vault's limits |
+| History: delete an item, delete all | History tab → Delete | ✅ | the History dialog: Delete per version, Delete all versions, asked first; remembered in the entry's `KutupHistoryDeleted` so another device's copy doesn't bring them back ([`pass.md`](pass.md)) |
 | Expiry | Expires + presets | ✅ | date and time; an expired entry warns and shows in the security report; no presets ("in 3 months") |
-| Tags | tag field, tag list in the sidebar | 🟡 | edited as comma-separated text and searched, shown on the entry; no tag list or tag filter in the sidebar, no suggestions |
+| Tags | tag field, tag list in the sidebar | ✅ | edited as comma-separated text with the vault's tags offered; a Tags list in the sidebar with counts, a click searches `tag:"…"` |
 | Icons: website icon | Download favicon | ✅ | through Kutup or off per account (spec 152); can be saved into the vault as a custom icon |
 | Icons: custom pictures | Icon → Custom | ✅ | upload or reuse the vault's pictures (spec 153) |
-| Icons: KeePass's built-in set | 69 standard icons | ❌ | kept; no picker |
-| Foreground and background colour | Advanced → Colours | ❌ | kept |
+| Icons: KeePass's built-in set | 69 standard icons | ✅ | as for groups; a non-default one shows instead of the website's icon |
+| Foreground and background colour | Advanced → Colours | ✅ | the editor's Colours; the list shows the text colour on the title and the background as a bar at the row's edge |
 | Auto-type sequences, window associations | Auto-Type tab | ❌ | kept, not shown (see auto-type below) |
-| Several URLs | Browser integration, `KP2A_URL_n` | 🟡 | extra URLs are ordinary custom fields (the CSV import makes `KP2A_URL_n`); only `URL` gets an open button |
+| Several URLs | Browser integration, `KP2A_URL_n` | 🟡 | extra URLs are custom fields named `KP2A_URL`, `KP2A_URL_n` (the CSV import makes them), and each gets an open button beside its copy, as `URL` does (http and https only); no "Additional URLs" editor list, and no browser integration (Kutup has no extension) |
 | URL schemes (`cmd://`, `ssh://`, `{S:…}` in URLs) | `Entry URL Handling` | 🟡 | `http(s)` opens in a new tab; other schemes are shown, not opened (deliberately: a web page cannot run commands) |
 | URL override | Properties | ❌ | kept |
-| References `{REF:P@I:…}` | `Reference.adoc` "Entry Cross-Reference" | ❌ | shown as the raw text; copying copies `{REF:…}`; nothing makes one |
-| Placeholders (`{USERNAME}`, `{DT_…}`, `{T-CONV:…}`) | `Reference.adoc` "Entry Placeholders" | ❌ | shown as typed |
-| Clone an entry (with references, with history) | Entries → Clone (Ctrl+D) | ❌ | |
-| "Exclude from reports" (quality check) | Properties → Exclude | 🟡 | kept, but the security report ignores it (`lib/report.ts` reports such entries too) and it cannot be changed |
-| Custom data, properties (UUID, times) | Properties tab | 🟡 | created and modified times shown; the rest kept |
+| References `{REF:P@I:…}` | `Reference.adoc` "Entry Cross-Reference" | ✅ | `crates/kutup-pass/src/resolve.rs` (KeePassXC's rules and test cases): fields T/U/P/A/N/I found by T/U/P/A/N/I/O, ten levels deep; shown and copied resolved, marked "from another entry"; made by Clone |
+| Placeholders (`{USERNAME}`, `{DT_…}`, `{T-CONV:…}`) | `Reference.adoc` "Entry Placeholders" | 🟡 | the standard fields, `{UUID}`, `{TOTP}`, `{S:…}`, `{URL:…}` parts, `{DT_…}` and `{T-CONV:…}`; not `{T-REPLACE-RX:…}`, `{DB_DIR}` or auto-type keys (kept as typed) |
+| Clone an entry (with references, with history) | Entries → Clone (Ctrl+D) | ✅ | the entry's Clone button (`CloneDialog.tsx`): " - Clone" after the title (in the person's language), the history, the user name and password as references, each if asked; beside the entry, its attachments shared. No Ctrl+D (keyboard shortcuts are their own gap) |
+| "Exclude from reports" (quality check) | Properties → Exclude | ✅ | a switch in the entry editor; the report and `is:weak` leave such entries out |
+| Custom data, properties (UUID, times) | Properties tab | ✅ (read-only) | a Properties section on the entry (UUID as 32 hex digits with Copy, created, modified, accessed) and in the group's Edit dialog (UUID, created, modified), with the custom data by key, read when opened (a binary value shows its size); read-only, as approved: KeePassXC's Remove isn't offered |
 | Merge review marks | (none) | ✅ | beyond KeePassXC: entries changed on two devices are marked, compared against history and marked reviewed (`EntryDetail.tsx`, spec 77) |
 
 ## Bulk actions and the entry list
@@ -148,10 +148,10 @@ read-only vault has no selection and no dragging.
 | Move several to the recycle bin, delete several | select, Delete | ✅ | asks first, naming the count; for good (said so, "can't be undone") in the bin or with it off |
 | Restore from the recycle bin | drag back | ✅ | one entry or several, each back to the group it was in (KDBX's previous parent group), or the top group when that one is gone or in the bin; or "Move to" another group |
 | Empty the recycle bin | Recycle bin → Empty | ✅ | |
-| Clone several | Clone | ❌ | |
-| Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | 🟡 | entries (one, or the selection) onto a group, or onto the recycle bin while it is on (`recycleEntries`, which refuses rather than delete for good); not groups into groups, no Ctrl to copy |
-| Sort the list | click a column | ❌ | always by title, A–Z (natural order); no other order |
-| Choose columns (user name, URL, modified, expiry, attachments, TOTP…) | header menu | ❌ | each row shows the icon, title and user name (else URL) |
+| Clone several | Clone | ✅ | the selection bar's Clone, one `cloneEntries` edit |
+| Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | ✅ | entries (one, or the selection) and groups onto a group, or onto the recycle bin while it is on (`recycleEntries` / `recycleGroup`, which refuse rather than delete for good), never a group into itself; with Ctrl (or ⌥) held they are copied instead, as KeePassXC's `CloneCopy`: new ids, times now, history kept, no " - Clone" suffix, a group with all it holds (`copyGroup`), never into the bin |
+| Sort the list | click a column | ✅ | title, user name, URL, modified, created or expiry, up or down, per device (`lib/entryList.ts`); entries without the value last |
+| Choose columns (user name, URL, modified, expiry, attachments, TOTP…) | header menu | ✅ | "Show in the list": user name, URL, modified, expiry, attachments, one-time code, per device; rows keep the icon and title |
 | Move entries up and down (manual order) | Entries → Move up/down | ❌ | |
 | Keyboard shortcuts (copy user name/password/TOTP, new entry, search) | `KeyboardShortcuts.adoc`, configurable in 2.8 | ❌ | none |
 | Copy across vaults (move an entry to another vault) | drag between tabs | ❌ | the core can (`crates/kutup-pass/src/refs.rs`: attachments, icons and history move with it); no UI |
@@ -160,38 +160,38 @@ read-only vault has no selection and no dragging.
 
 | Feature | KeePassXC | Kutup Pass | Notes / where |
 |---|---|---|---|
-| Search as you type | search box | ✅ | `VaultPage.tsx` `matches`: case-insensitive substring |
-| Fields searched | all standard fields, attributes, tags, groups | 🟡 | title, user name, URL, notes and tags; not custom fields, attachments' names or group names; protected values not at all (as KeePassXC without a modifier) |
-| Scope | the database or the current group | 🟡 | within the chosen group (its own entries) or "All entries"; never across vaults |
-| Field modifiers (`title:`, `url:`, `user:`, `notes:`, `attr:`, `tag:`, `is:expired`, `is:weak`…) | `DatabaseOperations.adoc` "Modifiers and Fields" | ❌ | |
-| Wildcards, regular expressions, `!` negation, exact `+` | "Wild Card Characters and Logical Operators" | ❌ | |
+| Search as you type | search box | ✅ | the vault's own search in the worker (`crates/kutup-pass/src/search.rs`), once typing settles; folded as Kutup's other searches (Turkish I's, accents, case) |
+| Fields searched | all standard fields, attributes, tags, groups | ✅ | title, user name, URL, notes, tags and unprotected custom fields; attachments' and groups' names with `attachment:` and `group:`; the password with `password:`; protected custom fields never |
+| Scope | the database or the current group | ✅ | the chosen group, or "Whole vault" while searching; never across vaults |
+| Field modifiers (`title:`, `url:`, `user:`, `notes:`, `attr:`, `tag:`, `is:expired`, `is:weak`…) | `DatabaseOperations.adoc` "Modifiers and Fields" | ✅ | KeePassXC's: `title:`/`t:`, `username:`/`user:`/`u:`, `password:`/`p:`, `url:`, `notes:`/`n:`, `attr:`, `attachment:`/`a:`, `group:`/`g:`, `tag:`, `uuid:`, `is:expired`, `is:expired-N`, `is:weak` (the health report's, honouring "exclude from reports"), `has:totp`; the search box's tooltip lists them |
+| Wildcards, regular expressions, `!` negation, exact `+` | "Wild Card Characters and Logical Operators" | 🟡 | `*`, `-` or `!` to leave out, `+` for the whole value (combined in any order: `!+u:admin`) and `"quotes"` for spaces; no regular expressions (their engine would grow the WASM by tens of KB) |
 | Saved searches | tag view (`gui/tag/TagView.cpp`) | ❌ | |
-| Search the recycle bin | | 🟡 | only by opening the bin and searching there |
+| Search the recycle bin | | ✅ | "Include the recycle bin" beside "Whole vault" while searching (KeePassXC leaves the bin out), or by opening the bin and searching there |
 
 ## Password generator
 
 | Feature | KeePassXC | Kutup Pass | Notes / where |
 |---|---|---|---|
-| Character sets (lower, upper, digits, symbols) | `PasswordGenerator.adoc` | ✅ | `lib/generator.ts`, `features/PasswordGenerator.tsx`: `crypto.getRandomValues` without modulo bias, one of each chosen set |
+| Character sets (lower, upper, digits, symbols) | `PasswordGenerator.adoc` | ✅ | `lib/generator.ts`, `features/GeneratorPanel.tsx`: `@kutup/crypto/random` without modulo bias (a lint rule refuses `Math.random` in the Pass app), one of each chosen set |
 | Exclude look-alikes | "Exclude look-alike characters" | ✅ | |
-| Length | 1–999 | 🟡 | 8–64 |
-| Extended ASCII, math, braces, quotes, dashes groups; custom "also include" and "exclude" characters | advanced options | ❌ | one fixed symbol set |
-| Passphrases (word lists, separator, case, word count) | "Generating Passphrases", EFF lists | ❌ | the file's header says "passphrases" but there is none |
-| Entropy display | bits and a quality bar (zxcvbn) | 🟡 | "About N bits" for generated passwords; typed passwords get a rough weak/fair/strong from the character classes, not zxcvbn |
-| Standalone generator (toolbar, copy without an entry) | Tools → Password Generator | ❌ | only from the password field of the entry editor |
+| Length | 1–999 | ✅ | 4–128 (KeePassXC's own UI caps at 128 too) |
+| Extended ASCII, math, braces, quotes, dashes groups; custom "also include" and "exclude" characters | advanced options | ✅ | "More character groups" in the generator: KeePassXC's Braces, Punctuation, Quotes, Dashes and slashes, Math, Logograms and Extended ASCII (U+00A1–U+00FF without the no-break space and soft hyphen), each its own set (at least one of each used; look-alikes leave `\|` out of Dashes); "Also use" and "Never use"; the CLI's `generate` has the same groups (`--braces` … `--extended`/`-e`) |
+| Passphrases (word lists, separator, case, word count) | "Generating Passphrases", EFF lists | ✅ | `lib/passphrase.ts`: the EFF large list (7,776 words, CC BY 3.0, credited in the generator), served from Kutup's own origin and fetched on first use; 3–20 words, separator, lowercase / capitalised / mixed, an added number or symbol |
+| Entropy display | bits and a quality bar (zxcvbn) | ✅ | bits for what is generated, and zxcvbn's weak / fair / strong (lazily loaded, `lib/strength.ts`) for any password |
+| Standalone generator (toolbar, copy without an entry) | Tools → Password Generator | ✅ | `pass.<domain>/generator` in the sidebar, Copy, its options kept per device; the entry editor's popover is the same panel |
 
 ## One-time codes, passkeys, SSH, desktop integration
 
 | Feature | KeePassXC | Kutup Pass | Notes / where |
 |---|---|---|---|
 | TOTP: set up from a secret or `otpauth://` | Entry → TOTP → Set up | ✅ | the editor's "One-time code" field (`lib/otp.ts`): a base32 key (SHA-1, 6 digits, 30 s) or an `otpauth://totp/` URI |
-| TOTP: other digits, periods, algorithms | setup dialog (custom settings) | 🟡 | from a URI only (SHA-1/256/512, any period and digits, `crates/kutup-pass/src/view.rs`); no form |
+| TOTP: other digits, periods, algorithms | setup dialog (custom settings) | ✅ | the field's setup form (`TotpSetupDialog.tsx`): secret, 6/7/8 digits or Steam Guard, 15–300 s, SHA-1/256/512, written as KeePassXC's URI; codes in `crates/kutup-pass/src/otp.rs` (RFC 6238 vectors) |
 | TOTP: live code, copy | TOTP column, Ctrl+T | ✅ | `EntryDetail.tsx` `OtpRow`, seconds left, copy (cleared after 30 s) |
-| TOTP: show a QR code (to move to a phone) | TOTP → Show QR code (`src/qrcode`) | ❌ | |
+| TOTP: show a QR code (to move to a phone) | TOTP → Show QR code (`src/qrcode`) | ✅ | the code's QR button (`TotpQrDialog.tsx`, `qrcode.react`), behind a warning, for `otpauth://` entries |
 | TOTP: read a QR code / Google Authenticator export | (no) | ❌ | not in KeePassXC either; research 19 §5.10 "later" |
-| Steam Guard codes | `encoder=steam` | ❌ | the vendored crate's `TOTP` has no Steam encoder |
-| Legacy TOTP fields (`TOTP Seed`/`TOTP Settings`, `TimeOtp-*`) | read | 🟡 | `otp` field only; KeePass 2's `TimeOtp-*` fields show as custom fields |
-| Passkeys: kept and shown | `Passkeys.adoc`, `KPEX_PASSKEY_*` attributes | 🟡 | kept; shown only as raw custom fields (private key hidden) |
+| Steam Guard codes | `encoder=steam` | ✅ | `otp.rs`: five characters of Steam's alphabet, from `encoder=steam` or `30;S`; KeePassXC's vectors from the Steam app |
+| Legacy TOTP fields (`TOTP Seed`/`TOTP Settings`, `TimeOtp-*`) | read | ✅ | `otp.rs` reads KeePassXC's older fields and KeePass 2's `TimeOtp-*` (they still show as custom fields too) |
+| Passkeys: kept and shown | `Passkeys.adoc`, `KPEX_PASSKEY_*` attributes | ✅ | kept; a Passkey card on the entry (site, user name, credential ID, each with Copy, and whether the private key is there). The private key never reaches the page: the vault's view leaves every `KPEX_PASSKEY_*` field out and gives a summary without it (`kutup_pass::passkey`), `{S:KPEX_PASSKEY_PRIVATE_KEY_PEM}` resolves to nothing, an edit from the page keeps the fields it couldn't see, and the WASM test checks that view, history, resolved fields, search and custom data never carry it; only the export (the whole vault, after the account's password) holds it |
 | Passkeys: use, register, import, export | through KeePassXC-Browser; Reports → Passkeys | ❌ | needs an extension or native app (research 19 §5.9) |
 | SSH agent: offer KeeAgent keys | `src/sshagent`, entry SSH Agent tab | ✅ (CLI) | `kutup ssh-agent` (`crates/kutup-cli/src/sshagent`, `crates/kutup-pass/src/ssh.rs`): KeeAgent-compatible entries, approval per use (terminal or desktop dialog), forwarded requests flagged, keys listed while locked, `scripts/verify-pass-ssh.sh` |
 | SSH agent: add/remove on unlock/lock, lifetime, confirm | KeeAgent settings | ✅ (CLI) | `kutup ssh-add` honours lifetime and confirm, or `--lifetime`/`--confirm`; forgotten after `--idle` |
@@ -207,11 +207,11 @@ read-only vault has no selection and no dragging.
 
 | Feature | KeePassXC | Kutup Pass | Notes / where |
 |---|---|---|---|
-| Weak passwords | Reports → Health check (zxcvbn score) | 🟡 | `features/SecurityPanel.tsx`, `lib/report.ts`: by character classes and length (bits), not zxcvbn |
+| Weak passwords | Reports → Health check (zxcvbn score) | ✅ | `features/SecurityPanel.tsx`, `lib/report.ts`: zxcvbn score 0–1 (the bits estimate until zxcvbn loads) |
 | Reused passwords | Health check | ✅ | grouped by password, within the open vault (not across vaults) |
 | Expired entries | Health check | ✅ | |
 | Soon expiring, old passwords, too short | Health check | ❌ | |
-| Excluded entries respected | "Exclude from reports" | ❌ | see Entries |
+| Excluded entries respected | "Exclude from reports" | ✅ | left out of weak, reused and expired |
 | Breached passwords (HIBP) | Reports → HIBP (online k-anonymity), `keepassxc-cli analyze --hibp` (offline list) | ❌ | nothing leaves the device (`pass.md`, Security report); research 19 §5.12 proposes an opt-in check proxied by the Kutup server |
 | Statistics | Reports → Statistics | ❌ | |
 
@@ -250,10 +250,10 @@ read-only vault has no selection and no dragging.
 | Website | (none) | ✅ | `pass.<domain>`, strict CSP (spec 79) |
 | Phones | (none; KeePassDX, Keepass2Android, KeePassium) | 🟡 | the website at phone width (K3); no autofill; native apps deferred ([`../mobile-build.md`](../mobile-build.md)) |
 | Browser extension | KeePassXC-Browser | ❌ | later |
-| CLI: open, `ls`, `show`, `clip`, `search` | `keepassxc-cli` | ❌ | `kutup pass` manages kept keys only (`keep`, `ls`, `forget`, `show-key`; `crates/kutup-cli/src/commands/pass.rs`) |
-| CLI: `add`, `edit`, `rm`, `mv`, `mkdir`, `rmdir`, attachments | `keepassxc-cli` | ❌ | |
-| CLI: `db-create`, `db-edit`, `db-info`, `merge`, `import`, `export` | `keepassxc-cli` | 🟡 | `merge` happens inside `kutup sync`; the rest none |
-| CLI: `generate`, `diceware`, `estimate`, `analyze` | `keepassxc-cli` | ❌ | |
+| CLI: open, `ls`, `show`, `clip`, `search` | `keepassxc-cli` | ✅ (CLI) | `kutup pass ls <vault> [group] [-R]`, `search`, `show` (`-s`, `-a`, `-t`), `clip` (`--clear-after`, default 10 s; the platform's clipboard tool) (`crates/kutup-cli/src/commands/pass_entries.rs`): a vault by file id or name, opened with the kept key, `KUTUP_VAULT_PASSWORD` or a prompt; entries by path or UUID, values resolved |
+| CLI: `add`, `edit`, `rm`, `mv`, `mkdir`, `rmdir`, attachments | `keepassxc-cli` | ✅ | `add`, `edit` (`--move-to` moves), `rm` (`--force` for good), `mv` (an entry or a group), `mkdir`, `rmdir` (`--force` for good), `attachment-export` (`--out`, or `--stdout`), `attachment-import` (`--force` replaces), `attachment-rm`, `generate`: the website's operations, saved as a Drive version based on the one read and merged with a save that landed first |
+| CLI: `db-create`, `db-edit`, `db-info`, `merge`, `import`, `export` | `keepassxc-cli` | 🟡 | `db-info`; `import` (every format the website reads, into a new group); `export` (CSV or KeePass XML, after the account's password is proved again, as the website; a new 0600 file, or standard output only with `--stdout`); `merge` happens inside `kutup sync`; no `db-create` or `db-edit` (vaults are made and set up in the website) |
+| CLI: `generate`, `diceware`, `estimate`, `analyze` | `keepassxc-cli` | 🟡 | `kutup pass generate` (a password, or a passphrase from the EFF list with `--words`, as `diceware`); no `estimate` or `analyze` (the website's reports have them) |
 | CLI: SSH agent | (in the GUI) | ✅ | beyond KeePassXC: `kutup ssh-agent`, `kutup ssh-add`, headless and over SSH |
 | Languages | ~40 | 🟡 | English and Turkish |
 
@@ -276,28 +276,24 @@ What people hit first, then what blocks moving from KeePassXC:
    form, downloaded once), **add** or **remove** a key file, and re-keep
    the new key in the account. Needed too for shared vaults after a member
    leaves.
-4. **Move groups** (`moveGroup` exists in the core) and restore deleted
-   groups (entries already go back to where they were, item 1).
-5. **Vault settings**: description, default user name, recycle bin on/off,
-   history limits, KDF (Argon2id memory and iterations, with a "how long
-   to open" test), compression.
-6. **List and search**: sort (title, user name, modified, created,
-   expiry), more columns, search modifiers (`title:`, `url:`, `tag:`,
-   `is:expired`…), custom fields in search, a tag list in the sidebar.
-7. **Clone an entry**; delete history items.
+4. ~~**Move groups** and restore deleted groups~~: done
+   ([`pass-gaps-2.md`](pass-gaps-2.md) P1).
+5. ~~**Vault settings**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md) P2).
+6. ~~**List and search**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md) P3);
+   regular expressions later.
+7. ~~**Clone an entry**; delete history items~~: done
+   ([`pass-gaps-2.md`](pass-gaps-2.md) P4); references in clones wait for item 12.
 8. **SSH keys on the website** and key generation (roadmap).
-9. **Generator**: passphrases (EFF word list), a standalone generator,
-   custom and excluded characters, longer lengths; zxcvbn for strength
-   (and in the report, which should also honour "exclude from reports").
-10. **TOTP**: a setup form (digits, period, algorithm), Steam codes, show
-    the QR code.
-11. **Export**: CSV and KeePass XML (with the warnings KeePassXC gives);
-    import KeePass XML, Bitwarden JSON, 1PUX and Proton Pass ZIP.
-12. **References and placeholders**: resolve `{REF:…}` when showing and
-    copying, at least `{REF:U/P@I:…}`; the common placeholders.
-13. **Built-in KeePass icons** and colours, group notes.
-14. **A CLI for entries** (`kutup pass ls|show|clip|add|edit|generate`),
-    so scripts need not run `keepassxc-cli` on a synced copy.
+9. ~~**Generator**~~: done ([`pass-gaps-3.md`](pass-gaps-3.md) A1).
+10. ~~**TOTP**~~: done ([`pass-gaps-3.md`](pass-gaps-3.md) A2).
+11. ~~**Export and import**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md)
+    P5a, P5b): CSV and KeePass XML out; KeePass XML, Bitwarden JSON, 1PUX
+    and Proton Pass in.
+12. ~~**References and placeholders**~~: done ([`pass-gaps-3.md`](pass-gaps-3.md) B1).
+13. ~~**Built-in KeePass icons** and colours, group notes~~: done
+    ([`pass-gaps-3.md`](pass-gaps-3.md) A3).
+14. ~~**A CLI for entries**~~: done ([`pass-gaps-3.md`](pass-gaps-3.md) B2);
+    groups and attachments from the CLI later.
 15. **Breach check** (opt-in, proxied k-anonymity, research 19 §5.12) and
     statistics.
 16. **YubiKey challenge-response**: CLI first, WebHID later.

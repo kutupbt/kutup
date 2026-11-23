@@ -284,6 +284,7 @@ adapter adds its row here, in the PR that adds it.
 | `crates/kutup-server/src/web_push_payload.rs` | RFC 8291 Web Push encryption (HKDF-SHA256) |
 | `crates/kutup-server/src/web_push.rs` | RFC 8292's ES256 signature, checked in a test |
 | `crates/kutup-pass/src/kdbx.rs` | KeePass's key file v2 check and composite key (SHA-256 of the password), in tests |
+| `crates/kutup-pass/src/otp.rs` | RFC 6238 one-time codes (HMAC-SHA-1, -256, -512 through `totp-lite`) and Steam Guard's |
 | `crates/kutup-pass/src/ssh.rs` | the SSH agent's signatures (RFC 8332's rsa-sha2-256/512) and OpenSSH's session binding |
 | `crates/kutup-pass/tests/corpus.rs` | KeePass's composite key, the reference for KeePassXC's vaults |
 | `crates/kutup-pass/tests/ssh.rs` | agent signatures checked as an SSH server checks them |

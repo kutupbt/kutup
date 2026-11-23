@@ -42,6 +42,8 @@ function vault(entries: EntryView[]): VaultView {
     recycleBinEnabled: true,
     historyMaxItems: 10,
     historyMaxSize: null,
+    kdf: { kind: 'argon2id', memoryMib: 64, iterations: 10, parallelism: 2 },
+    compression: true,
     groups: [],
     entries,
     customIcons: [],
@@ -66,6 +68,23 @@ describe('securityReport', () => {
     expect(report.reused.map((g) => g.map((e) => e.id))).toEqual([['1', '2']])
     expect(report.expired.map((e) => e.id)).toEqual(['4'])
     expect(report.checked).toBe(4)
+  })
+
+  it('leaves out entries excluded from reports, and rates with the strength given', () => {
+    const report = securityReport(
+      vault([
+        entry('1', 'Lab', 'abc123', { qualityCheck: false }),
+        entry('2', 'Lab copy', 'abc123', { qualityCheck: false }),
+        entry('3', 'Old', 'x', { qualityCheck: false, expires: true, expiry: '2020-01-01T00:00:00Z' }),
+        entry('4', 'Kept', 'whatever'),
+      ]),
+      new Date('2026-10-12T00:00:00Z'),
+      (password) => (password === 'whatever' ? 'weak' : 'strong'),
+    )
+    expect(report.weak.map((e) => e.id)).toEqual(['4'])
+    expect(report.reused).toEqual([])
+    expect(report.expired).toEqual([])
+    expect(report.checked).toBe(1)
   })
 
   it('reports nothing for a healthy vault', () => {

@@ -31,6 +31,69 @@ use crate::refs;
 /// unknown custom data and ignore it.
 pub const REVIEW_KEY: &str = "KutupMergeReview";
 
+/// The custom-data key that remembers an entry's history items deleted on
+/// purpose (docs/plans/pass.md, "Deleted history items"), so a merge with
+/// a copy that still has them doesn't bring them back. Its value is the
+/// deleted items' modification times, `YYYY-MM-DDTHH:MM:SSZ`, one per line,
+/// oldest first, at most [`MAX_DELETED_HISTORY`]. Other KeePass apps keep
+/// unknown custom data and ignore it.
+pub const HISTORY_DELETED_KEY: &str = "KutupHistoryDeleted";
+/// The most deleted history items an entry remembers (the oldest go first).
+pub const MAX_DELETED_HISTORY: usize = 1000;
+
+/// The modification times of `entry`'s deleted history items.
+pub fn deleted_history(entry: &Entry) -> BTreeSet<NaiveDateTime> {
+    match entry
+        .custom_data
+        .get(HISTORY_DELETED_KEY)
+        .and_then(|item| item.value.as_ref())
+    {
+        Some(CustomDataValue::String(text)) => text
+            .lines()
+            .filter_map(|line| crate::view::parse_time(line.trim()))
+            .collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+/// Records `times` as `entry`'s deleted history items (none: the key goes).
+pub(crate) fn set_deleted_history(
+    entry: &mut Entry,
+    times: &BTreeSet<NaiveDateTime>,
+    now: Option<NaiveDateTime>,
+) {
+    if times.is_empty() {
+        entry.custom_data.remove(HISTORY_DELETED_KEY);
+        return;
+    }
+    let skip = times.len().saturating_sub(MAX_DELETED_HISTORY);
+    let text: Vec<String> = times
+        .iter()
+        .skip(skip)
+        .map(|time| crate::view::format_time(*time))
+        .collect();
+    let value = Some(CustomDataValue::String(text.join("\n")));
+    let unchanged = entry
+        .custom_data
+        .get(HISTORY_DELETED_KEY)
+        .is_some_and(|item| item.value == value);
+    if !unchanged {
+        entry.custom_data.insert(
+            HISTORY_DELETED_KEY.to_owned(),
+            CustomDataItem {
+                value,
+                last_modification_time: now,
+            },
+        );
+    }
+}
+
+/// The custom data the merge compares and merges as values: not the review
+/// mark nor the deleted history items, which have their own rules.
+fn merged_as_value(key: &str) -> bool {
+    key != REVIEW_KEY && key != HISTORY_DELETED_KEY
+}
+
 /// What a merge did.
 #[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,7 +247,7 @@ fn entry_slots(db: &Database, entry: &Entry) -> EntrySlots {
         custom_data: entry
             .custom_data
             .iter()
-            .filter(|(key, _)| key.as_str() != REVIEW_KEY)
+            .filter(|(key, _)| merged_as_value(key))
             .map(|(key, item)| (key.clone(), item.value.clone()))
             .collect(),
         expiry: (entry.times.expires, entry.times.expiry),
@@ -230,7 +293,9 @@ fn later(a: Option<NaiveDateTime>, b: Option<NaiveDateTime>) -> Option<NaiveDate
 
 /// Merges `ours` and `theirs`, the two edited copies of a vault, against
 /// `base`, the version both started from (`None` when it is unknown). The
-/// result keeps ours' configuration (cipher, key derivation, compression).
+/// result keeps ours' file format and ciphers; its key derivation and
+/// compression (the vault's encryption settings) merge three-way, the later
+/// change (`settings_changed`) winning without a base or when both changed.
 pub fn merge(
     base: Option<&Database>,
     ours: &Database,
@@ -244,6 +309,7 @@ pub fn merge(
         report: MergeReport::default(),
     };
     merger.metadata();
+    merger.encryption_settings();
     merger.custom_icons();
     merger.groups();
     merger.entries();
@@ -395,6 +461,37 @@ impl Merger<'_> {
     }
 
     // ----------------------------------------------------------- metadata
+
+    /// The key derivation and compression: what a vault's settings page
+    /// changes (`edit::Op::SetVaultConfig`). Another device's save must not
+    /// undo a change made here, nor this one undo theirs.
+    fn encryption_settings(&mut self) {
+        let settings = |db: &Database| {
+            (
+                db.config.kdf_config.clone(),
+                db.config.compression_config.clone(),
+            )
+        };
+        let (ours, theirs) = (settings(self.ours), settings(self.theirs));
+        let theirs_later = self.theirs.meta.settings_changed > self.ours.meta.settings_changed;
+        let take_theirs = match self.base.map(settings) {
+            Some(base) => match pick(Some(&base), Some(&ours), Some(&theirs)) {
+                Pick::Theirs => true,
+                Pick::Conflict => {
+                    self.report
+                        .metadata_conflicts
+                        .push("encryption settings".to_owned());
+                    theirs_later
+                }
+                Pick::Ours => false,
+            },
+            None => ours != theirs && theirs_later,
+        };
+        if take_theirs {
+            self.out.config.kdf_config = theirs.0;
+            self.out.config.compression_config = theirs.1;
+        }
+    }
 
     fn metadata(&mut self) {
         let theirs = &self.theirs.meta;
@@ -980,7 +1077,7 @@ impl Merger<'_> {
             &ours.custom_data,
             &theirs.custom_data,
             |key| {
-                if key != REVIEW_KEY {
+                if merged_as_value(key) {
                     conflicts.push(format!("custom data {key}"));
                 }
             },
@@ -1055,6 +1152,24 @@ impl Merger<'_> {
         os: &EntrySlots,
         ts: &EntrySlots,
     ) {
+        // What either side deleted stays deleted (and remembered on both).
+        let deleted: BTreeSet<NaiveDateTime> = deleted_history(ours)
+            .union(&deleted_history(theirs))
+            .copied()
+            .collect();
+        set_deleted_history(
+            result,
+            &deleted,
+            later(
+                ours.custom_data
+                    .get(HISTORY_DELETED_KEY)
+                    .and_then(|item| item.last_modification_time),
+                theirs
+                    .custom_data
+                    .get(HISTORY_DELETED_KEY)
+                    .and_then(|item| item.last_modification_time),
+            ),
+        );
         let mut items: Vec<Entry> = Vec::new();
         if let Some(history) = &ours.history {
             items.extend(history.entries.iter().cloned());
@@ -1078,7 +1193,14 @@ impl Merger<'_> {
         for item in &mut items {
             item.history = None;
             item.custom_data.remove(REVIEW_KEY);
+            item.custom_data.remove(HISTORY_DELETED_KEY);
         }
+        items.retain(|item| {
+            !item
+                .times
+                .last_modification
+                .is_some_and(|time| deleted.contains(&time))
+        });
         items.sort_by_key(|item| item.times.last_modification);
         let mut kept: Vec<Entry> = Vec::new();
         for item in items {
@@ -1172,7 +1294,7 @@ fn merge_custom_data(
         .chain(base.keys())
         .collect();
     for key in keys {
-        if key == REVIEW_KEY {
+        if !merged_as_value(key) {
             continue;
         }
         match pick(

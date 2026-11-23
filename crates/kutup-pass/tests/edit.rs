@@ -320,6 +320,69 @@ fn attachments_are_added_replaced_and_removed() {
 }
 
 #[test]
+fn an_attachment_is_renamed_keeping_its_contents() {
+    let mut db = vault();
+    let id = add(&mut db, "Sertifika", 1);
+    let b64 = |data: &[u8]| base64::engine::general_purpose::STANDARD.encode(data);
+    for (name, data) in [("a.pem", &b"one"[..]), ("b.pem", &b"two"[..])] {
+        run(
+            &mut db,
+            Op::AddAttachment {
+                entry_id: id.clone(),
+                name: name.into(),
+                data: b64(data),
+            },
+            2,
+        );
+    }
+    run(
+        &mut db,
+        Op::RenameAttachment {
+            entry_id: id.clone(),
+            name: "a.pem".into(),
+            new_name: " cert.pem ".into(),
+        },
+        3,
+    );
+    let e = &db.entries[&eid(&id)];
+    assert_eq!(view::attachment(&db, e, "cert.pem"), Some(&b"one"[..]));
+    assert!(view::attachment(&db, e, "a.pem").is_none());
+    // Onto a name the entry has, refused; a missing one, not found.
+    let taken = apply(
+        &mut db,
+        &Op::RenameAttachment {
+            entry_id: id.clone(),
+            name: "cert.pem".into(),
+            new_name: "b.pem".into(),
+        },
+        at(4),
+    );
+    assert!(taken.is_err());
+    assert!(apply(
+        &mut db,
+        &Op::RenameAttachment {
+            entry_id: id.clone(),
+            name: "gone.pem".into(),
+            new_name: "x".into(),
+        },
+        at(4),
+    )
+    .is_err());
+    // The same name changes nothing.
+    let same = apply(
+        &mut db,
+        &Op::RenameAttachment {
+            entry_id: id.clone(),
+            name: "b.pem".into(),
+            new_name: "b.pem".into(),
+        },
+        at(4),
+    )
+    .unwrap();
+    assert!(!same.changed);
+}
+
+#[test]
 fn an_earlier_state_can_be_restored() {
     let mut db = vault();
     let id = add(&mut db, "Banka", 1);
@@ -516,7 +579,8 @@ fn entries_and_groups_take_their_own_pictures() {
             &mut db,
             Op::SetEntryIcon {
                 id: id.clone(),
-                data: Some(png(1))
+                data: Some(png(1)),
+                builtin: None
             },
             2
         )
@@ -541,7 +605,8 @@ fn entries_and_groups_take_their_own_pictures() {
             &mut db,
             Op::SetEntryIcon {
                 id: id.clone(),
-                data: Some(png(1))
+                data: Some(png(1)),
+                builtin: None
             },
             3
         )
@@ -552,7 +617,8 @@ fn entries_and_groups_take_their_own_pictures() {
             &mut db,
             Op::SetGroupIcon {
                 id: root.clone(),
-                data: Some(png(1))
+                data: Some(png(1)),
+                builtin: None
             },
             4
         )
@@ -581,7 +647,8 @@ fn entries_and_groups_take_their_own_pictures() {
             &mut db,
             Op::SetEntryIcon {
                 id: id.clone(),
-                data: None
+                data: None,
+                builtin: None
             },
             6
         )
@@ -592,7 +659,8 @@ fn entries_and_groups_take_their_own_pictures() {
             &mut db,
             Op::SetGroupIcon {
                 id: root.clone(),
-                data: None
+                data: None,
+                builtin: None
             },
             7
         )
@@ -615,6 +683,7 @@ fn entries_and_groups_take_their_own_pictures() {
         Op::SetEntryIcon {
             id: id.clone(),
             data: Some(png(2)),
+            builtin: None,
         },
         8,
     );
@@ -624,6 +693,7 @@ fn entries_and_groups_take_their_own_pictures() {
         Op::SetEntryIcon {
             id: other.clone(),
             data: Some(png(3)),
+            builtin: None,
         },
         10,
     );
@@ -653,6 +723,7 @@ fn pictures_are_pngs_of_bounded_size() {
             &Op::SetEntryIcon {
                 id: id.clone(),
                 data: Some(data),
+                builtin: None,
             },
             at(2),
         )
@@ -682,7 +753,8 @@ fn pictures_are_pngs_of_bounded_size() {
             &mut db,
             &Op::SetEntryIcon {
                 id: "nope".into(),
-                data: None
+                data: None,
+                builtin: None
             },
             at(2)
         )
@@ -694,7 +766,8 @@ fn pictures_are_pngs_of_bounded_size() {
             &mut db,
             &Op::SetGroupIcon {
                 id: "nope".into(),
-                data: None
+                data: None,
+                builtin: None
             },
             at(2)
         )
@@ -713,7 +786,8 @@ fn pictures_are_pngs_of_bounded_size() {
         op,
         Op::SetGroupIcon {
             id: "g".into(),
-            data: None
+            data: None,
+            builtin: None
         }
     );
 }
@@ -1016,4 +1090,1104 @@ fn with_the_bin_off_deleting_is_for_good_and_recycling_is_refused() {
         8,
     );
     assert!(entry(&view::view(&db), &b).in_recycle_bin);
+}
+
+#[test]
+fn groups_never_move_into_the_bin_and_the_bin_stays() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let old = group(&mut db, &root, "Eski", 2);
+    run(&mut db, Op::DeleteGroup { id: old.clone() }, 3);
+    let bin = view::view(&db).recycle_bin_id.unwrap();
+    let before = shown(&db);
+    // Into the bin, or into a group inside it: that is a delete.
+    for parent in [&bin, &old] {
+        assert!(apply(
+            &mut db,
+            &Op::MoveGroup {
+                id: work.clone(),
+                parent_id: parent.clone()
+            },
+            at(4)
+        )
+        .is_err());
+    }
+    // The bin itself stays where it is.
+    assert!(apply(
+        &mut db,
+        &Op::MoveGroup {
+            id: bin.clone(),
+            parent_id: work.clone()
+        },
+        at(4)
+    )
+    .is_err());
+    assert_eq!(shown(&db), before);
+    // Moving a deleted group out of the bin restores it there.
+    run(
+        &mut db,
+        Op::MoveGroup {
+            id: old.clone(),
+            parent_id: work.clone(),
+        },
+        5,
+    );
+    let v = view::view(&db);
+    let g = v.groups.iter().find(|g| g.id == old).unwrap();
+    assert_eq!(g.parent_id.as_deref(), Some(work.as_str()));
+    assert!(!g.in_recycle_bin);
+}
+
+#[test]
+fn deleted_groups_are_restored_to_where_they_were_with_what_they_hold() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let servers = group(&mut db, &work, "Sunucular", 2);
+    let inner = group(&mut db, &servers, "Prod", 3);
+    let gone = group(&mut db, &root, "Geçici", 4);
+    let lone = group(&mut db, &gone, "Tek", 5);
+    let db1 = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: inner.clone(),
+            entry: input(&[("Title", "db1")]),
+        },
+        6,
+    )
+    .id
+    .unwrap();
+    run(
+        &mut db,
+        Op::DeleteGroup {
+            id: servers.clone(),
+        },
+        7,
+    );
+    run(&mut db, Op::DeleteGroup { id: lone.clone() }, 8);
+    // Its old parent deleted for good: `lone` comes back to the top.
+    run(&mut db, Op::DeleteGroup { id: gone.clone() }, 9);
+    run(&mut db, Op::DeleteGroup { id: gone.clone() }, 10);
+    assert!(entry(&view::view(&db), &db1).in_recycle_bin);
+
+    // A group not in the bin, or the bin itself, is refused, and nothing changes.
+    let bin = view::view(&db).recycle_bin_id.unwrap();
+    let before = shown(&db);
+    for bad in [&work, &bin] {
+        assert!(apply(
+            &mut db,
+            &Op::RestoreGroups {
+                ids: vec![servers.clone(), bad.clone()]
+            },
+            at(11)
+        )
+        .is_err());
+    }
+    assert_eq!(shown(&db), before);
+
+    // `inner` is inside `servers`: it comes back with it, where it is.
+    run(
+        &mut db,
+        Op::RestoreGroups {
+            ids: vec![
+                inner.clone(),
+                servers.clone(),
+                lone.clone(),
+                servers.clone(),
+            ],
+        },
+        12,
+    );
+    let v = view::view(&db);
+    let parent = |id: &str| {
+        v.groups
+            .iter()
+            .find(|g| g.id == id)
+            .unwrap()
+            .parent_id
+            .clone()
+            .unwrap()
+    };
+    assert_eq!(parent(&servers), work);
+    assert_eq!(parent(&inner), servers);
+    assert_eq!(parent(&lone), root);
+    assert!(v
+        .groups
+        .iter()
+        .filter(|g| [&servers, &inner, &lone].contains(&&g.id))
+        .all(|g| !g.in_recycle_bin));
+    assert!(!entry(&v, &db1).in_recycle_bin);
+    // The restore is a move: it says when.
+    let restored = &db.groups
+        [&kutup_pass::keepass::db::GroupId::from(uuid::Uuid::parse_str(&servers).unwrap())];
+    assert_eq!(restored.times.location_changed, Some(at(12)));
+}
+
+#[test]
+fn restoring_groups_reads_from_the_websites_json() {
+    let op: Op = serde_json::from_str(r#"{"op":"restoreGroups","ids":["a","b"]}"#).unwrap();
+    assert_eq!(
+        op,
+        Op::RestoreGroups {
+            ids: vec!["a".into(), "b".into()]
+        }
+    );
+}
+
+#[test]
+fn recycling_a_group_never_deletes_it_for_good() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let home = group(&mut db, &root, "Ev", 2);
+    run(&mut db, Op::RecycleGroup { id: work.clone() }, 3);
+    let v = view::view(&db);
+    assert!(
+        v.groups
+            .iter()
+            .find(|g| g.id == work)
+            .unwrap()
+            .in_recycle_bin
+    );
+    let before = shown(&db);
+    // In the bin already, the top group, or the bin off: refused, nothing changes.
+    assert!(apply(&mut db, &Op::RecycleGroup { id: work.clone() }, at(4)).is_err());
+    assert!(apply(&mut db, &Op::RecycleGroup { id: root.clone() }, at(4)).is_err());
+    db.meta.recyclebin_enabled = Some(false);
+    let before_off = shown(&db);
+    assert!(apply(&mut db, &Op::RecycleGroup { id: home.clone() }, at(4)).is_err());
+    assert_eq!(shown(&db), before_off);
+    db.meta.recyclebin_enabled = Some(true);
+    assert_eq!(shown(&db), before);
+    let op: Op = serde_json::from_str(r#"{"op":"recycleGroup","id":"x"}"#).unwrap();
+    assert_eq!(op, Op::RecycleGroup { id: "x".into() });
+}
+
+fn small_argon2(memory_mib: u64, iterations: u64) -> kutup_pass::edit::KdfInput {
+    kutup_pass::edit::KdfInput::Argon2id {
+        memory_mib,
+        iterations,
+        parallelism: 1,
+    }
+}
+
+const ANY: kutup_pass::edit::KdfMinimums = kutup_pass::edit::KdfMinimums {
+    argon2_memory_mib: 1,
+    argon2_iterations: 1,
+    aes_kdf_rounds: 1,
+};
+
+fn update_vault(
+    db: &Database,
+    bin: Option<bool>,
+    history: Option<kutup_pass::edit::HistoryLimits>,
+) -> Op {
+    let v = view::view(db);
+    Op::UpdateVault {
+        name: v.name,
+        description: v.description,
+        default_user_name: v.default_user_name,
+        recycle_bin_enabled: bin,
+        history,
+    }
+}
+
+#[test]
+fn vault_settings_set_the_bin_and_the_history_limits() {
+    use kutup_pass::edit::HistoryLimits;
+    let mut db = vault();
+    let id = add(&mut db, "Banka", 1);
+    for minute in 2..8 {
+        run(
+            &mut db,
+            Op::UpdateEntry {
+                id: id.clone(),
+                entry: input(&[("Title", "Banka"), ("Password", &format!("p{minute}"))]),
+            },
+            minute,
+        );
+    }
+    assert_eq!(entry(&view::view(&db), &id).history_count, 6);
+
+    // The bin off, with its change time.
+    let op = update_vault(&db, Some(false), None);
+    assert!(run(&mut db, op, 9).changed);
+    assert!(!view::view(&db).recycle_bin_enabled);
+    assert_eq!(db.meta.recyclebin_changed, Some(at(9)));
+    let op = update_vault(&db, Some(false), None);
+    assert!(!run(&mut db, op, 10).changed);
+
+    // A lower limit trims every history at once, oldest first.
+    let three = HistoryLimits {
+        max_items: Some(3),
+        max_size: None,
+    };
+    let op = update_vault(&db, None, Some(three));
+    assert!(run(&mut db, op, 11).changed);
+    let v = view::view(&db);
+    assert_eq!((v.history_max_items, v.history_max_size), (Some(3), None));
+    assert_eq!(entry(&v, &id).history_count, 3);
+    let kept = view::history(&db, &db.entries[&eid(&id)]);
+    assert_eq!(value_of(&kept[0], "Password"), "p4");
+    assert_eq!(db.meta.settings_changed, Some(at(11)));
+
+    // Too many refused, nothing changed.
+    let before = shown(&db);
+    let many = HistoryLimits {
+        max_items: Some(1001),
+        max_size: None,
+    };
+    let op = update_vault(&db, None, Some(many));
+    assert!(apply(&mut db, &op, at(12)).is_err());
+    assert_eq!(shown(&db), before);
+
+    // The website's JSON, old and new.
+    let op: Op = serde_json::from_str(r#"{"op":"updateVault","name":"a"}"#).unwrap();
+    assert!(matches!(
+        op,
+        Op::UpdateVault {
+            recycle_bin_enabled: None,
+            history: None,
+            ..
+        }
+    ));
+    let op: Op = serde_json::from_str(
+        r#"{"op":"updateVault","name":"a","recycleBinEnabled":true,"history":{"maxItems":null,"maxSize":1024}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        op,
+        Op::UpdateVault {
+            recycle_bin_enabled: Some(true),
+            history: Some(HistoryLimits {
+                max_items: None,
+                max_size: Some(1024)
+            }),
+            ..
+        }
+    ));
+}
+
+fn value_of(entry: &view::EntryView, key: &str) -> String {
+    entry
+        .fields
+        .iter()
+        .find(|f| f.key == key)
+        .map(|f| f.value.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn the_key_derivation_is_set_within_the_servers_minimums() {
+    use kutup_pass::edit::{KdfInput, KdfMinimums};
+    let mut db = vault();
+    add(&mut db, "Banka", 1);
+    assert_eq!(
+        view::view(&db).kdf,
+        Some(KdfInput::Argon2id {
+            memory_mib: 64,
+            iterations: 10,
+            parallelism: 2
+        })
+    );
+    assert!(view::view(&db).compression);
+    let strict = KdfMinimums {
+        argon2_memory_mib: 64,
+        argon2_iterations: 2,
+        aes_kdf_rounds: 100_000,
+    };
+    // Weaker than the server allows, or out of range: refused, nothing changes.
+    let before = (shown(&db), db.config.clone());
+    for (kdf, minimums) in [
+        (small_argon2(32, 10), strict),
+        (small_argon2(64, 1), strict),
+        (KdfInput::AesKdf { rounds: 99_999 }, strict),
+        (small_argon2(4096, 2), ANY),
+        (small_argon2(64, 0), ANY),
+        (
+            KdfInput::Argon2d {
+                memory_mib: 64,
+                iterations: 2,
+                parallelism: 0,
+            },
+            ANY,
+        ),
+    ] {
+        assert!(apply(
+            &mut db,
+            &Op::SetVaultConfig {
+                kdf,
+                compression: true,
+                minimums,
+            },
+            at(2)
+        )
+        .is_err());
+    }
+    assert_eq!((shown(&db), db.config.clone()), before);
+
+    // Set, shown, and kept through a save.
+    let kdf = KdfInput::Argon2d {
+        memory_mib: 64,
+        iterations: 2,
+        parallelism: 1,
+    };
+    assert!(
+        run(
+            &mut db,
+            Op::SetVaultConfig {
+                kdf,
+                compression: false,
+                minimums: strict,
+            },
+            3
+        )
+        .changed
+    );
+    assert_eq!(db.meta.settings_changed, Some(at(3)));
+    let key = VaultKey::new().with_password("parola");
+    let reopened = open(&save(&db, &key).unwrap(), &key).unwrap();
+    let v = view::view(&reopened);
+    assert_eq!((v.kdf, v.compression), (Some(kdf), false));
+    let op: Op = serde_json::from_str(
+        r#"{"op":"setVaultConfig","kdf":{"kind":"aesKdf","rounds":100000},"compression":true,"minimums":{"argon2MemoryMib":64,"argon2Iterations":2,"aesKdfRounds":100000}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        op,
+        Op::SetVaultConfig {
+            kdf: KdfInput::AesKdf { rounds: 100_000 },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_key_derivation_is_timed_on_an_empty_vault() {
+    kutup_pass::edit::derive_once(&small_argon2(1, 1)).unwrap();
+    assert!(kutup_pass::edit::derive_once(&small_argon2(0, 1)).is_err());
+}
+
+#[test]
+fn another_devices_save_keeps_a_key_derivation_change() {
+    let key = VaultKey::new().with_password("parola");
+    let mut base = vault();
+    let id = add(&mut base, "Banka", 1);
+    let base_bytes = save(&base, &key).unwrap();
+    let base = open(&base_bytes, &key).unwrap();
+
+    // This device changes the key derivation; the other edits an entry.
+    let mut mine = base.clone();
+    run(
+        &mut mine,
+        Op::SetVaultConfig {
+            kdf: small_argon2(1, 3),
+            compression: false,
+            minimums: ANY,
+        },
+        2,
+    );
+    let mut other = base.clone();
+    run(
+        &mut other,
+        Op::UpdateEntry {
+            id: id.clone(),
+            entry: input(&[("Title", "Banka"), ("Password", "yeni")]),
+        },
+        3,
+    );
+    let mine = open(&save(&mine, &key).unwrap(), &key).unwrap();
+    let other = open(&save(&other, &key).unwrap(), &key).unwrap();
+
+    // Either way round, with or without the base: the change and the edit.
+    for (ours, theirs, base) in [
+        (&other, &mine, Some(&base)),
+        (&mine, &other, Some(&base)),
+        (&other, &mine, None),
+        (&mine, &other, None),
+    ] {
+        let (merged, report) = merge(base, ours, theirs);
+        let v = view::view(&merged);
+        assert_eq!(v.kdf, Some(small_argon2(1, 3)));
+        assert!(!v.compression);
+        assert_eq!(value(&v, &id, "Password"), "yeni");
+        assert!(report.metadata_conflicts.is_empty());
+    }
+
+    // Both changed it: the later change wins, and the merge says so.
+    let mut later = base.clone();
+    run(
+        &mut later,
+        Op::SetVaultConfig {
+            kdf: small_argon2(2, 4),
+            compression: true,
+            minimums: ANY,
+        },
+        5,
+    );
+    for (ours, theirs) in [(&mine, &later), (&later, &mine)] {
+        let (merged, report) = merge(Some(&base), ours, theirs);
+        assert_eq!(view::view(&merged).kdf, Some(small_argon2(2, 4)));
+        assert_eq!(
+            report.metadata_conflicts,
+            vec!["encryption settings".to_owned()]
+        );
+        // The merged vault opens after a save.
+        open(&save(&merged, &key).unwrap(), &key).unwrap();
+    }
+}
+
+#[test]
+fn entries_are_cloned_beside_themselves() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let bank = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: work.clone(),
+            entry: EntryInput {
+                fields: vec![
+                    field("Title", "Banka"),
+                    field("Password", "p1"),
+                    field("Müşteri no", "42"),
+                ],
+                tags: vec!["finans".into()],
+                ..EntryInput::default()
+            },
+        },
+        2,
+    )
+    .id
+    .unwrap();
+    run(
+        &mut db,
+        Op::AddAttachment {
+            entry_id: bank.clone(),
+            name: "kart.png".into(),
+            data: "AAEC".into(),
+        },
+        3,
+    );
+    run(
+        &mut db,
+        Op::UpdateEntry {
+            id: bank.clone(),
+            entry: input(&[("Title", "Banka"), ("Password", "p2")]),
+        },
+        4,
+    );
+    let mail = add(&mut db, "Posta", 5);
+
+    // A missing id clones nothing.
+    let before = shown(&db);
+    assert!(apply(
+        &mut db,
+        &Op::CloneEntries {
+            ids: vec![bank.clone(), "nope".into()],
+            group_id: None,
+            title_suffix: None,
+            history: false,
+            references: false,
+        },
+        at(6)
+    )
+    .is_err());
+    assert_eq!(shown(&db), before);
+
+    let copy = run(
+        &mut db,
+        Op::CloneEntries {
+            ids: vec![bank.clone(), mail.clone()],
+            group_id: None,
+            title_suffix: Some(" - Kopya".into()),
+            history: true,
+            references: false,
+        },
+        7,
+    )
+    .id
+    .unwrap();
+    let v = view::view(&db);
+    assert_eq!(v.entries.len(), 4);
+    let original = entry(&v, &bank);
+    let cloned = entry(&v, &copy);
+    assert_ne!(copy, bank);
+    assert_eq!(cloned.group_id, work);
+    assert_eq!(value(&v, &copy, "Title"), "Banka - Kopya");
+    assert_eq!(value(&v, &copy, "Password"), "p2");
+    assert!(cloned
+        .fields
+        .iter()
+        .any(|f| f.key == "Password" && f.protected));
+    assert_eq!(cloned.tags, original.tags);
+    assert_eq!(cloned.attachments.len(), 1);
+    assert_eq!(cloned.history_count, original.history_count);
+    assert_eq!(cloned.created.as_deref(), Some("2026-10-12T09:07:00Z"));
+    assert!(v
+        .entries
+        .iter()
+        .any(|e| e.id != mail && value(&v, &e.id, "Title") == "Posta - Kopya"));
+
+    // Without history; and it all survives a save.
+    let plain = run(
+        &mut db,
+        Op::CloneEntries {
+            ids: vec![bank.clone()],
+            group_id: None,
+            title_suffix: None,
+            history: false,
+            references: false,
+        },
+        8,
+    )
+    .id
+    .unwrap();
+    let key = VaultKey::new().with_password("parola");
+    let reopened = open(&save(&db, &key).unwrap(), &key).unwrap();
+    let v = view::view(&reopened);
+    assert_eq!(value(&v, &plain, "Title"), "Banka");
+    assert_eq!(entry(&v, &plain).history_count, 0);
+    assert_eq!(
+        view::attachment(&reopened, &reopened.entries[&eid(&copy)], "kart.png"),
+        Some(&[0u8, 1, 2][..])
+    );
+    let op: Op = serde_json::from_str(
+        r#"{"op":"cloneEntries","ids":["a"],"titleSuffix":" - Clone","history":true}"#,
+    )
+    .unwrap();
+    assert!(matches!(op, Op::CloneEntries { history: true, .. }));
+}
+
+/// An entry with four earlier versions (passwords p1 to p4, minutes 2 to 5).
+fn with_history() -> (Database, String) {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let id = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: root,
+            entry: input(&[("Title", "Banka"), ("Password", "p1")]),
+        },
+        1,
+    )
+    .id
+    .unwrap();
+    for n in 2..=5 {
+        run(
+            &mut db,
+            Op::UpdateEntry {
+                id: id.clone(),
+                entry: input(&[("Title", "Banka"), ("Password", &format!("p{n}"))]),
+            },
+            n,
+        );
+    }
+    (db, id)
+}
+
+fn passwords(db: &Database, id: &str) -> Vec<String> {
+    view::history(db, &db.entries[&eid(id)])
+        .iter()
+        .map(|item| value_of(item, "Password"))
+        .collect()
+}
+
+#[test]
+fn history_items_are_deleted_one_or_all() {
+    let (mut db, id) = with_history();
+    assert_eq!(passwords(&db, &id), ["p1", "p2", "p3", "p4"]);
+    let before = shown(&db);
+    assert!(apply(
+        &mut db,
+        &Op::DeleteHistory {
+            id: id.clone(),
+            indexes: Some(vec![1, 9])
+        },
+        at(6)
+    )
+    .is_err());
+    assert_eq!(shown(&db), before);
+    run(
+        &mut db,
+        Op::DeleteHistory {
+            id: id.clone(),
+            indexes: Some(vec![1, 2]),
+        },
+        6,
+    );
+    assert_eq!(passwords(&db, &id), ["p1", "p4"]);
+    assert_eq!(
+        kutup_pass::merge::deleted_history(&db.entries[&eid(&id)]).len(),
+        2
+    );
+    // The entry itself is untouched: same value, same time.
+    let v = view::view(&db);
+    assert_eq!(value(&v, &id, "Password"), "p5");
+    assert_eq!(
+        entry(&v, &id).modified.as_deref(),
+        Some("2026-10-12T09:05:00Z")
+    );
+    run(
+        &mut db,
+        Op::DeleteHistory {
+            id: id.clone(),
+            indexes: None,
+        },
+        7,
+    );
+    assert!(passwords(&db, &id).is_empty());
+    assert!(
+        !run(
+            &mut db,
+            Op::DeleteHistory {
+                id: id.clone(),
+                indexes: None
+            },
+            8
+        )
+        .changed
+    );
+}
+
+#[test]
+fn deleted_history_items_stay_deleted_through_a_merge() {
+    let key = VaultKey::new().with_password("parola");
+    let (base, id) = with_history();
+    let base = open(&save(&base, &key).unwrap(), &key).unwrap();
+    let mut mine = base.clone();
+    run(
+        &mut mine,
+        Op::DeleteHistory {
+            id: id.clone(),
+            indexes: Some(vec![0, 2]),
+        },
+        6,
+    );
+    // The other device leaves the history alone, or edits the entry.
+    let untouched = base.clone();
+    let mut edited = base.clone();
+    run(
+        &mut edited,
+        Op::UpdateEntry {
+            id: id.clone(),
+            entry: input(&[("Title", "Banka"), ("Password", "p6")]),
+        },
+        7,
+    );
+    let mine = open(&save(&mine, &key).unwrap(), &key).unwrap();
+    for other in [&untouched, &edited] {
+        for (ours, theirs) in [(&mine, other), (other, &mine)] {
+            for with_base in [Some(&base), None] {
+                let (merged, report) = merge(with_base, ours, theirs);
+                let kept = passwords(&merged, &id);
+                assert!(!kept.contains(&"p1".to_owned()), "{kept:?}");
+                assert!(!kept.contains(&"p3".to_owned()), "{kept:?}");
+                assert!(kept.contains(&"p2".to_owned()) && kept.contains(&"p4".to_owned()));
+                assert_eq!(
+                    kutup_pass::merge::deleted_history(&merged.entries[&eid(&id)]).len(),
+                    2
+                );
+                assert!(report.conflicts.is_empty());
+            }
+        }
+    }
+    // Merging the same copy changes nothing: no spurious history item.
+    let (merged, _) = merge(Some(&base), &mine, &mine);
+    assert_eq!(passwords(&merged, &id), ["p2", "p4"]);
+}
+
+#[test]
+fn built_in_icons_are_chosen_by_number() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let id = add(&mut db, "Banka", 1);
+    run(
+        &mut db,
+        Op::SetEntryIcon {
+            id: id.clone(),
+            data: None,
+            builtin: Some(66),
+        },
+        2,
+    );
+    run(
+        &mut db,
+        Op::SetGroupIcon {
+            id: root.clone(),
+            data: None,
+            builtin: Some(60),
+        },
+        3,
+    );
+    let v = view::view(&db);
+    assert_eq!(entry(&v, &id).icon, Some(66));
+    assert_eq!(
+        v.groups.iter().find(|g| g.id == root).unwrap().icon,
+        Some(60)
+    );
+    let before = shown(&db);
+    for op in [
+        Op::SetEntryIcon {
+            id: id.clone(),
+            data: None,
+            builtin: Some(69),
+        },
+        Op::SetEntryIcon {
+            id: id.clone(),
+            data: Some(png(1)),
+            builtin: Some(1),
+        },
+    ] {
+        assert!(apply(&mut db, &op, at(4)).is_err());
+    }
+    assert_eq!(shown(&db), before);
+    let op: Op = serde_json::from_str(r#"{"op":"setGroupIcon","id":"x","builtin":48}"#).unwrap();
+    assert!(matches!(
+        op,
+        Op::SetGroupIcon {
+            builtin: Some(48),
+            data: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_clone_can_refer_to_its_original() {
+    use kutup_pass::resolve::{resolve, Context};
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let bank = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: root,
+            entry: input(&[("Title", "Banka"), ("UserName", "ayse"), ("Password", "p1")]),
+        },
+        1,
+    )
+    .id
+    .unwrap();
+    let copy = run(
+        &mut db,
+        Op::CloneEntries {
+            ids: vec![bank.clone()],
+            group_id: None,
+            title_suffix: None,
+            history: false,
+            references: true,
+        },
+        2,
+    )
+    .id
+    .unwrap();
+    let hex = uuid::Uuid::parse_str(&bank).unwrap().simple().to_string();
+    let v = view::view(&db);
+    assert_eq!(value(&v, &copy, "UserName"), format!("{{REF:U@I:{hex}}}"));
+    assert_eq!(value(&v, &copy, "Password"), format!("{{REF:P@I:{hex}}}"));
+    assert!(entry(&v, &copy)
+        .fields
+        .iter()
+        .any(|f| f.key == "Password" && f.protected));
+    let context = Context {
+        local: at(3),
+        utc: at(3),
+        unix_seconds: 0,
+    };
+    let e = &db.entries[&eid(&copy)];
+    assert_eq!(resolve(&db, e, e.fields["Password"].get(), &context), "p1");
+    // The original changes; the copy follows.
+    run(
+        &mut db,
+        Op::UpdateEntry {
+            id: bank.clone(),
+            entry: input(&[("Title", "Banka"), ("UserName", "ayse"), ("Password", "p2")]),
+        },
+        4,
+    );
+    let e = &db.entries[&eid(&copy)];
+    assert_eq!(resolve(&db, e, e.fields["Password"].get(), &context), "p2");
+}
+
+/// KeePassXC's Ctrl-drag: entries copied into another group, a group copied
+/// with all it holds (`CloneCopy`: new ids, times now, history kept).
+#[test]
+fn entries_and_groups_are_copied_into_another_group() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let servers = group(&mut db, &work, "Sunucular", 2);
+    let home = group(&mut db, &root, "Ev", 3);
+    let bank = add(&mut db, "Banka", 4);
+    run(
+        &mut db,
+        Op::UpdateEntry {
+            id: bank.clone(),
+            entry: input(&[("Title", "Banka"), ("Password", "p1")]),
+        },
+        5,
+    );
+    // An entry copied into another group: no suffix, its history, a new id.
+    let copy = run(
+        &mut db,
+        Op::CloneEntries {
+            ids: vec![bank.clone()],
+            group_id: Some(home.clone()),
+            title_suffix: None,
+            history: true,
+            references: false,
+        },
+        6,
+    )
+    .id
+    .unwrap();
+    let v = view::view(&db);
+    let copied = entry(&v, &copy);
+    assert_ne!(copy, bank);
+    assert_eq!(copied.group_id, home);
+    assert_eq!(entry(&v, &bank).group_id, root);
+    assert_eq!(
+        view::history(&db, &db.entries[&eid(&copy)]).len(),
+        view::history(&db, &db.entries[&eid(&bank)]).len()
+    );
+
+    // A group copied with what it holds, under another.
+    let server = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: servers.clone(),
+            entry: input(&[("Title", "db1"), ("Password", "s")]),
+        },
+        7,
+    )
+    .id
+    .unwrap();
+    let work_copy = run(
+        &mut db,
+        Op::CopyGroup {
+            id: work.clone(),
+            parent_id: home.clone(),
+        },
+        8,
+    )
+    .id
+    .unwrap();
+    let v = view::view(&db);
+    let copied_work = v.groups.iter().find(|g| g.id == work_copy).unwrap();
+    assert_eq!(copied_work.name, "İş");
+    assert_eq!(copied_work.parent_id.as_deref(), Some(home.as_str()));
+    let copied_servers = v
+        .groups
+        .iter()
+        .find(|g| g.parent_id.as_deref() == Some(work_copy.as_str()))
+        .unwrap();
+    assert_eq!(copied_servers.name, "Sunucular");
+    assert_ne!(copied_servers.id, servers);
+    let inside: Vec<_> = v
+        .entries
+        .iter()
+        .filter(|e| e.group_id == copied_servers.id)
+        .collect();
+    assert_eq!(inside.len(), 1);
+    assert_ne!(inside[0].id, server);
+    // The original is where it was, whole.
+    assert!(v
+        .entries
+        .iter()
+        .any(|e| e.id == server && e.group_id == servers));
+
+    // Never into itself or below it, never the top group.
+    for (id, parent) in [(&work, &work), (&work, &servers), (&root, &home)] {
+        assert!(apply(
+            &mut db,
+            &Op::CopyGroup {
+                id: id.clone(),
+                parent_id: parent.clone(),
+            },
+            at(9),
+        )
+        .is_err());
+    }
+
+    // The copy survives a save and a reopen.
+    let key = VaultKey::new().with_password("p");
+    let reopened = open(&save(&db, &key).unwrap(), &key).unwrap();
+    assert_eq!(reopened.groups.len(), db.groups.len());
+    assert_eq!(reopened.entries.len(), db.entries.len());
+}
+
+#[test]
+fn nothing_is_copied_into_or_out_of_the_recycle_bin() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let old = group(&mut db, &root, "Eski", 1);
+    let keep = group(&mut db, &root, "Kalan", 2);
+    let bank = add(&mut db, "Banka", 3);
+    run(&mut db, Op::RecycleGroup { id: old.clone() }, 4);
+    let bin = view::view(&db).recycle_bin_id.unwrap();
+    let into_bin = apply(
+        &mut db,
+        &Op::CloneEntries {
+            ids: vec![bank.clone()],
+            group_id: Some(bin.clone()),
+            title_suffix: None,
+            history: true,
+            references: false,
+        },
+        at(5),
+    );
+    assert!(into_bin.is_err());
+    for (id, parent) in [(&keep, &bin), (&old, &root), (&bin, &root)] {
+        assert!(apply(
+            &mut db,
+            &Op::CopyGroup {
+                id: id.clone(),
+                parent_id: parent.clone(),
+            },
+            at(5),
+        )
+        .is_err());
+    }
+}
+
+/// An entry's or group's custom data for its read-only Properties, by key;
+/// a binary value shows as its size.
+#[test]
+fn custom_data_is_listed_by_key() {
+    use kutup_pass::keepass::db::{CustomDataItem, CustomDataValue};
+    let mut db = kutup_pass::edit::new_vault(
+        "V",
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 1)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap(),
+    )
+    .unwrap();
+    let root = db.root;
+    db.groups.get_mut(&root).unwrap().custom_data.insert(
+        "z".into(),
+        CustomDataItem {
+            value: Some(CustomDataValue::Binary(vec![1, 2, 3])),
+            last_modification_time: None,
+        },
+    );
+    db.groups.get_mut(&root).unwrap().custom_data.insert(
+        "a".into(),
+        CustomDataItem {
+            value: Some(CustomDataValue::String("text".into())),
+            last_modification_time: None,
+        },
+    );
+    let list = kutup_pass::view::custom_data(&db, &root.uuid().to_string()).unwrap();
+    assert_eq!(
+        list.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
+        ["a", "z"]
+    );
+    assert_eq!(list[0].value.as_deref(), Some("text"));
+    assert_eq!((list[1].value.as_deref(), list[1].bytes), (None, 3));
+    assert!(kutup_pass::view::custom_data(&db, "not-a-uuid").is_none());
+    assert!(kutup_pass::view::custom_data(&db, &uuid::Uuid::new_v4().to_string()).is_none());
+}
+
+/// KeePassXC's passkey fields: the view shows a summary and never the
+/// private key (nor in history, nor through a placeholder), and an edit made
+/// from the view keeps it.
+#[test]
+fn a_passkeys_private_key_never_reaches_the_view() {
+    const PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgSECRET\n-----END PRIVATE KEY-----";
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let field = |key: &str, value: &str, protected: bool| FieldView {
+        key: key.into(),
+        value: value.into(),
+        protected,
+    };
+    let id = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: root,
+            entry: EntryInput {
+                fields: vec![
+                    field("Title", "GitHub", false),
+                    field("UserName", "ayse", false),
+                    field("Notes", "{S:KPEX_PASSKEY_PRIVATE_KEY_PEM}", false),
+                    field("KPEX_PASSKEY_RELYING_PARTY", "github.com", false),
+                    field("KPEX_PASSKEY_USERNAME", "ayse", false),
+                    field("KPEX_PASSKEY_CREDENTIAL_ID", "Y3JlZA", false),
+                    field("KPEX_PASSKEY_USER_HANDLE", "dXNlcg", false),
+                    field("KPEX_PASSKEY_PRIVATE_KEY_PEM", PEM, true),
+                ],
+                ..EntryInput::default()
+            },
+        },
+        1,
+    )
+    .id
+    .unwrap();
+    let shown = |db: &kutup_pass::keepass::Database| {
+        let v = view::view(db);
+        let e = entry(&v, &id).clone();
+        (serde_json::to_string(&v).unwrap(), e)
+    };
+    let (json, e) = shown(&db);
+    assert!(!json.contains("SECRET") && !json.contains("BEGIN PRIVATE KEY"));
+    assert!(e.fields.iter().all(|f| !f.key.starts_with("KPEX_PASSKEY")));
+    let passkey = e.passkey.clone().unwrap();
+    assert_eq!(passkey.relying_party, "github.com");
+    assert_eq!(passkey.username, "ayse");
+    assert_eq!(passkey.credential_id, "Y3JlZA");
+    assert!(passkey.has_private_key);
+
+    // A placeholder naming the key resolves to nothing.
+    let stored = &db.entries[&eid(&id)];
+    let context = kutup_pass::resolve::Context {
+        local: at(2),
+        utc: at(2),
+        unix_seconds: 0,
+    };
+    assert_eq!(
+        kutup_pass::resolve::resolve(&db, stored, "{S:KPEX_PASSKEY_PRIVATE_KEY_PEM}", &context),
+        ""
+    );
+    assert_eq!(
+        kutup_pass::resolve::resolve(&db, stored, "{S:KPEX_PASSKEY_RELYING_PARTY}", &context),
+        "github.com"
+    );
+
+    // An edit from what the page has (the view's fields) keeps the passkey.
+    let mut fields = e.fields.clone();
+    fields.iter_mut().find(|f| f.key == "Title").unwrap().value = "GitHub (work)".into();
+    run(
+        &mut db,
+        Op::UpdateEntry {
+            id: id.clone(),
+            entry: EntryInput {
+                fields,
+                ..EntryInput::default()
+            },
+        },
+        3,
+    );
+    let stored = &db.entries[&eid(&id)];
+    assert_eq!(stored.fields["KPEX_PASSKEY_PRIVATE_KEY_PEM"].get(), PEM);
+    assert!(stored.fields["KPEX_PASSKEY_PRIVATE_KEY_PEM"].is_protected());
+    assert_eq!(
+        stored.fields["KPEX_PASSKEY_RELYING_PARTY"].get(),
+        "github.com"
+    );
+
+    // Its history (the state before the edit) doesn't show it either.
+    let history = serde_json::to_string(&view::history(&db, stored)).unwrap();
+    assert!(!history.contains("SECRET"));
+    let (json, _) = shown(&db);
+    assert!(!json.contains("SECRET"));
+
+    // The vault itself keeps it, through a save and a reopen.
+    let key = VaultKey::new().with_password("p");
+    let reopened = open(&save(&db, &key).unwrap(), &key).unwrap();
+    assert_eq!(
+        reopened.entries[&eid(&id)].fields["KPEX_PASSKEY_PRIVATE_KEY_PEM"].get(),
+        PEM
+    );
 }

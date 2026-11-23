@@ -715,6 +715,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         models::ErrorResponse,
         models::MessageResponse,
         models::SettingsResponse,
+        models::PassKdfMinimums,
         models::AdminSettingsResponse,
         crate::registration::RegistrationMode,
         crate::handlers::auth::RegistrationCodeCheck,

@@ -1044,7 +1044,9 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   (`scripts/verify-pass-sync.sh`).
 - **K2a** ✅: vault secrets sealed under the account key
   (`kutup_crypto::pass_vault`; since W3 the account-records scope `passSecrets`); `kutup sync`
-  opens vaults with the sign-in, `kutup pass keep|ls|forget`.
+  opens vaults with the sign-in, `kutup pass keep|ls|forget`; entries from
+  the CLI with `kutup pass ls|search|show|clip|add|edit|rm|generate`
+  (docs/plans/pass-gaps-3.md, B2).
 - **K2b** ✅: vault editing in `kutup-pass` (KeePass semantics: history,
   recycle bin, deletions recorded) and `kutup-pass-wasm`.
 - **K2c** ✅: the website at `pass.<domain>`: vaults from Drive, unlock with
@@ -1074,6 +1076,20 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   prompt checked on a Mac (the osascript dialog is built but not yet run on
   macOS). `kutup ssh-agent install` (systemd / launchd), desktop approval
   and `status` (noticing another agent in the shell) are built.
+- **Pass WASM size.** The search fold (`kutup_search::fold`, NFKD tables)
+  added about 86 KB gzipped and the JSON/ZIP importers about 46 KB; the
+  budget was raised to 830000 (2026-11-17). Done (2026-11-19): the WASM
+  build folds through the browser's own `String.prototype.normalize('NFKD')`
+  (`kutup-search`'s `browser` feature, through `js_sys`), native and the CLI
+  keep the Rust tables, and `crates/kutup-search/tests/vectors/fold.json`
+  holds both to the same results (a Rust test and `scripts/test-pass-wasm.mjs`).
+  Pass went from 826,605 to 761,665 bytes gzipped, and Mail's body search
+  (its index stays in one browser too) from 204,432 to 139,592. Only such
+  indexes may use it: `scripts/check-browser-fold.py` (the static gate) lists
+  the crates allowed; the server's keyed search tokens keep the Rust tables. Next lever: `url` pulls
+  `idna` and ICU's normalizer data into the Pass WASM (the vendored `keepass`
+  crate and `kutup-pass` parse URLs); a host-only parser there would save
+  more.
 - **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing
   single items between users (research 19 §5).
 
@@ -1081,6 +1097,9 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 
 ## Polish / smaller items (future)
 
+- **A licences page per app (third-party credits).** Each app lists what it
+  ships from others and their licences, e.g. Kutup Pass's EFF word list
+  (CC BY 3.0), credited today in the generator's passphrase panel.
 - **Rate limits across backends (2026-10-21):** every rate limit is an
   administrators' setting (Administration → Rate limits, per account where it
   counts per account), but the windows are counted in each backend's memory.

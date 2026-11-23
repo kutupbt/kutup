@@ -1204,6 +1204,14 @@
         "mailKeysPerAddress": "Keys per address",
         "mailKeysPerAddressHint": "Each address keeps its current key and older ones to read old mail. Lists that already hold more keep them."
       },
+      "passLimits": {
+        "passArgon2MinMemoryMib": "Least Argon2 memory (MiB)",
+        "passArgon2MinMemoryMibHint": "A vault's settings can't set Argon2 to use less memory. Vaults already below it still open, with a warning.",
+        "passArgon2MinIterations": "Least Argon2 passes",
+        "passArgon2MinIterationsHint": "A vault's settings can't set fewer Argon2 passes.",
+        "passAesKdfMinRounds": "Least AES-KDF rounds",
+        "passAesKdfMinRoundsHint": "For vaults kept on AES-KDF for older apps: a vault's settings can't set fewer rounds."
+      },
       "federationLimits": {
         "federationRetryBaseSeconds": "First wait (seconds)",
         "federationRetryBaseSecondsHint": "After a failed delivery; each later wait doubles.",

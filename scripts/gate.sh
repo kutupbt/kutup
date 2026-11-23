@@ -45,6 +45,7 @@ static() {
   python3 scripts/check-docs.py
   step "Crypto lint exceptions (docs/plans/crypto-primitives.md)"
   python3 scripts/check-crypto-exceptions.py
+  python3 scripts/check-browser-fold.py
   step "Labels in the registry (docs/plans/w6-key-hierarchy.md §3)"
   scripts/check-labels.sh
   step "API names (docs/plans/api-surface.md §8)"
@@ -92,6 +93,10 @@ rust_workspace() {
   # --workspace on purpose: feature unification turns on kutup-crypto's
   # `mail` feature, and its vector tests need it (a per-crate run skips them).
   cargo test --locked --workspace --all-targets
+  # Offline against the workspace lockfile, so it runs where the workspace
+  # dependencies were fetched (not in the standalone job).
+  step "Vendored keepass crate's own tests"
+  scripts/test-vendored-keepass.sh
 }
 
 rust_standalone() {

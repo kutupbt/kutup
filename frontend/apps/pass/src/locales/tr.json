@@ -11,7 +11,8 @@
   },
   "nav": {
     "vaults": "Tüm kasalar",
-    "yourVaults": "Kasalar"
+    "yourVaults": "Kasalar",
+    "generator": "Üreteç"
   },
   "vaults": {
     "title": "Kasalar",
@@ -147,6 +148,7 @@
     "nameTaken": "Bu klasörde bu adda bir dosya zaten var."
   },
   "groups": {
+    "copied": "{{name}} kopyalandı: {{group}}",
     "label": "Gruplar",
     "all": "Tüm kayıtlar",
     "recycleBin": "Geri dönüşüm kutusu",
@@ -164,7 +166,16 @@
     "emptyBin": "Geri dönüşüm kutusunu boşalt",
     "emptyBinTitle": "Geri dönüşüm kutusu boşaltılsın mı?",
     "emptyBinDescription": "Geri dönüşüm kutusundaki her şey, bu kasayı eşitleyen her cihazda kalıcı olarak silinir.",
-    "binEmptied": "Geri dönüşüm kutusu boşaltıldı"
+    "binEmptied": "Geri dönüşüm kutusu boşaltıldı",
+    "moveTo": "Şuraya taşı",
+    "moved": "{{name}} taşındı: {{group}}",
+    "deletedGroups": "Silinen gruplar",
+    "restore": "Geri al",
+    "restored": "{{name}} içindekilerle birlikte eski yerine geri alındı",
+    "deletedForGood": "{{name}} kalıcı olarak silindi",
+    "edit": "Düzenle",
+    "editTitle": "Grubu düzenle",
+    "notes": "Notlar"
   },
   "entries": {
     "label": "Kayıtlar",
@@ -172,7 +183,11 @@
     "noMatch": "Eşleşen kayıt yok.",
     "binEmpty": "Geri dönüşüm kutusu boş.",
     "empty": "{{group}} içinde henüz kayıt yok.",
-    "pick": "Görmek için bir kayıt seçin."
+    "pick": "Görmek için bir kayıt seçin.",
+    "searchHelp": "Başlık, kullanıcı adı, URL, notlar, etiketler ve alanlarda arar. title:, user:, url:, notes:, tag:, group:, attr:, attachment:, password:, is:expired, is:weak, has:totp ile daraltın; -kelime ya da !kelime dışarıda bırakır, +kelime değerin tamamıyla eşleşir, \"tırnak\" boşlukları korur, * her şeyle eşleşir.",
+    "wholeVault": "Tüm kasa",
+    "withBin": "Geri dönüşüm kutusunu da ara",
+    "searching": "Aranıyor…"
   },
   "entry": {
     "new": "Yeni kayıt",
@@ -202,7 +217,14 @@
     "created": "Kayıt eklendi",
     "saved": "Kayıt kaydedildi",
     "saveFailed": "Değişiklik yapılamadı.",
-    "untitled": "Başlıksız"
+    "untitled": "Başlıksız",
+    "tagSuggestions": "Bu kasadaki etiketler",
+    "excludeFromReports": "Raporlardan hariç tut",
+    "excludeFromReportsHint": "Güvenlik raporu bu kaydı dahil etmez (KeePass'in kalite denetimi kapalı).",
+    "colours": "Renkler",
+    "foregroundColor": "Metin",
+    "backgroundColor": "Arka plan",
+    "referenceNote": "Başka bir kayda başvuruyor: kasa o kaydın değerini gösterir ve kopyalar."
   },
   "detail": {
     "edit": "Düzenle",
@@ -224,11 +246,28 @@
     "otpRemaining_one": "{{count}} saniye",
     "otpRemaining_other": "{{count}} saniye",
     "openUrl": "Siteyi aç",
+    "openNamedUrl": "{{name}} aç",
     "attachments": "Ekler",
     "attach": "Dosya ekle",
-    "attached": "Dosya eklendi",
     "noAttachments": "Ek yok.",
-    "attachmentTooLarge": "Bir dosya en çok 50 MB olabilir.",
+    "attachmentTooLargeNamed": "{{name}} 50 MB’tan büyük olduğu için eklenmedi.",
+    "replaceAttachmentsTitle_one": "Ek değiştirilsin mi?",
+    "replaceAttachmentsTitle_other": "{{count}} ek değiştirilsin mi?",
+    "replaceAttachments": "Bu kayıtta bu adlarda ekler zaten var. Değiştirince eski dosyalar kaydın geçmişinde kalır.",
+    "skipExisting": "Bunları atla",
+    "replace": "Değiştir",
+    "attachedCount_one": "{{count}} dosya eklendi",
+    "attachedCount_other": "{{count}} dosya eklendi",
+    "preview": "{{name}} önizle",
+    "renameAttachment": "{{name}} yeniden adlandır",
+    "renameAttachmentTitle": "Eki yeniden adlandır",
+    "attachmentName": "Ad",
+    "attachmentNameTaken": "Bu kayıtta bu adda bir ek zaten var.",
+    "rename": "Yeniden adlandır",
+    "attachmentRenamed": "Ek yeniden adlandırıldı",
+    "previewHint": "Yalnızca burada gösterilir; hiçbir şey bu sayfadan çıkmaz.",
+    "previewFailed": "Bu ek gösterilemedi.",
+    "previewCut": "Yalnızca ilk 1 MB gösteriliyor. Tamamını görmek için dosyayı indirin.",
     "download": "{{name}} indir",
     "removeAttachment": "{{name}} kaldır",
     "modified": "{{when}} değişti",
@@ -236,7 +275,8 @@
     "history_one": "{{count}} önceki sürüm",
     "history_other": "{{count}} önceki sürüm",
     "expired": "Bu kaydın süresi {{when}} tarihinde doldu.",
-    "clipboardNotCleared": "Kopyalanan gizli bilgi panodan silinemedi: pano erişimine izin verin ya da panoyu kendiniz temizleyin."
+    "clipboardNotCleared": "Kopyalanan gizli bilgi panodan silinemedi: pano erişimine izin verin ya da panoyu kendiniz temizleyin.",
+    "fromReference": "başka bir kayıttan"
   },
   "history": {
     "title": "Önceki sürümler",
@@ -245,9 +285,26 @@
     "show": "Göster",
     "hide": "Gizle",
     "restore": "Geri yükle",
-    "unknownTime": "Zaman bilinmiyor"
+    "unknownTime": "Zaman bilinmiyor",
+    "delete": "Bu sürümü sil",
+    "deleteAll": "Tüm sürümleri sil",
+    "deleteTitle": "Bu sürüm silinsin mi?",
+    "deleteAllTitle": "Tüm eski sürümler silinsin mi?",
+    "deleteDescription": "Bu kasayı eşitleyen her cihazda silinir ve başka bir cihazın kopyasından geri gelmez. Güncel sürüm kalır.",
+    "deleted": "Sürüm silindi",
+    "deletedAll": "Eski sürümler silindi"
   },
   "generator": {
+    "moreGroups": "Daha fazla karakter grubu",
+    "groups": {
+      "braces": "Parantezler",
+      "punctuation": "Noktalama",
+      "quotes": "Tırnaklar",
+      "dashes": "Tireler ve eğik çizgiler",
+      "math": "Matematik",
+      "logograms": "Logogramlar",
+      "extended": "Genişletilmiş ASCII (é ß ¿ …)"
+    },
     "open": "Parola üret",
     "again": "Başka üret",
     "length_one": "Uzunluk: {{count}} karakter",
@@ -258,7 +315,26 @@
     "symbols": "Simge",
     "avoidLookAlikes": "Benzeyenler olmasın",
     "bits": "Yaklaşık {{bits}} bit güç",
-    "use": "Bu parolayı kullan"
+    "use": "Bu parolayı kullan",
+    "title": "Parola üreteci",
+    "description": "Bu cihazda üretilen parolalar ve parola ifadeleri; hiçbir şey kaydedilmez.",
+    "password": "Parola",
+    "passphrase": "Parola ifadesi",
+    "copy": "Kopyala",
+    "value": "Üretilen değer",
+    "custom": "Şunları da kullan",
+    "exclude": "Şunları hiç kullanma",
+    "noCharacters": "Seçilecek karakter kalmadı. Bir grubu açın ya da daha azını dışarıda bırakın.",
+    "words_one": "{{count}} sözcük",
+    "words_other": "{{count}} sözcük",
+    "separator": "Ayırıcı",
+    "case": "Harfler",
+    "cases": {"lower": "küçük harf", "first": "Baş harfi büyük", "random": "Karışık"},
+    "addNumber": "Bir rakam ekle",
+    "addSymbol": "Bir simge ekle",
+    "usePassphrase": "Bu parola ifadesini kullan",
+    "wordlistFailed": "Sözcük listesi yüklenemedi. Bağlantınızı kontrol edip yeniden deneyin.",
+    "wordlistCredit": "Sözcükler EFF Large Wordlist'ten, Electronic Frontier Foundation, CC BY 3.0:"
   },
   "strength": {
     "weak": "Zayıf parola",
@@ -319,12 +395,14 @@
     "fromWebsite": "Sitenin simgesini kullan",
     "reset": "Varsayılan simge",
     "unreadable": "Bu dosya resim olarak okunamadı. En fazla 5 MB'lık bir PNG, JPEG, GIF, WebP, BMP ya da ICO resmi seçin.",
-    "noSiteIcon": "Kutup bu sitenin simgesini getiremedi."
+    "noSiteIcon": "Kutup bu sitenin simgesini getiremedi.",
+    "builtin": "KeePass simgeleri",
+    "pickBuiltin": "KeePass simgesi {{number}}"
   },
   "import": {
     "open": "Başka bir uygulamadan içe aktar…",
     "title": "Parolaları içe aktar",
-    "description": "Başka bir parola yöneticisinin CSV dışa aktarımından: KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass, Dashlane, Chrome, Edge, Brave, Firefox, Safari ya da Apple Parolalar veya sütunları adlandırılmış herhangi bir CSV.",
+    "description": "Başka bir parola yöneticisinin dışa aktarımından: KeePass XML (her şeyiyle), Bitwarden JSON, 1Password 1PUX, Proton Pass ZIP ya da KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass, Dashlane, Chrome, Edge, Brave, Firefox, Safari veya Apple Parolalar CSV'si ya da sütunları adlandırılmış herhangi bir CSV.",
     "chooseFile": "Dışa aktarım dosyası seç",
     "otherFile": "Başka bir dosya seç",
     "format": "Biçim",
@@ -355,8 +433,9 @@
     "deleteExport": "Bir dışa aktarım dosyası parolalarınızı şifresiz tutar. İçe aktardıktan sonra silin (ve çöpü boşaltın).",
     "errors": {
       "empty": "Dosyada kayıt yok.",
-      "tooLarge": "Dosya 20 MB'tan büyük.",
-      "unreadable": "Dosya CSV olarak okunamadı. UTF-8 olarak yeniden dışa aktarın. {{detail}}",
+      "tooLarge": "Dosya çok büyük: CSV en fazla 20 MB, diğer dışa aktarımlar 64 MB olabilir.",
+      "unreadable": "Dosya okunamadı. Yeniden dışa aktarın (CSV ise UTF-8 olarak). {{detail}}",
+      "encrypted": "Dışa aktarım Kutup Pass'in açamadığı bir parolayla korunuyor. Parolasız yeniden dışa aktarın, içe aktarın, sonra dosyayı silin.",
       "unknownFormat": "Bu sütunlar bir parola dışa aktarımına benzemiyor. Biçimini seçin ya da sütunları adlandırın (Title, Username, Password, URL, Notes).",
       "missingColumns": "Dosyada bu biçimin sütunları eksik: {{detail}}.",
       "tooMany": "Dosyada 50.000'den fazla kayıt var."
@@ -444,7 +523,127 @@
     "submit": "Yükle",
     "unreadable": "Bu dosya okunamadı. Yeniden seçin."
   },
+  "settings": {
+    "open": "Kasa ayarları",
+    "title": "Kasa ayarları",
+    "description": "Bu ayarlar kasanın içinde saklanır; her cihazda ve diğer KeePass uygulamalarında geçerlidir.",
+    "general": "Genel",
+    "encryption": "Şifreleme",
+    "security": "Güvenlik",
+    "securityDescription": "Kasanın parolasını veya anahtar dosyasını değiştirin. Bu kasayı eşitleyen her cihaz onu yeni anahtarla açar.",
+    "saved": "Kasa ayarları kaydedildi",
+    "vaultDescription": "Açıklama",
+    "defaultUserName": "Varsayılan kullanıcı adı",
+    "defaultUserNameHint": "Yeni kayıtlara doldurulur.",
+    "recycleBin": "Geri dönüşüm kutusu kullan",
+    "recycleBinHint": "Silinen kayıtlar ve gruplar önce oraya gider. Kapalıyken silme kalıcıdır.",
+    "history": "Kayıt geçmişi",
+    "historyItems": "En fazla bu kadar eski sürüm tut",
+    "historySize": "Kayıt başına en fazla bu kadar MiB tut",
+    "historyRange": "Sürüm sayısı 0 ile 1000, boyut 1 ile 1024 MiB arasındadır.",
+    "historyTrims": "Kaydettiğinizde yeni sınırı aşan eski sürümler her kayıttan silinir.",
+    "kdf": "Anahtar türetme",
+    "kdfKind": {
+      "argon2id": "Argon2id (önerilen)",
+      "argon2d": "Argon2d",
+      "aesKdf": "AES-KDF (eski KeePass uygulamaları)"
+    },
+    "memory": "Bellek (MiB)",
+    "iterations": "Geçiş",
+    "parallelism": "İş parçacığı",
+    "rounds": "Tur",
+    "aesHint": "Yalnızca eski KeePass uygulamalarının açması gereken kasalar için; Argon2id saldırılara daha dayanıklıdır.",
+    "benchmark": "1 sn ölç",
+    "benchmarkFailed": "Bu ayarlarla ölçüm yapılamadı.",
+    "measured": "Açmak bu cihazda yaklaşık {{seconds}} sn sürüyor.",
+    "belowMinimum": "Bu sunucu Argon2 için en az {{memory}} MiB ve {{iterations}} geçiş, AES-KDF için en az {{rounds}} tur ister.",
+    "outOfRange": "Bellek en fazla 2048 MiB, geçiş en fazla 10.000, iş parçacığı 1 ile 16 arası, tur en fazla 1.000.000.000 olabilir.",
+    "slowWarning": "Daha güçlü ayarlar kasayı telefonlar dahil her cihazda daha yavaş açar. Ölçümü en yavaş cihazınızda yapın.",
+    "compression": "Kasa dosyasını sıkıştır",
+    "weakTitle": "Bu kasanın şifrelemesi bu sunucunun istediğinden zayıf",
+    "weakDescription": "Kasa yine açılır. Çalınan bir kopyanın kırılması zorlaşsın diye anahtar türetmesini güçlendirin.",
+    "strengthen": "Güçlendir"
+  },
+  "tags": {
+    "label": "Etiketler"
+  },
+  "list": {
+    "sort": "Sırala",
+    "by": {
+      "title": "Başlık",
+      "userName": "Kullanıcı adı",
+      "url": "URL",
+      "modified": "Değiştirilme",
+      "created": "Oluşturulma",
+      "expiry": "Son kullanma"
+    },
+    "ascending": "Artan",
+    "descending": "Azalan",
+    "columns": "Listede göster",
+    "column": {
+      "userName": "Kullanıcı adı",
+      "url": "URL",
+      "modified": "Değiştirilme",
+      "expiry": "Son kullanma",
+      "attachments": "Ekler",
+      "totp": "Tek kullanımlık kod"
+    },
+    "modifiedAt": "Değiştirildi: {{when}}",
+    "expiresAt": "Son kullanma: {{when}}",
+    "attachmentCount_one": "{{count}} ek",
+    "attachmentCount_other": "{{count}} ek"
+  },
+  "clone": {
+    "open": "Kopyala",
+    "title_one": "Kaydı kopyala",
+    "title_other": "{{count}} kaydı kopyala",
+    "description_one": "Kopya aynı grupta, yanına konur.",
+    "description_other": "Her kopya aynı grupta, kaydının yanına konur.",
+    "suffix": " - Kopya",
+    "appendSuffix": "Başlığa “{{suffix}}” ekle",
+    "copyHistory": "Geçmişi de kopyala",
+    "submit": "Kopyala",
+    "done_one": "Kayıt kopyalandı",
+    "done_other": "{{count}} kayıt kopyalandı",
+    "references": "Kullanıcı adı ve parola için asıl kayda başvuru kullan"
+  },
+  "export": {
+    "open": "Dışa aktar…",
+    "title": "Kasayı dışa aktar",
+    "description": "Diğer parola yöneticilerinin okuyabildiği bir dosya. Geri dönüşüm kutusundaki kayıtlar dahil edilmez.",
+    "warningTitle": "Dosya şifrelenmemiş",
+    "warning": "Dosyayı ele geçiren herkes içindeki tüm parolaları okuyabilir. Paylaşılan sürücülerden ve e-postadan uzak tutun, işiniz bitince silin.",
+    "password": "Kutup parolanız",
+    "passwordHint": "Her dışa aktarımdan önce sorulur; böylece kilidi açık bir ekranda kimse tüm parolaları bir anda alamaz.",
+    "submit": "CSV olarak dışa aktar",
+    "done": "Kasa dışa aktarıldı",
+    "wrongPassword": "Bu sizin Kutup parolanız değil.",
+    "slowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin.",
+    "locked": "Çok fazla yanlış parola: hesabınız, oturum açmada olduğu gibi bir süre kilitlendi.",
+    "failed": "Dışa aktarım yapılamadı. Bağlantınızı kontrol edip yeniden deneyin.",
+    "format": "Biçim",
+    "formats": {"csv": "CSV", "csvHint": "KeePassXC sütunları; çoğu parola yöneticisi okur. Geçmiş, ekler ve simgeler dahil değildir.", "xml": "KeePass XML", "xmlHint": "Her şey: geçmiş, ekler, simgeler ve özel alanlar. KeePass ve Kutup Pass geri okur."},
+    "submitXml": "KeePass XML olarak dışa aktar"
+  },
+  "totp": {
+    "open": "Tek kullanımlık kodları ayarla",
+    "title": "Tek kullanımlık kodlar",
+    "description": "Sitenin verdiği gizli anahtar (QR kodunun altındaki metin) ve site belirtiyorsa ayarları.",
+    "secret": "Gizli anahtar",
+    "secretHint": "A–Z harfleri ve 2–7 rakamları; boşluklar önemli değil.",
+    "digits": "Basamak",
+    "steam": "Steam Guard",
+    "period": "Her (saniye)",
+    "algorithm": "Algoritma",
+    "badSecret": "Bu gizli anahtar en az 16 karakterlik base32 metni değil.",
+    "qrTitle": "QR kodunu göster",
+    "qrDescription": "Aynı kodları orada da üretmek için başka bir doğrulayıcı uygulamayla tarayın.",
+    "qrWarning": "Bu kodu gören ya da fotoğrafını çeken herkes tek kullanımlık kodlarınızı üretebilir. Kimsenin bakmadığı bir yerde gösterin.",
+    "qrShow": "QR kodunu göster"
+  },
   "bulk": {
+    "copied_other": "{{count}} kayıt kopyalandı: {{group}}",
+    "copied_one": "{{count}} kayıt kopyalandı: {{group}}",
     "toolbar": "Seçili kayıtlar",
     "selected_one": "{{count}} seçili",
     "selected_other": "{{count}} seçili",
@@ -527,5 +726,30 @@
     "done": "Kasanın anahtarı değiştirildi",
     "submit": "Anahtarı değiştir",
     "pendingCopyPassword": "Kutup yanıt vermedi. Kasa yeni anahtarını korur ve bağlantı gelince onunla kaydedilir. Üretilen parola yalnızca bu sayfada: kapatmadan önce gösterip şimdi kopyalayın."
+  },
+  "properties": {
+    "title": "Özellikler",
+    "uuid": "UUID",
+    "copyUuid": "UUID’yi kopyala",
+    "uuidCopied": "UUID kopyalandı",
+    "created": "Oluşturulma",
+    "modified": "Değiştirilme",
+    "accessed": "Erişim",
+    "customData": "Özel veriler",
+    "noCustomData": "Özel veri yok.",
+    "key": "Anahtar",
+    "value": "Değer",
+    "binary": "İkili, {{size}}",
+    "failed": "Özel veriler okunamadı."
+  },
+  "passkey": {
+    "title": "Geçiş anahtarı",
+    "site": "Site",
+    "username": "Kullanıcı adı",
+    "credentialId": "Kimlik bilgisi kimliği",
+    "copy": "{{what}} kopyala",
+    "copied": "{{what}} kopyalandı",
+    "keptHint": "Özel anahtarı kasada kalır ve hiç gösterilmez. Onunla oturum açmak için KeePassXC gibi KeePass geçiş anahtarlarını kullanan bir uygulama gerekir.",
+    "noKeyHint": "Bu geçiş anahtarının özel anahtarı yok, bu yüzden oturum açamaz."
   }
 }

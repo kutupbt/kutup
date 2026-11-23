@@ -3785,12 +3785,15 @@ dependencies = [
 name = "kutup-pass"
 version = "0.1.0"
 dependencies = [
+ "base32",
  "base64 0.22.1",
  "chrono",
  "csv",
+ "flate2",
  "hex",
  "keepass",
  "kutup-crypto",
+ "kutup-search",
  "proptest",
  "quick-xml",
  "rsa",
@@ -3802,6 +3805,8 @@ dependencies = [
  "ssh-encoding",
  "ssh-key",
  "thiserror 2.0.18",
+ "totp-lite",
+ "url",
  "uuid",
  "zeroize",
 ]
@@ -3827,6 +3832,7 @@ name = "kutup-search"
 version = "0.1.0"
 dependencies = [
  "ciborium",
+ "js-sys",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

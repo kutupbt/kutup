@@ -27,6 +27,13 @@ fn open_error(error: kutup_pass::kdbx::KdbxError) -> JsValue {
 /// What a file is, from its header alone: `{ kind: "supported", version:
 /// "4.1", upgrade }`, `{ kind: "unsupported", version }` or `{ kind:
 /// "notKeePass" }`.
+/// Text folded as the vault's search folds it, for the check that the
+/// browser's fold matches the native one (scripts/test-pass-wasm.mjs).
+#[wasm_bindgen(js_name = searchFold)]
+pub fn search_fold(text: &str) -> String {
+    kutup_pass::search::fold(text)
+}
+
 #[wasm_bindgen(js_name = probeVault)]
 pub fn probe_vault(contents: &[u8]) -> Result<JsValue, JsValue> {
     #[derive(Serialize)]
@@ -209,9 +216,93 @@ impl Vault {
             .ok_or_else(|| js_error("no such entry"))
     }
 
+    /// The ids of the entries matching `query` (`kutup_pass::search`: field
+    /// words, `-`, quotes, `*`), in no particular order. `weakIds`: the
+    /// entries the page's health report counts as weak, for `is:weak`.
+    pub fn search(
+        &self,
+        query: &str,
+        weak_ids: Vec<String>,
+        now_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        let weak = weak_ids
+            .iter()
+            .filter_map(|id| uuid::Uuid::parse_str(id).ok().map(EntryId::from))
+            .collect();
+        let context = kutup_pass::search::Context {
+            weak: &weak,
+            now: time(now_ms)?,
+        };
+        to_js(&kutup_pass::search::search(&self.db, query, &context))
+    }
+
+    /// The vault as CSV in KeePassXC's columns, in the clear (the page asks
+    /// for the account's password first); the recycle bin left out.
+    #[wasm_bindgen(js_name = exportCsv)]
+    pub fn export_csv(&self) -> String {
+        kutup_pass::export::csv(&self.db)
+    }
+
+    /// The vault as an unencrypted KeePass XML file (history, attachments
+    /// and icons included), in the clear (the page asks for the account's
+    /// password first); the recycle bin left out.
+    #[wasm_bindgen(js_name = exportKeePassXml)]
+    pub fn export_keepass_xml(&self) -> Result<Vec<u8>, JsValue> {
+        kutup_pass::export::keepass_xml(&self.db).map_err(js_error)
+    }
+
+    /// The entry's fields with references and placeholders resolved
+    /// (`kutup_pass::resolve`), for showing and copying: `[{ key, value,
+    /// fromReference }]`, only for the fields that change. `offsetMinutes`:
+    /// the device's local offset from UTC, for `{DT_*}`.
+    #[wasm_bindgen(js_name = resolvedFields)]
+    pub fn resolved_fields(
+        &self,
+        entry_id: &str,
+        now_ms: f64,
+        offset_minutes: f64,
+    ) -> Result<JsValue, JsValue> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Resolved {
+            key: String,
+            value: String,
+            from_reference: bool,
+        }
+        let entry = self.entry(entry_id)?;
+        let utc = time(now_ms)?;
+        let context = kutup_pass::resolve::Context {
+            local: utc + chrono::Duration::minutes(offset_minutes as i64),
+            utc,
+            unix_seconds: (now_ms / 1000.0).floor().max(0.0) as u64,
+        };
+        let mut out: Vec<Resolved> = entry
+            .fields
+            .iter()
+            .filter(|(key, v)| v.get().contains('{') && !kutup_pass::passkey::is_passkey_field(key))
+            .filter_map(|(key, v)| {
+                let value = kutup_pass::resolve::resolve(&self.db, entry, v.get(), &context);
+                (value != *v.get()).then(|| Resolved {
+                    key: key.clone(),
+                    from_reference: kutup_pass::resolve::has_reference(v.get()),
+                    value,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.key.cmp(&b.key));
+        to_js(&out)
+    }
+
     /// An entry's earlier states, oldest first.
     pub fn history(&self, entry_id: &str) -> Result<JsValue, JsValue> {
         to_js(&view::history(&self.db, self.entry(entry_id)?))
+    }
+
+    /// An entry's or group's custom data (`[{ key, value, bytes, modified }]`,
+    /// by key), for its read-only Properties.
+    #[wasm_bindgen(js_name = customData)]
+    pub fn custom_data(&self, id: &str) -> Result<JsValue, JsValue> {
+        to_js(&view::custom_data(&self.db, id).ok_or_else(|| js_error("no such entry or group"))?)
     }
 
     /// The contents of an entry's attachment.
@@ -281,8 +372,12 @@ impl Vault {
         };
         let theirs_under_current_key = !theirs_under_previous_key && theirs_key.is_none();
         let (merged, report) = kutup_pass::merge(base.as_ref(), &self.db, &theirs_db);
+        // Theirs in its own file format and ciphers (a save here upgrades
+        // them): only the settings a merge decides count.
         let mut a = merged.clone();
         a.config = theirs_db.config.clone();
+        a.config.kdf_config = merged.config.kdf_config.clone();
+        a.config.compression_config = merged.config.compression_config.clone();
         let differs_from_theirs = a != theirs_db;
         self.db = merged;
         if let Some(key) = theirs_key {
@@ -540,6 +635,15 @@ struct ImportFailure {
     detail: String,
 }
 
+/// Derives one key with a key derivation (`kutup_pass::edit::KdfInput`, e.g.
+/// `{ kind: "argon2id", memoryMib, iterations, parallelism }`), for the
+/// vault settings page to time; throws for one out of range.
+#[wasm_bindgen(js_name = deriveOnce)]
+pub fn derive_once(kdf: JsValue) -> Result<(), JsValue> {
+    let kdf: edit::KdfInput = serde_wasm_bindgen::from_value(kdf).map_err(js_error)?;
+    edit::derive_once(&kdf).map_err(js_error)
+}
+
 /// The formats an import can be read as: `[{ id, name }]`.
 #[wasm_bindgen(js_name = importFormats)]
 pub fn import_formats() -> Result<JsValue, JsValue> {
@@ -603,6 +707,7 @@ pub fn import_preview(data: &[u8], provider: Option<String>) -> Result<JsValue, 
             let (code, detail) = match &error {
                 ImportError::Empty => ("empty", String::new()),
                 ImportError::TooLarge => ("tooLarge", String::new()),
+                ImportError::Encrypted => ("encrypted", String::new()),
                 ImportError::Unreadable(why) => ("unreadable", why.clone()),
                 ImportError::UnknownFormat => ("unknownFormat", String::new()),
                 ImportError::MissingColumns(_, columns) => ("missingColumns", columns.clone()),

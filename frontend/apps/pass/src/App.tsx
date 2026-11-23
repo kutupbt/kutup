@@ -8,6 +8,7 @@ import { Toaster } from '@kutup/ui/components/sonner'
 import { TooltipProvider } from '@kutup/ui/components/tooltip'
 import { Boot } from './app/Boot'
 import { PassShell } from './app/PassShell'
+import { GeneratorPage } from './features/GeneratorPage'
 import { VaultPage } from './features/VaultPage'
 import { VaultsPage } from './features/VaultsPage'
 import { NotFoundPage } from './NotFoundPage'
@@ -35,6 +36,7 @@ export function App() {
               <Route index element={<VaultsPage />} />
               {/* Drive's New → Password vault: the create dialog, its folder picked. */}
               <Route path="/new" element={<VaultsPage creating />} />
+              <Route path="/generator" element={<GeneratorPage />} />
               <Route path="/v/:fileId" element={<VaultPage />} />
               <Route path="/v/:fileId/e/:entryId" element={<VaultPage />} />
             </Route>

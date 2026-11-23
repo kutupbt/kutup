@@ -6,7 +6,7 @@
 
 use base64::Engine as _;
 use chrono::NaiveDateTime;
-use keepass::db::{CustomDataValue, Entry, Group, GroupId, Icon};
+use keepass::db::{CustomDataValue, Entry, EntryId, Group, GroupId, Icon};
 use keepass::Database;
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +30,10 @@ pub struct VaultView {
     pub history_max_items: Option<i64>,
     /// In bytes; `None`: unlimited.
     pub history_max_size: Option<i64>,
+    /// The key derivation; `None` for one this code can't set.
+    pub kdf: Option<crate::edit::KdfInput>,
+    /// Whether the file is compressed (GZip).
+    pub compression: bool,
     /// Every group, parents before children, siblings in their order.
     pub groups: Vec<GroupView>,
     /// Every entry, by group in the order above, then in the group's order.
@@ -70,6 +74,9 @@ pub struct GroupView {
     pub tags: Vec<String>,
     pub expires: bool,
     pub expiry: Option<String>,
+    /// When it was made and last changed (its Properties).
+    pub created: Option<String>,
+    pub modified: Option<String>,
     pub is_recycle_bin: bool,
     /// The recycle bin or a group inside it.
     pub in_recycle_bin: bool,
@@ -142,6 +149,8 @@ pub struct EntryView {
     /// side, its history the other, until someone reviews it.
     pub review: Vec<String>,
     pub in_recycle_bin: bool,
+    /// Its passkey (KeePassXC's), without the private key.
+    pub passkey: Option<crate::passkey::PasskeyView>,
 }
 
 /// A time as the views write it.
@@ -252,6 +261,9 @@ pub fn fields(entry: &Entry) -> Vec<FieldView> {
         .fields
         .iter()
         .filter(|(key, _)| !STANDARD_FIELDS.contains(&key.as_str()))
+        // A passkey is shown by its own card, never its fields: the private
+        // key must not reach the page (crate::passkey).
+        .filter(|(key, _)| !crate::passkey::is_passkey_field(key))
         .map(|(key, value)| FieldView {
             key: key.clone(),
             value: value.get().clone(),
@@ -309,6 +321,7 @@ fn entry_view(db: &Database, entry: &Entry, history_count: usize) -> EntryView {
         history_count,
         review: review_fields(entry),
         in_recycle_bin: group_in_recycle_bin(db, entry.parent),
+        passkey: crate::passkey::passkey(entry),
     }
 }
 
@@ -326,6 +339,8 @@ fn group_view(db: &Database, group: &Group, depth: usize, bin: Option<GroupId>) 
         tags: group.tags.clone(),
         expires: group.times.expires.unwrap_or(false),
         expiry: group.times.expiry.map(format_time),
+        created: group.times.creation.map(format_time),
+        modified: group.times.last_modification.map(format_time),
         is_recycle_bin: Some(group.id) == bin,
         in_recycle_bin: group_in_recycle_bin(db, group.id),
     }
@@ -368,6 +383,11 @@ pub fn view(db: &Database) -> VaultView {
         recycle_bin_enabled: db.meta.recyclebin_enabled.unwrap_or(true),
         history_max_items: limit(db.meta.history_max_items),
         history_max_size: limit(db.meta.history_max_size),
+        kdf: crate::edit::KdfInput::of(&db.config.kdf_config),
+        compression: !matches!(
+            db.config.compression_config,
+            keepass::config::CompressionConfig::None
+        ),
         groups,
         entries,
         custom_icons: custom_icons
@@ -391,6 +411,47 @@ pub fn history(db: &Database, entry: &Entry) -> Vec<EntryView> {
         .collect()
 }
 
+/// One custom data item of an entry or group, as KeePassXC's Properties
+/// tab lists it (read-only): a binary value shows as its size.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomDataView {
+    pub key: String,
+    /// The text, or `None` for a binary value (then `bytes` is its size).
+    pub value: Option<String>,
+    pub bytes: usize,
+    pub modified: Option<String>,
+}
+
+/// The custom data of the entry or group with id `id` (a UUID), by key;
+/// `None` when the vault has neither.
+pub fn custom_data(db: &Database, id: &str) -> Option<Vec<CustomDataView>> {
+    let uuid = uuid::Uuid::parse_str(id).ok()?;
+    let items = db
+        .entries
+        .get(&EntryId::from(uuid))
+        .map(|e| &e.custom_data)
+        .or_else(|| db.groups.get(&GroupId::from(uuid)).map(|g| &g.custom_data))?;
+    let mut list: Vec<CustomDataView> = items
+        .iter()
+        .map(|(key, item)| {
+            let (value, bytes) = match &item.value {
+                Some(CustomDataValue::String(text)) => (Some(text.clone()), text.len()),
+                Some(CustomDataValue::Binary(data)) => (None, data.len()),
+                None => (Some(String::new()), 0),
+            };
+            CustomDataView {
+                key: key.clone(),
+                value,
+                bytes,
+                modified: item.last_modification_time.map(format_time),
+            }
+        })
+        .collect();
+    list.sort_by(|a, b| a.key.cmp(&b.key));
+    Some(list)
+}
+
 /// The contents of an entry's attachment.
 pub fn attachment<'a>(db: &'a Database, entry: &Entry, name: &str) -> Option<&'a [u8]> {
     let id = entry.attachments.get(name)?;
@@ -410,11 +471,10 @@ pub struct OtpView {
 
 /// The entry's current one-time code, if it has a readable TOTP secret.
 pub fn otp(entry: &Entry, unix_seconds: u64) -> Option<OtpView> {
-    let totp = entry.get_otp().ok()?;
-    let code = totp.value_at(unix_seconds);
+    let settings = crate::otp::settings(entry)?;
     Some(OtpView {
-        code: code.code,
-        period: code.period.as_secs(),
-        remaining: code.valid_for.as_secs(),
+        code: crate::otp::code(&settings, unix_seconds),
+        period: settings.period,
+        remaining: settings.period - unix_seconds % settings.period,
     })
 }

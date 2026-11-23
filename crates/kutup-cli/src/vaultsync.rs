@@ -232,7 +232,7 @@ impl VaultKeys {
         keys.len() - 1
     }
 
-    fn key(&self, rel: &str, index: usize) -> Option<&VaultKey> {
+    pub(crate) fn key(&self, rel: &str, index: usize) -> Option<&VaultKey> {
         self.known.get(rel)?.as_ref()?.get(index)
     }
 

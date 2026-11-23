@@ -21,6 +21,11 @@ interface WasmVault {
   view(): unknown
   apply(op: unknown, nowMs: number): unknown
   history(entryId: string): unknown
+  customData(id: string): unknown
+  resolvedFields(entryId: string, nowMs: number, offsetMinutes: number): unknown
+  search(query: string, weakIds: string[], nowMs: number): unknown
+  exportCsv(): string
+  exportKeePassXml(): Uint8Array
   attachment(entryId: string, name: string): Uint8Array
   otp(entryId: string, nowMs: number): unknown
   save(): Uint8Array
@@ -46,6 +51,7 @@ interface PassWasm {
   probeVault(contents: Uint8Array): unknown
   resealKeptKey(envelope: string, masterKeys: MasterKeysBytes, binding: string, from: string, to: string, revision: number): string
   generateKeyFile(): Uint8Array
+  deriveOnce(kdf: unknown): void
 }
 
 let wasm: Promise<PassWasm> | null = null
@@ -91,6 +97,16 @@ async function run(request: Request): Promise<unknown> {
       return vault(request.handle).apply(request.op, request.now)
     case 'history':
       return vault(request.handle).history(request.entryId)
+    case 'customData':
+      return vault(request.handle).customData(request.target)
+    case 'resolvedFields':
+      return vault(request.handle).resolvedFields(request.entryId, request.now, request.offsetMinutes)
+    case 'exportCsv':
+      return vault(request.handle).exportCsv()
+    case 'exportKeePassXml':
+      return vault(request.handle).exportKeePassXml()
+    case 'search':
+      return vault(request.handle).search(request.query, request.weakIds, request.now)
     case 'attachment':
       return vault(request.handle).attachment(request.entryId, request.name)
     case 'otp':
@@ -111,6 +127,9 @@ async function run(request: Request): Promise<unknown> {
       return vault(request.handle).keyParts()
     case 'generateKeyFile':
       return module.generateKeyFile()
+    case 'deriveOnce':
+      module.deriveOnce(request.kdf)
+      return null
     case 'close': {
       vaults.get(request.handle)?.free()
       vaults.delete(request.handle)

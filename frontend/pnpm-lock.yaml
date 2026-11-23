@@ -748,6 +748,9 @@ importers:
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      qrcode.react:
+        specifier: ^4.2.0
+        version: 4.2.0(react@18.3.1)
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -763,10 +766,16 @@ importers:
       sonner:
         specifier: ^2.0.7
         version: 2.0.8(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      zxcvbn:
+        specifier: ^4.4.2
+        version: 4.4.2
     devDependencies:
       '@kutup/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@types/zxcvbn':
+        specifier: ^4.4.4
+        version: 4.4.5
       vite:
         specifier: ^8.1.6
         version: 8.1.6(@types/node@25.4.0)(esbuild@0.25.12)(jiti@2.7.0)

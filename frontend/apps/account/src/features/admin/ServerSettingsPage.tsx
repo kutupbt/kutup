@@ -271,6 +271,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
               <Field label={t('admin.settings.passVaultMax')} error={errors.passVaultMib?.message} description={t('admin.settings.passVaultMaxHint')} required>
                 {(field) => <Input {...field} {...register('passVaultMib')} type="number" min={1} max={1024} step={1} inputMode="numeric" />}
               </Field>
+              {numericFields('pass')}
             </CardContent>
           </Card>
         </Section>

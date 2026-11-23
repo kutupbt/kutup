@@ -680,6 +680,17 @@ pub async fn get_public_settings(
         name_hold_days,
         old_address_receive_days,
         pass_vault_max_bytes: crate::site_settings::pass_vault_max_bytes(&state.pool).await?,
+        pass_kdf_minimums: crate::models::PassKdfMinimums {
+            argon2_memory_mib: crate::site_settings::PASS_ARGON2_MIN_MEMORY_MIB
+                .load(&state.pool)
+                .await?,
+            argon2_iterations: crate::site_settings::PASS_ARGON2_MIN_ITERATIONS
+                .load(&state.pool)
+                .await?,
+            aes_kdf_rounds: crate::site_settings::PASS_AES_KDF_MIN_ROUNDS
+                .load(&state.pool)
+                .await?,
+        },
         public_sharing: crate::public_sharing::site(&state.pool).await?,
     })
     .into_response();

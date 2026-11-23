@@ -293,3 +293,340 @@ fn an_import_lands_in_its_own_group_and_all_or_nothing() {
     .is_err());
     assert_eq!(db, before);
 }
+
+#[test]
+fn a_csv_export_reads_back_as_keepassxc() {
+    use chrono::NaiveDate;
+    use kutup_pass::edit::{apply, new_vault, EntryInput, Op};
+    use kutup_pass::view::{self, FieldView};
+    let now = NaiveDate::from_ymd_opt(2026, 11, 17)
+        .unwrap()
+        .and_hms_opt(9, 0, 0)
+        .unwrap();
+    let mut db = new_vault("Kişisel", now).unwrap();
+    let root = view::view(&db).root_group_id;
+    let work = apply(
+        &mut db,
+        &Op::CreateGroup {
+            parent_id: root.clone(),
+            name: "İş".into(),
+        },
+        now,
+    )
+    .unwrap()
+    .id
+    .unwrap();
+    let field = |key: &str, value: &str| FieldView {
+        key: key.into(),
+        value: value.into(),
+        protected: key == "Password",
+    };
+    for (group, title, notes) in [
+        (&work, "Banka \"Ana\"", "satır 1\nsatır 2"),
+        (&root, "Posta", ""),
+    ] {
+        apply(
+            &mut db,
+            &Op::CreateEntry {
+                group_id: group.clone(),
+                entry: EntryInput {
+                    fields: vec![
+                        field("Title", title),
+                        field("UserName", "ayşe"),
+                        field("Password", "p,1"),
+                        field("URL", "https://x.example"),
+                        field("Notes", notes),
+                    ],
+                    ..EntryInput::default()
+                },
+            },
+            now,
+        )
+        .unwrap();
+    }
+    // A deleted entry stays out of the file.
+    let gone = apply(
+        &mut db,
+        &Op::CreateEntry {
+            group_id: root.clone(),
+            entry: EntryInput {
+                fields: vec![field("Title", "Silinen")],
+                ..EntryInput::default()
+            },
+        },
+        now,
+    )
+    .unwrap()
+    .id
+    .unwrap();
+    apply(&mut db, &Op::DeleteEntry { id: gone }, now).unwrap();
+
+    let csv = kutup_pass::export::csv(&db);
+    assert!(csv.starts_with("\"Group\",\"Title\",\"Username\",\"Password\",\"URL\",\"Notes\",\"TOTP\",\"Icon\",\"Last Modified\",\"Created\"\n"));
+    assert!(!csv.contains("Silinen"));
+    let parsed = kutup_pass::import::parse(csv.as_bytes(), None).unwrap();
+    assert_eq!(parsed.provider, kutup_pass::import::Provider::KeePassXc);
+    assert_eq!(parsed.entries.len(), 2);
+    let bank = parsed
+        .entries
+        .iter()
+        .find(|e| e.title == "Banka \"Ana\"")
+        .unwrap();
+    assert_eq!(bank.group, ["İş"]);
+    assert_eq!(bank.password, "p,1");
+    assert_eq!(bank.notes, "satır 1\nsatır 2");
+    let mail = parsed.entries.iter().find(|e| e.title == "Posta").unwrap();
+    assert!(mail.group.is_empty());
+}
+
+mod keepass_xml {
+    use std::path::Path;
+
+    use base64::Engine as _;
+    use chrono::{NaiveDate, NaiveDateTime};
+    use kutup_pass::edit::{apply, new_vault, EntryInput, Op};
+    use kutup_pass::import::{parse, Provider};
+    use kutup_pass::keepass::Database;
+    use kutup_pass::view::{self, FieldView, VaultView};
+    use kutup_pass::{open, save, VaultKey};
+
+    fn now() -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 11, 17)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+    }
+
+    fn import(db: &mut Database, bytes: &[u8]) -> String {
+        apply(
+            db,
+            &Op::ImportCsv {
+                data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                provider: None,
+                group_name: "XML".into(),
+            },
+            now(),
+        )
+        .unwrap()
+        .id
+        .unwrap()
+    }
+
+    fn by_title<'a>(v: &'a VaultView, title: &str) -> &'a view::EntryView {
+        v.entries
+            .iter()
+            .find(|e| {
+                e.fields
+                    .iter()
+                    .any(|f| f.key == "Title" && f.value == title)
+            })
+            .unwrap_or_else(|| panic!("no entry {title}"))
+    }
+
+    fn field<'a>(e: &'a view::EntryView, key: &str) -> &'a FieldView {
+        e.fields.iter().find(|f| f.key == key).unwrap()
+    }
+
+    #[test]
+    fn a_vault_round_trips_through_keepass_xml() {
+        let f = |key: &str, value: &str, protected: bool| FieldView {
+            key: key.into(),
+            value: value.into(),
+            protected,
+        };
+        let mut db = new_vault("Kişisel", now()).unwrap();
+        let root = view::view(&db).root_group_id;
+        let work = apply(
+            &mut db,
+            &Op::CreateGroup {
+                parent_id: root.clone(),
+                name: "İş".into(),
+            },
+            now(),
+        )
+        .unwrap()
+        .id
+        .unwrap();
+        let bank = apply(
+            &mut db,
+            &Op::CreateEntry {
+                group_id: work.clone(),
+                entry: EntryInput {
+                    fields: vec![
+                        f("Title", "Banka <&>", false),
+                        f("Password", "p1", true),
+                        f("PIN", "4321", true),
+                        f("Not", "açık", false),
+                    ],
+                    tags: vec!["finans".into()],
+                    ..EntryInput::default()
+                },
+            },
+            now(),
+        )
+        .unwrap()
+        .id
+        .unwrap();
+        apply(
+            &mut db,
+            &Op::AddAttachment {
+                entry_id: bank.clone(),
+                name: "kart.bin".into(),
+                data: base64::engine::general_purpose::STANDARD.encode([0u8, 159, 255, 7]),
+            },
+            now(),
+        )
+        .unwrap();
+        apply(
+            &mut db,
+            &Op::UpdateEntry {
+                id: bank.clone(),
+                entry: EntryInput {
+                    fields: vec![
+                        f("Title", "Banka <&>", false),
+                        f("Password", "p2", true),
+                        f("PIN", "4321", true),
+                        f("Not", "açık", false),
+                    ],
+                    tags: vec!["finans".into()],
+                    ..EntryInput::default()
+                },
+            },
+            now(),
+        )
+        .unwrap();
+        let gone = apply(
+            &mut db,
+            &Op::CreateEntry {
+                group_id: root.clone(),
+                entry: EntryInput {
+                    fields: vec![f("Title", "Silinen", false)],
+                    ..EntryInput::default()
+                },
+            },
+            now(),
+        )
+        .unwrap()
+        .id
+        .unwrap();
+        apply(&mut db, &Op::DeleteEntry { id: gone }, now()).unwrap();
+
+        let xml = kutup_pass::export::keepass_xml(&db).unwrap();
+        let text = String::from_utf8(xml.clone()).unwrap();
+        assert!(text.starts_with("<?xml"));
+        assert!(text.contains("<Value ProtectInMemory=\"True\">p2</Value>"));
+        assert!(!text.contains("Protected=\"True\">"));
+        assert!(text.contains("<Binaries>"));
+        assert!(!text.contains("Silinen"));
+        let preview = parse(&xml, None).unwrap();
+        assert_eq!(preview.provider, Provider::KeePassXml);
+        assert_eq!(preview.entries.len(), 1);
+        assert_eq!(preview.entries[0].group, ["İş"]);
+
+        // Into another vault, twice (the second never collides with the first).
+        let mut other = new_vault("Başka", now()).unwrap();
+        let first = import(&mut other, &xml);
+        import(&mut other, &xml);
+        let key = VaultKey::new().with_password("parola");
+        let other = open(&save(&other, &key).unwrap(), &key).unwrap();
+        let v = view::view(&other);
+        let copies: Vec<_> = v
+            .entries
+            .iter()
+            .filter(|e| {
+                e.fields
+                    .iter()
+                    .any(|f| f.key == "Title" && f.value == "Banka <&>")
+            })
+            .collect();
+        assert_eq!(copies.len(), 2);
+        let copy = by_title(&v, "Banka <&>");
+        assert_ne!(copy.id, bank);
+        assert!(field(copy, "Password").protected);
+        assert_eq!(field(copy, "Password").value, "p2");
+        assert!(field(copy, "PIN").protected);
+        assert!(!field(copy, "Not").protected);
+        assert_eq!(field(copy, "Not").value, "açık");
+        assert_eq!(copy.tags, ["finans"]);
+        assert_eq!(
+            copy.history_count,
+            view::view(&db)
+                .entries
+                .iter()
+                .find(|e| e.id == bank)
+                .unwrap()
+                .history_count
+        );
+        assert!(copy.history_count >= 1);
+        let group = v.groups.iter().find(|g| g.id == copy.group_id).unwrap();
+        assert_eq!(group.name, "İş");
+        let first_group = v
+            .groups
+            .iter()
+            .find(|g| g.id == group.parent_id.clone().unwrap())
+            .unwrap();
+        assert!(
+            first_group.name == "XML"
+                && (first_group.id == first || first_group.parent_id.is_some())
+        );
+        let entry = &other.entries
+            [&kutup_pass::keepass::db::EntryId::from(uuid::Uuid::parse_str(&copy.id).unwrap())];
+        assert_eq!(
+            view::attachment(&other, entry, "kart.bin"),
+            Some(&[0u8, 159, 255, 7][..])
+        );
+        let earlier = view::history(&other, entry);
+        assert_eq!(field(&earlier[0], "Password").value, "p1");
+    }
+
+    #[test]
+    fn keepassxcs_own_xml_imports() {
+        let Some(file) = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .map(|dir| dir.join("kutup-references/keepassxc/tests/data/NewDatabase.xml"))
+            .find(|p| p.is_file())
+        else {
+            eprintln!("skipped: no KeePassXC test data beside the repository");
+            return;
+        };
+        let xml = std::fs::read(file).unwrap();
+        let preview = parse(&xml, None).unwrap();
+        assert_eq!(preview.provider, Provider::KeePassXml);
+        assert!(!preview.entries.is_empty());
+        let mut db = new_vault("V", now()).unwrap();
+        import(&mut db, &xml);
+        let v = view::view(&db);
+        // Every entry the preview listed is there, protected values protected.
+        assert_eq!(
+            v.entries.len(),
+            preview.entries.len(),
+            "{:?} vs {:?}",
+            v.entries
+                .iter()
+                .map(|e| e
+                    .fields
+                    .iter()
+                    .find(|f| f.key == "Title")
+                    .map(|f| f.value.clone()))
+                .collect::<Vec<_>>(),
+            preview
+                .entries
+                .iter()
+                .map(|e| (e.group.clone(), e.title.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert!(v
+            .entries
+            .iter()
+            .filter_map(|e| e
+                .fields
+                .iter()
+                .find(|f| f.key == "Password" && !f.value.is_empty()))
+            .all(|f| f.protected));
+        // Its compressed Meta/Binaries come in as attachments.
+        assert!(v.entries.iter().any(|e| !e.attachments.is_empty()));
+        // And the vault saves and opens.
+        let key = VaultKey::new().with_password("parola");
+        open(&save(&db, &key).unwrap(), &key).unwrap();
+    }
+}

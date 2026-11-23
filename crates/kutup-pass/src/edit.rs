@@ -8,12 +8,12 @@
 //! merge knows the object was deleted rather than never seen. Times come
 //! from the caller (`now`), so the same code runs in the browser.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::str::FromStr as _;
 
 use base64::Engine as _;
 use chrono::NaiveDateTime;
-use keepass::config::{DatabaseConfig, KdfConfig};
+use keepass::config::{CompressionConfig, DatabaseConfig, KdfConfig};
 use keepass::db::{
     Color, CustomIcon, CustomIconId, Entry, EntryId, GroupId, History, Icon, Times, Value,
 };
@@ -87,6 +87,33 @@ pub enum Op {
         ids: Vec<String>,
     },
     /// Makes history item `index` (oldest first) the entry's state again.
+    /// Copies entries, as KeePassXC's Clone: a new id, the copy's times
+    /// now, the title with `title_suffix` appended when given (" - Clone",
+    /// in the person's language), and the history only when `history`.
+    /// Into the group each is in, or into `group_id` (KeePassXC's
+    /// Ctrl-drag, never the recycle bin). All or nothing; returns the first
+    /// copy's id.
+    CloneEntries {
+        ids: Vec<String>,
+        #[serde(default)]
+        group_id: Option<String>,
+        #[serde(default)]
+        title_suffix: Option<String>,
+        #[serde(default)]
+        history: bool,
+        /// The copy's user name and password as references to the original
+        /// (`{REF:U@I:…}`, `{REF:P@I:…}`), as KeePassXC's option.
+        #[serde(default)]
+        references: bool,
+    },
+    /// Deletes an entry's history items (`indexes`, oldest first as the
+    /// history lists them; absent: all), remembered so a merge doesn't bring
+    /// them back (`merge::HISTORY_DELETED_KEY`).
+    DeleteHistory {
+        id: String,
+        #[serde(default)]
+        indexes: Option<Vec<usize>>,
+    },
     RestoreHistory {
         id: String,
         index: usize,
@@ -106,6 +133,13 @@ pub enum Op {
         entry_id: String,
         name: String,
     },
+    /// Renames an attachment; refused when the entry has one of the new
+    /// name already. The old name stays in the entry's history.
+    RenameAttachment {
+        entry_id: String,
+        name: String,
+        new_name: String,
+    },
     /// Gives the entry its own picture (a KeePass custom icon; a PNG,
     /// base64), reusing one of the vault's with the same bytes, or with
     /// `None` the default key icon again. The previous state goes into the
@@ -114,12 +148,17 @@ pub enum Op {
         id: String,
         #[serde(default)]
         data: Option<String>,
+        /// One of KeePass's built-in icons (0 to 68) instead of a picture.
+        #[serde(default)]
+        builtin: Option<usize>,
     },
     /// The same for a group (the default being the folder icon).
     SetGroupIcon {
         id: String,
         #[serde(default)]
         data: Option<String>,
+        #[serde(default)]
+        builtin: Option<usize>,
     },
     CreateGroup {
         parent_id: String,
@@ -136,14 +175,40 @@ pub enum Op {
     DeleteGroup {
         id: String,
     },
+    /// A group into the recycle bin and nothing else: refused when the bin
+    /// is off or the group is in it already (a drag never deletes for good).
+    RecycleGroup {
+        id: String,
+    },
+    /// Copies a group, with every group and entry inside it, under
+    /// `parent_id` (KeePassXC's Ctrl-drag, `CloneCopy`): new ids, the copies'
+    /// times now, entries with their history. Never the top group or the
+    /// recycle bin, nothing in the bin, and never into itself, what it holds
+    /// or the bin. Returns the copy's id.
+    CopyGroup {
+        id: String,
+        parent_id: String,
+    },
+    /// Moves a group (with what it holds) under another, never into the
+    /// recycle bin (that is `DeleteGroup`) and never the bin itself. A group
+    /// in the bin moved out of it is restored there.
     MoveGroup {
         id: String,
         parent_id: String,
     },
+    /// Takes groups out of the recycle bin, each with what it holds, back
+    /// under the group it was in (KDBX's previous parent group) while that is
+    /// there and not itself in the bin, otherwise under the top group, as
+    /// `RestoreEntries` does for entries. A group inside another one being
+    /// restored comes back with it, where it is. All or nothing.
+    RestoreGroups {
+        ids: Vec<String>,
+    },
     EmptyRecycleBin,
-    /// Imports another password manager's CSV export (`import::parse`)
-    /// into a new group `group_name` under the top group, its folders as
-    /// groups inside. All or nothing.
+    /// Imports another password manager's export (`import::parse`: CSV,
+    /// Bitwarden JSON, 1Password 1PUX, Proton Pass) into a new group
+    /// `group_name` under the top group, its folders as groups inside, with
+    /// the files a format carries. All or nothing.
     ImportCsv {
         /// The file, base64.
         data: String,
@@ -158,7 +223,182 @@ pub enum Op {
         description: String,
         #[serde(default)]
         default_user_name: String,
+        /// The recycle bin on or off; absent keeps it.
+        #[serde(default)]
+        recycle_bin_enabled: Option<bool>,
+        /// The history limits; absent keeps them. Lowering one trims every
+        /// entry's history at once, as KeePassXC does.
+        #[serde(default)]
+        history: Option<HistoryLimits>,
     },
+    /// The vault's key derivation and compression (its settings page's
+    /// Encryption tab). Refused below `minimums` (the server's settings,
+    /// docs/plans/pass-gaps-2.md P2) or above what any device could open.
+    SetVaultConfig {
+        kdf: KdfInput,
+        compression: bool,
+        minimums: KdfMinimums,
+    },
+}
+
+/// History kept per entry; `None` is no limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryLimits {
+    pub max_items: Option<u32>,
+    /// Bytes.
+    pub max_size: Option<u64>,
+}
+
+/// A key derivation as the settings page sets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum KdfInput {
+    Argon2id {
+        memory_mib: u64,
+        iterations: u64,
+        parallelism: u32,
+    },
+    Argon2d {
+        memory_mib: u64,
+        iterations: u64,
+        parallelism: u32,
+    },
+    /// KDBX 3's AES-KDF, kept for older apps.
+    AesKdf { rounds: u64 },
+}
+
+/// The weakest key derivation a vault may be set to (administrators'
+/// settings; a vault already below them still opens).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KdfMinimums {
+    pub argon2_memory_mib: u64,
+    pub argon2_iterations: u64,
+    pub aes_kdf_rounds: u64,
+}
+
+/// The most memory a vault's Argon2 may ask of a device opening it.
+pub const MAX_ARGON2_MEMORY_MIB: u64 = 2048;
+/// The most Argon2 passes.
+pub const MAX_ARGON2_ITERATIONS: u64 = 10_000;
+/// The most Argon2 lanes.
+pub const MAX_ARGON2_PARALLELISM: u32 = 16;
+/// The most AES-KDF rounds.
+pub const MAX_AES_KDF_ROUNDS: u64 = 1_000_000_000;
+/// The most history items a limit may name.
+pub const MAX_HISTORY_ITEMS: u32 = 1000;
+
+impl KdfInput {
+    /// The vault's key derivation, as `KdfConfig`.
+    pub fn of(config: &KdfConfig) -> Option<Self> {
+        match config {
+            KdfConfig::Argon2id {
+                iterations,
+                memory,
+                parallelism,
+                ..
+            } => Some(Self::Argon2id {
+                memory_mib: memory / (1024 * 1024),
+                iterations: *iterations,
+                parallelism: *parallelism,
+            }),
+            KdfConfig::Argon2 {
+                iterations,
+                memory,
+                parallelism,
+                ..
+            } => Some(Self::Argon2d {
+                memory_mib: memory / (1024 * 1024),
+                iterations: *iterations,
+                parallelism: *parallelism,
+            }),
+            KdfConfig::Aes { rounds } => Some(Self::AesKdf { rounds: *rounds }),
+            _ => None,
+        }
+    }
+
+    /// Whether it is at least `minimums`.
+    pub fn meets(&self, minimums: &KdfMinimums) -> bool {
+        match *self {
+            Self::Argon2id {
+                memory_mib,
+                iterations,
+                ..
+            }
+            | Self::Argon2d {
+                memory_mib,
+                iterations,
+                ..
+            } => {
+                memory_mib >= minimums.argon2_memory_mib && iterations >= minimums.argon2_iterations
+            }
+            Self::AesKdf { rounds } => rounds >= minimums.aes_kdf_rounds,
+        }
+    }
+
+    fn config(&self) -> Result<KdfConfig, EditError> {
+        let argon2 = |memory_mib: u64, iterations: u64, parallelism: u32| {
+            if !(1..=MAX_ARGON2_MEMORY_MIB).contains(&memory_mib) {
+                return Err(invalid(format!(
+                    "Argon2 memory is at most {MAX_ARGON2_MEMORY_MIB} MiB"
+                )));
+            }
+            if !(1..=MAX_ARGON2_ITERATIONS).contains(&iterations) {
+                return Err(invalid(format!(
+                    "Argon2 takes 1 to {MAX_ARGON2_ITERATIONS} iterations"
+                )));
+            }
+            if !(1..=MAX_ARGON2_PARALLELISM).contains(&parallelism) {
+                return Err(invalid(format!(
+                    "Argon2 takes 1 to {MAX_ARGON2_PARALLELISM} threads"
+                )));
+            }
+            Ok((memory_mib * 1024 * 1024, iterations, parallelism))
+        };
+        Ok(match *self {
+            Self::Argon2id {
+                memory_mib,
+                iterations,
+                parallelism,
+            } => {
+                let (memory, iterations, parallelism) =
+                    argon2(memory_mib, iterations, parallelism)?;
+                KdfConfig::Argon2id {
+                    iterations,
+                    memory,
+                    parallelism,
+                    version: argon2::Version::Version13,
+                }
+            }
+            Self::Argon2d {
+                memory_mib,
+                iterations,
+                parallelism,
+            } => {
+                let (memory, iterations, parallelism) =
+                    argon2(memory_mib, iterations, parallelism)?;
+                KdfConfig::Argon2 {
+                    iterations,
+                    memory,
+                    parallelism,
+                    version: argon2::Version::Version13,
+                }
+            }
+            Self::AesKdf { rounds } => {
+                if !(1..=MAX_AES_KDF_ROUNDS).contains(&rounds) {
+                    return Err(invalid(format!(
+                        "AES-KDF takes 1 to {MAX_AES_KDF_ROUNDS} rounds"
+                    )));
+                }
+                KdfConfig::Aes { rounds }
+            }
+        })
+    }
 }
 
 /// An entry's editable data.
@@ -369,6 +609,95 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                 changed: !ids.is_empty(),
             }
         }
+        Op::CloneEntries {
+            ids,
+            group_id: into,
+            title_suffix,
+            history,
+            references,
+        } => {
+            let ids = entry_ids(db, ids)?;
+            let suffix = title_suffix.as_deref().unwrap_or("");
+            if suffix.chars().count() > MAX_NAME_CHARS {
+                return Err(invalid("a title suffix is too long"));
+            }
+            let into = into.as_deref().map(|g| group_id(db, g)).transpose()?;
+            if into.is_some_and(|g| group_in_recycle_bin(db, g)) {
+                return Err(invalid("nothing is copied into the recycle bin"));
+            }
+            let mut first = None;
+            for id in ids {
+                let copy = clone_entry(db, id, suffix, *history, into, now)?;
+                if *references {
+                    let hex = id.uuid().simple().to_string();
+                    if let Some(copy) = db.entries.get_mut(&copy) {
+                        for (key, field) in [("UserName", 'U'), ("Password", 'P')] {
+                            let protected = copy.fields.get(key).is_some_and(Value::is_protected)
+                                || key == "Password";
+                            let text = format!("{{REF:{field}@I:{hex}}}");
+                            copy.fields.insert(
+                                key.into(),
+                                if protected {
+                                    Value::protected(text)
+                                } else {
+                                    Value::unprotected(text)
+                                },
+                            );
+                        }
+                    }
+                }
+                first.get_or_insert(copy);
+            }
+            Applied {
+                id: first.map(|id| id.uuid().to_string()),
+                changed: first.is_some(),
+            }
+        }
+        Op::DeleteHistory { id, indexes } => {
+            let id = entry_id(db, id)?;
+            let items = db.entries[&id]
+                .history
+                .as_ref()
+                .map(|h| h.entries.clone())
+                .unwrap_or_default();
+            let doomed: BTreeSet<usize> = match indexes {
+                Some(indexes) => {
+                    if indexes.iter().any(|i| *i >= items.len()) {
+                        return Err(EditError::NotFound("history item"));
+                    }
+                    indexes.iter().copied().collect()
+                }
+                None => (0..items.len()).collect(),
+            };
+            if doomed.is_empty() {
+                Applied::default()
+            } else {
+                let entry = db
+                    .entries
+                    .get_mut(&id)
+                    .ok_or(EditError::NotFound("entry"))?;
+                let mut deleted = crate::merge::deleted_history(entry);
+                deleted.extend(
+                    doomed
+                        .iter()
+                        .filter_map(|i| items[*i].times.last_modification),
+                );
+                let kept: Vec<Entry> = items
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| !doomed.contains(i))
+                    .map(|(_, item)| item)
+                    .collect();
+                if let Some(history) = entry.history.as_mut() {
+                    history.entries = kept;
+                }
+                crate::merge::set_deleted_history(entry, &deleted, Some(now));
+                Applied {
+                    id: None,
+                    changed: true,
+                }
+            }
+        }
         Op::RestoreHistory { id, index } => restore_history(db, entry_id(db, id)?, *index, now)?,
         Op::ClearReview { id } => {
             let id = entry_id(db, id)?;
@@ -410,23 +739,41 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                 Ok(())
             })?
         }
-        Op::SetEntryIcon { id, data } => {
+        Op::RenameAttachment {
+            entry_id: e,
+            name,
+            new_name,
+        } => {
+            let id = entry_id(db, e)?;
+            let new_name = check_name(new_name, "attachment name")?;
+            let entry = &db.entries[&id];
+            if !entry.attachments.contains_key(name) {
+                return Err(EditError::NotFound("attachment"));
+            }
+            if new_name == *name {
+                Applied::default()
+            } else {
+                if entry.attachments.contains_key(&new_name) {
+                    return Err(invalid("the entry has an attachment of that name already"));
+                }
+                edit_entry(db, id, now, |_, e| {
+                    let attachment = e.attachments.remove(name).expect("checked above");
+                    e.attachments.insert(new_name.clone(), attachment);
+                    Ok(())
+                })?
+            }
+        }
+        Op::SetEntryIcon { id, data, builtin } => {
             let id = entry_id(db, id)?;
-            let icon = match data {
-                Some(data) => Icon::Custom(custom_icon(db, data, now)?),
-                None => Icon::BuiltIn(ENTRY_ICON),
-            };
+            let icon = chosen_icon(db, data.as_deref(), *builtin, ENTRY_ICON, now)?;
             edit_entry(db, id, now, |_, e| {
                 e.icon = Some(icon);
                 Ok(())
             })?
         }
-        Op::SetGroupIcon { id, data } => {
+        Op::SetGroupIcon { id, data, builtin } => {
             let id = group_id(db, id)?;
-            let icon = match data {
-                Some(data) => Icon::Custom(custom_icon(db, data, now)?),
-                None => Icon::BuiltIn(GROUP_ICON),
-            };
+            let icon = chosen_icon(db, data.as_deref(), *builtin, GROUP_ICON, now)?;
             let group = db.groups.get_mut(&id).ok_or(EditError::NotFound("group"))?;
             let changed = group.icon.as_ref() != Some(&icon);
             if changed {
@@ -478,9 +825,48 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
             }
             delete_group(db, id, now)
         }
+        Op::RecycleGroup { id } => {
+            let id = group_id(db, id)?;
+            if id == db.root {
+                return Err(invalid("the vault's top group cannot be deleted"));
+            }
+            if !recycle(db) {
+                return Err(invalid(
+                    "the recycle bin is off: the group would be deleted for good",
+                ));
+            }
+            if group_in_recycle_bin(db, id) {
+                return Err(invalid("the group is in the recycle bin already"));
+            }
+            delete_group(db, id, now)
+        }
+        Op::CopyGroup { id, parent_id } => {
+            let id = group_id(db, id)?;
+            let parent = group_id(db, parent_id)?;
+            if id == db.root || Some(id) == recycle_bin(db) {
+                return Err(invalid("the top group and the recycle bin are not copied"));
+            }
+            if group_in_recycle_bin(db, id) || group_in_recycle_bin(db, parent) {
+                return Err(invalid("nothing is copied from or into the recycle bin"));
+            }
+            if group_within(db, parent, id) {
+                return Err(invalid("a group cannot be copied into itself"));
+            }
+            let copy = copy_group(db, id, parent, now)?;
+            Applied {
+                id: Some(copy.uuid().to_string()),
+                changed: true,
+            }
+        }
         Op::MoveGroup { id, parent_id } => {
             let id = group_id(db, id)?;
             let parent = group_id(db, parent_id)?;
+            if Some(id) == recycle_bin(db) {
+                return Err(invalid("the recycle bin stays where it is"));
+            }
+            if group_in_recycle_bin(db, parent) {
+                return Err(invalid("groups go to the recycle bin by being deleted"));
+            }
             if db.groups[&id].parent == Some(parent) {
                 Applied::default()
             } else {
@@ -493,6 +879,42 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                     id: None,
                     changed: true,
                 }
+            }
+        }
+        Op::RestoreGroups { ids } => {
+            // In the order given (restored groups land in it), each once.
+            let mut ids = ids
+                .iter()
+                .map(|id| group_id(db, id))
+                .collect::<Result<Vec<GroupId>, _>>()?;
+            let mut seen = HashSet::new();
+            ids.retain(|id| seen.insert(*id));
+            let bin = recycle_bin(db);
+            if ids
+                .iter()
+                .any(|id| Some(*id) == bin || !group_in_recycle_bin(db, *id))
+            {
+                return Err(invalid("only groups in the recycle bin are restored"));
+            }
+            // A group inside another one being restored comes back with it.
+            let outermost: Vec<GroupId> = ids
+                .iter()
+                .copied()
+                .filter(|id| !has_ancestor_in(db, *id, &seen))
+                .collect();
+            for &id in &outermost {
+                let target = restore_group_target(db, id);
+                if let Some(mut group) = db.group_mut(id) {
+                    // Both exist and the target is outside the bin, so
+                    // never inside the group itself.
+                    if group.move_to(target).is_ok() {
+                        group.times.location_changed = Some(now);
+                    }
+                }
+            }
+            Applied {
+                id: None,
+                changed: !outermost.is_empty(),
             }
         }
         Op::ImportCsv {
@@ -528,7 +950,17 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
             name,
             description,
             default_user_name,
+            recycle_bin_enabled,
+            history,
         } => {
+            if history.is_some_and(|h| h.max_items.is_some_and(|n| n > MAX_HISTORY_ITEMS)) {
+                return Err(invalid(format!(
+                    "at most {MAX_HISTORY_ITEMS} history items"
+                )));
+            }
+            if history.is_some_and(|h| h.max_size.is_some_and(|n| n > i64::MAX as u64)) {
+                return Err(invalid("a history size is too large"));
+            }
             let name = check_name(name, "vault name")?;
             let meta = &mut db.meta;
             let mut changed = false;
@@ -549,11 +981,103 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                 meta.default_username_changed = Some(now);
                 changed = true;
             }
+            if let Some(enabled) = recycle_bin_enabled {
+                if meta.recyclebin_enabled.unwrap_or(true) != *enabled {
+                    meta.recyclebin_enabled = Some(*enabled);
+                    meta.recyclebin_changed = Some(now);
+                    changed = true;
+                }
+            }
+            if let Some(limits) = history {
+                // KeePass's "no limit" is -1.
+                let items = limits.max_items.map_or(-1, |n| n as isize);
+                let size = limits.max_size.map_or(-1, |n| n as isize);
+                if meta.history_max_items.unwrap_or(-1) != items
+                    || meta.history_max_size.unwrap_or(-1) != size
+                {
+                    meta.history_max_items = Some(items);
+                    meta.history_max_size = Some(size);
+                    meta.settings_changed = Some(now);
+                    changed = true;
+                    trim_every_history(db);
+                }
+            }
+            Applied { id: None, changed }
+        }
+        Op::SetVaultConfig {
+            kdf,
+            compression,
+            minimums,
+        } => {
+            let config = kdf.config()?;
+            if !kdf.meets(minimums) {
+                return Err(invalid(
+                    "the key derivation is weaker than this server allows",
+                ));
+            }
+            let compression = if *compression {
+                CompressionConfig::GZip
+            } else {
+                CompressionConfig::None
+            };
+            let changed =
+                db.config.kdf_config != config || db.config.compression_config != compression;
+            if changed {
+                db.config.kdf_config = config;
+                db.config.compression_config = compression;
+                db.meta.settings_changed = Some(now);
+            }
             Applied { id: None, changed }
         }
     };
     refs::rebuild(db);
     Ok(applied)
+}
+
+/// Derives one key with `kdf` (an empty vault saved under a throwaway
+/// password), for the settings page to time: KeePassXC's "Benchmark 1 s".
+pub fn derive_once(kdf: &KdfInput) -> Result<(), EditError> {
+    let mut config = DatabaseConfig::default();
+    config.kdf_config = kdf.config()?;
+    let db = Database::with_config(config);
+    crate::save(&db, &crate::VaultKey::new().with_password("benchmark"))
+        .map(|_| ())
+        .map_err(|error| invalid(error.to_string()))
+}
+
+/// Trims every entry's history to the vault's limits (after they changed).
+fn trim_every_history(db: &mut Database) {
+    let ids: Vec<EntryId> = db.entries.keys().copied().collect();
+    for id in ids {
+        let Some(mut items) = db.entries[&id].history.as_ref().map(|h| h.entries.clone()) else {
+            continue;
+        };
+        let before = items.len();
+        trim_history(db, &mut items);
+        if items.len() != before {
+            if let Some(history) = db.entries.get_mut(&id).and_then(|e| e.history.as_mut()) {
+                history.entries = items;
+            }
+        }
+    }
+}
+
+/// The icon an `Op::Set*Icon` asks for: a picture, a built-in icon, or the
+/// default; never both a picture and a built-in one.
+fn chosen_icon(
+    db: &mut Database,
+    data: Option<&str>,
+    builtin: Option<usize>,
+    default: usize,
+    now: NaiveDateTime,
+) -> Result<Icon, EditError> {
+    match (data, builtin) {
+        (Some(_), Some(_)) => Err(invalid("a picture or a built-in icon, not both")),
+        (Some(data), None) => Ok(Icon::Custom(custom_icon(db, data, now)?)),
+        (None, Some(n)) if n < BUILTIN_ICONS => Ok(Icon::BuiltIn(n)),
+        (None, Some(_)) => Err(invalid("no such icon")),
+        (None, None) => Ok(Icon::BuiltIn(default)),
+    }
 }
 
 /// The parts of an entry an edit changes; equal when nothing changed.
@@ -669,6 +1193,13 @@ fn fill_entry(db: &Database, entry: &mut Entry, input: &EntryInput) -> Result<()
         };
         fields.insert(key, value);
     }
+    // The passkey fields the view never shows (crate::passkey) stay as they
+    // were unless the input names them.
+    for (key, value) in &entry.fields {
+        if crate::passkey::is_passkey_field(key) && !fields.contains_key(key) {
+            fields.insert(key.clone(), value.clone());
+        }
+    }
     // KeePass entries always have the standard fields.
     for key in STANDARD_FIELDS {
         fields.entry(key.to_owned()).or_insert_with(|| {
@@ -758,6 +1289,114 @@ fn create_entry(
     })
 }
 
+/// Whether group `id` is `ancestor` or inside it.
+fn group_within(db: &Database, id: GroupId, ancestor: GroupId) -> bool {
+    let mut current = Some(id);
+    while let Some(group) = current {
+        if group == ancestor {
+            return true;
+        }
+        current = db.groups.get(&group).and_then(|g| g.parent);
+    }
+    false
+}
+
+/// A copy of group `id` and everything in it under `parent`
+/// (`Op::CopyGroup`); the caller has checked the two.
+fn copy_group(
+    db: &mut Database,
+    id: GroupId,
+    parent: GroupId,
+    now: NaiveDateTime,
+) -> Result<GroupId, EditError> {
+    let source = db.groups[&id].clone();
+    let copy_id = {
+        let mut parent = db.group_mut(parent).ok_or(EditError::NotFound("group"))?;
+        let mut group = parent.add_group();
+        group.name = source.name.clone();
+        group.notes = source.notes.clone();
+        group.tags = source.tags.clone();
+        group.icon = source.icon.clone();
+        group.custom_data = source.custom_data.clone();
+        group.is_expanded = source.is_expanded;
+        group.default_autotype_sequence = source.default_autotype_sequence.clone();
+        group.enable_autotype = source.enable_autotype;
+        group.enable_searching = source.enable_searching;
+        set_all_times(&mut group.times, now);
+        group.id
+    };
+    // In the source's order; the lists are taken first, so the copy (made
+    // outside the source) is never walked.
+    for entry in source.entries.iter().copied() {
+        clone_entry(db, entry, "", true, Some(copy_id), now)?;
+    }
+    for child in source.groups.iter().copied() {
+        copy_group(db, child, copy_id, now)?;
+    }
+    Ok(copy_id)
+}
+
+/// A copy of entry `id`, beside it or in group `into` (`Op::CloneEntries`).
+fn clone_entry(
+    db: &mut Database,
+    id: EntryId,
+    suffix: &str,
+    history: bool,
+    into: Option<GroupId>,
+    now: NaiveDateTime,
+) -> Result<EntryId, EditError> {
+    let source = db.entries[&id].clone();
+    let copy_id = EntryId::new();
+    db.group_mut(into.unwrap_or(source.parent))
+        .ok_or(EditError::NotFound("group"))?
+        .add_entry_with_id(copy_id)
+        .map_err(|_| invalid("the entry exists"))?;
+    let mut copy = db.entries[&copy_id].clone();
+    copy.fields = source.fields.clone();
+    if !suffix.is_empty() {
+        if let Some(title) = copy.fields.get_mut("Title") {
+            let protected = title.is_protected();
+            let text = format!("{}{suffix}", title.get());
+            *title = if protected {
+                Value::protected(text)
+            } else {
+                Value::unprotected(text)
+            };
+        } else {
+            copy.fields.insert(
+                "Title".into(),
+                Value::unprotected(suffix.trim_start().to_owned()),
+            );
+        }
+    }
+    copy.tags = source.tags.clone();
+    copy.icon = source.icon.clone();
+    copy.foreground_color = source.foreground_color.clone();
+    copy.background_color = source.background_color.clone();
+    copy.override_url = source.override_url.clone();
+    copy.quality_check = source.quality_check;
+    copy.autotype = source.autotype.clone();
+    // The same attachment data, shared (refs::rebuild counts the copy).
+    copy.attachments = source.attachments.clone();
+    copy.custom_data = source.custom_data.clone();
+    copy.custom_data.remove(REVIEW_KEY);
+    copy.custom_data.remove(crate::merge::HISTORY_DELETED_KEY);
+    copy.times.expires = source.times.expires;
+    copy.times.expiry = source.times.expiry;
+    set_all_times(&mut copy.times, now);
+    if history {
+        copy.history = source.history.clone().map(|mut h| {
+            for item in &mut h.entries {
+                item.id = copy_id;
+                item.custom_data.remove(REVIEW_KEY);
+            }
+            h
+        });
+    }
+    db.entries.insert(copy_id, copy);
+    Ok(copy_id)
+}
+
 fn move_entry(db: &mut Database, id: EntryId, target: GroupId, now: NaiveDateTime) -> Applied {
     let Some(mut entry) = db.entry_mut(id) else {
         return Applied::default();
@@ -781,6 +1420,27 @@ fn restore_target(db: &Database, id: EntryId) -> GroupId {
         .previous_parent_group
         .filter(|group| db.groups.contains_key(group) && !group_in_recycle_bin(db, *group))
         .unwrap_or(db.root)
+}
+
+/// Where a deleted group goes back to: the group it was in, while that is
+/// there and not itself in the recycle bin; otherwise the top group.
+fn restore_group_target(db: &Database, id: GroupId) -> GroupId {
+    db.groups[&id]
+        .previous_parent_group
+        .filter(|group| db.groups.contains_key(group) && !group_in_recycle_bin(db, *group))
+        .unwrap_or(db.root)
+}
+
+/// Whether a group above `id` is one of `ids`.
+fn has_ancestor_in(db: &Database, id: GroupId, ids: &HashSet<GroupId>) -> bool {
+    let mut current = db.groups.get(&id).and_then(|g| g.parent);
+    while let Some(group) = current {
+        if ids.contains(&group) {
+            return true;
+        }
+        current = db.groups.get(&group).and_then(|g| g.parent);
+    }
+    false
 }
 
 /// The recycle bin, made if the vault has none yet.
@@ -1008,6 +1668,7 @@ fn import_csv(
         None => None,
     };
     let parsed = crate::import::parse(&bytes, provider).map_err(|e| invalid(e.to_string()))?;
+    let whole_tree = parsed.provider == crate::import::Provider::KeePassXml;
     let root = db.root;
     let top = {
         let name = check_name(group_name, "group name")?;
@@ -1018,6 +1679,13 @@ fn import_csv(
         set_all_times(&mut group.times, now);
         group.id
     };
+    if whole_tree {
+        crate::import_xml::copy_into(db, &bytes, top, now).map_err(|e| invalid(e.to_string()))?;
+        return Ok(Applied {
+            id: Some(top.uuid().to_string()),
+            changed: true,
+        });
+    }
     for entry in &parsed.entries {
         let mut group = top;
         for part in &entry.group {
@@ -1039,7 +1707,26 @@ fn import_csv(
             .as_deref()
             .and_then(|id| uuid::Uuid::parse_str(id).ok())
         {
-            if let Some(made) = db.entries.get_mut(&EntryId::from(id)) {
+            let id = EntryId::from(id);
+            // The files a format carried (1PUX), each name once.
+            for file in &entry.attachments {
+                let attachment =
+                    refs::import_attachment(db, &Value::unprotected(file.data.clone()));
+                if let Some(made) = db.entries.get_mut(&id) {
+                    let base = match clip(&file.name) {
+                        name if name.is_empty() => "attachment".to_owned(),
+                        name => name,
+                    };
+                    let mut name = base.clone();
+                    let mut n = 2;
+                    while made.attachments.contains_key(&name) {
+                        name = format!("{base} ({n})");
+                        n += 1;
+                    }
+                    made.attachments.insert(name, attachment);
+                }
+            }
+            if let Some(made) = db.entries.get_mut(&id) {
                 if let Some(created) = entry.created {
                     made.times.creation = Some(created);
                 }

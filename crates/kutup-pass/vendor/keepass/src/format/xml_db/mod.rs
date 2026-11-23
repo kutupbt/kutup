@@ -408,3 +408,68 @@ mod tests {
         assert!(xml.contains("<DeletionTime>io8Y4g4AAAA=</DeletionTime>"));
     }
 }
+
+/// Kutup's copy (vendor/keepass/KUTUP.md): reads an unencrypted KeePass XML
+/// file (KeePassXC's or KeePass's XML export): values marked
+/// `ProtectInMemory` come back protected, attachments from Meta/Binaries.
+pub fn from_plain_xml(data: &[u8]) -> Result<crate::db::Database, ParseXmlError> {
+    let mut plain = crate::crypt::ciphers::PlainCipher;
+    parse_xml(data, &[], &mut plain)
+}
+
+/// Kutup's copy (vendor/keepass/KUTUP.md): writes the database as an
+/// unencrypted KeePass XML file that stands alone: protected values in the
+/// clear marked `ProtectInMemory="True"`, every attachment in Meta/Binaries.
+#[cfg(feature = "save_kdbx4")]
+pub fn to_plain_xml(db: &crate::db::Database) -> Result<Vec<u8>, DatabaseSaveError> {
+    let renumbered;
+    let db = if db.has_dense_attachment_ids() {
+        db
+    } else {
+        renumbered = db.with_dense_attachment_ids();
+        &renumbered
+    };
+    let mut plain = crate::crypt::ciphers::PlainCipher;
+    let mut kdbx = KeePassFile::db_to_xml(db, &mut plain)?;
+    fn unprotect_group(group: &mut Group) {
+        for child in &mut group.children {
+            match child {
+                group::GroupOrEntry::Group(g) => unprotect_group(g),
+                group::GroupOrEntry::Entry(e) => unprotect_entry(e),
+            }
+        }
+    }
+    fn unprotect_entry(entry: &mut entry::Entry) {
+        for field in &mut entry.string_fields {
+            field.value.unprotect_plain();
+        }
+        if let Some(history) = &mut entry.history {
+            for item in &mut history.entries {
+                unprotect_entry(item);
+            }
+        }
+    }
+    unprotect_group(&mut kdbx.root.group);
+    let mut attachments: Vec<(usize, &crate::db::Value<Vec<u8>>)> = db
+        .attachments
+        .iter()
+        .map(|(id, attachment)| (id.id(), &attachment.data))
+        .collect();
+    attachments.sort_by_key(|(id, _)| *id);
+    kdbx.meta.binaries = Some(meta::Binaries {
+        binaries: attachments
+            .into_iter()
+            .map(|(id, data)| meta::Binary {
+                value: base64_engine::STANDARD.encode(data.get()),
+                id,
+                compressed: Some(false),
+                protected: Some(data.is_protected()),
+            })
+            .collect(),
+    });
+    let xml = quick_xml::se::to_string_with_root("KeePassFile", &kdbx)?;
+    Ok(
+        format!("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n{xml}")
+            .into_bytes(),
+    )
+}
