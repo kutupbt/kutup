@@ -291,7 +291,7 @@ describe('writing calendars', () => {
     expect(http.post.mock.calls[0][1]).not.toHaveProperty('head')
     expect(http.post.mock.calls[0][1]).not.toHaveProperty('color')
     const filed = head.records.get(`calendarSettings:${id.replace(/-/g, '')}`)
-    expect(JSON.parse(filed!.envelope).value).toEqual({ color: '#8080ff', display: true })
+    expect(JSON.parse(filed!.envelope).value).toEqual({ color: '#8080ff', display: true, roster: '' })
     http.post.mockRejectedValueOnce(new Error('calendarLimit'))
     await expect(createCalendar(session, account, 'Ev', '#8080ff')).rejects.toThrow('calendarLimit')
     expect(head.records.size).toBe(1)

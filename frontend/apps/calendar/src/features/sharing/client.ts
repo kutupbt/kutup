@@ -27,7 +27,9 @@ import { accountKeyOf, type AccountRef } from '@kutup/crypto/accountRef'
 import type { SealedMetadata } from '@kutup/crypto/calendar'
 import {
   CalendarChangedError,
+  editRoster,
   fileSharedCalendarSettings,
+  rosterTag,
   forgetCalendarSettings,
   OwnerIdentityChanged,
   PERMISSION,
@@ -303,6 +305,10 @@ export async function invite(
       shares,
     })
   })
+  // On the owner's roster: the key went to this account, by the owner's hand.
+  // (Not written: the roster lacks them, and the next key change is reviewed.)
+  const tag = await rosterTag(session, calendar.id, person.accountId)
+  await editRoster(session, calendar.id, (tags) => (tags ? [...tags, tag] : null)).catch(() => undefined)
 }
 
 /** A member's preset changed (the server queues their alarms to be worked out again). */
@@ -310,8 +316,11 @@ export async function setMemberPreset(calendarId: string, accountId: string, pre
   await api.patch(calendarPath(calendarId, `/members/${encodeURIComponent(accountId)}`), { permissions: PRESET_PERMISSIONS[preset] })
 }
 
-export async function revokeInvitation(calendarId: string, invitationId: string): Promise<void> {
-  await api.delete(calendarPath(calendarId, `/invitations/${encodeURIComponent(invitationId)}`))
+export async function revokeInvitation(session: Session, calendarId: string, invitation: { id: string; accountId: string }): Promise<void> {
+  await api.delete(calendarPath(calendarId, `/invitations/${encodeURIComponent(invitation.id)}`))
+  const tag = await rosterTag(session, calendarId, invitation.accountId)
+  // Not written: dropped instead, so the next key change is reviewed.
+  await editRoster(session, calendarId, (tags) => (tags ? tags.filter((t) => t !== tag) : null)).catch(() => editRoster(session, calendarId, () => null).catch(() => undefined))
 }
 
 /** Who gets a calendar's next key: every member who stays and every pending invitation. */
@@ -375,8 +384,12 @@ export function doubted(recipients: KeyRecipient[]): Set<string> {
 
 /**
  * A rotation that is due (someone who held the key left), made unasked only
- * when everyone who gets the new key is someone the owner already trusts;
- * otherwise `review`, with who they are, for the owner to confirm.
+ * when everyone who gets the new key is on the owner's roster (its own
+ * sealed record of who it gave the key to, which the server can't change)
+ * and is someone the owner already trusts. Anything else (no roster,
+ * someone not on it, as a removed member the server brought back would
+ * be, a doubted identity) is `review`, with who they are, for the owner to
+ * confirm.
  */
 export async function dueRotation(
   session: Session,
@@ -385,7 +398,10 @@ export async function dueRotation(
   calendar: Calendar,
 ): Promise<{ kind: 'rotated' } | { kind: 'review'; recipients: KeyRecipient[] }> {
   const recipients = await keyRecipients(me, calendar.id, null)
-  if (!recipients.every(trusted)) return { kind: 'review', recipients }
+  const roster = calendar.roster ? new Set(calendar.roster) : null
+  if (!roster) return { kind: 'review', recipients }
+  const onRoster = await Promise.all(recipients.map(async (r) => roster.has(await rosterTag(session, calendar.id, r.accountId))))
+  if (!recipients.every(trusted) || onRoster.includes(false)) return { kind: 'review', recipients }
   await rotateKey(session, me, account, calendar, null)
   return { kind: 'rotated' }
 }
@@ -458,6 +474,13 @@ export async function rotateKey(
     },
   )
   const byAccount = new Map(members.map((m) => [m.member.account, m.accountId]))
+  // The roster becomes exactly who gets this key, before it changes: the
+  // owner confirmed each of them (the remove and review dialogs list them),
+  // and the removed member and anyone who left are off it, so a server that
+  // brings them back can't have a later key go to them unasked. Not
+  // written, no key change.
+  const tags = await Promise.all(members.map((m) => rosterTag(session, calendar.id, m.accountId)))
+  await editRoster(session, calendar.id, () => tags)
   await api.post(calendarPath(calendar.id, '/keys/rotate'), {
     removeAccountId: removed,
     // The generation this rotation follows: refused if another one came first.

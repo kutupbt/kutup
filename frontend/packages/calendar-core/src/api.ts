@@ -163,6 +163,12 @@ export interface Calendar {
   owner?: CalendarOwnerRow
   /** The sealed metadata's version and a newer client's fields, sealed again on a rename. */
   metadataRest?: Record<string, unknown>
+  /**
+   * The owner's roster: the tags of everyone it gave the key to, from its own
+   * sealed settings record (the server can't change it); null when there is
+   * none, or it can't be read now.
+   */
+  roster: string[] | null
 }
 
 /**
@@ -393,6 +399,7 @@ export async function loadCalendars(
         owned,
         owner: owned ? undefined : row.owner,
         metadataRest: metadata.rest,
+        roster: owned && typeof own?.value.roster === 'string' ? splitRoster(own.value.roster) : null,
       })
     } catch (error) {
       if (error instanceof OlderThanSeenError) throw error
@@ -432,6 +439,63 @@ async function settleTombstones(session: Session, listed: Set<string>): Promise<
       // Tried again on the next listing.
     }
   }
+}
+
+/** One roster tag's length (`ROSTER_TAG_CHARS` in kutup-crypto's calendar settings). */
+const ROSTER_TAG = 8
+
+function splitRoster(roster: string): string[] {
+  const tags: string[] = []
+  for (let at = 0; at + ROSTER_TAG <= roster.length; at += ROSTER_TAG) tags.push(roster.slice(at, at + ROSTER_TAG))
+  return tags
+}
+
+function uuidBytes(id: string): Uint8Array {
+  const hex = id.replace(/-/g, '')
+  const bytes = new Uint8Array(16)
+  for (let i = 0; i < 16; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  return bytes
+}
+
+/**
+ * A key recipient's roster tag: the first 6 bytes of the account's keyed
+ * hash (`hashed_object` under the object-id key) of the calendar id and the
+ * account id. Only this account's devices can compute it; the 32-byte input
+ * never meets a record id's 16.
+ */
+export async function rosterTag(session: Session, calendarId: string, accountId: string): Promise<string> {
+  const input = new Uint8Array(32)
+  input.set(uuidBytes(calendarId), 0)
+  input.set(uuidBytes(accountId), 16)
+  return (await scopeRecordId(session.roots.objectIdKey, SETTINGS_SCOPE, input)).slice(0, ROSTER_TAG)
+}
+
+/**
+ * Changes the owner's roster of a calendar in its sealed settings record,
+ * read and written under the head (another device's change is read first).
+ * `edit` gets the tags now (null when there is no roster) and answers the
+ * new ones, or null for none. A roster too long for the record is dropped:
+ * without one, every key change is reviewed.
+ */
+export async function editRoster(session: Session, calendarId: string, edit: (tags: string[] | null) => string[] | null): Promise<void> {
+  const id = await settingsId(session, calendarId)
+  const written = await (await accountHead(session)).recordsWrite(SETTINGS_SCOPE, async (copy) => {
+    const stored = copy.records.get(id)
+    if (!stored) throw new Error('the calendar has no settings record')
+    const opened = await openScopeRecord<CalendarSettingsRecord>(session.masterKeys, session.envelopeBinding, SETTINGS_SCOPE, id, stored.envelope)
+    const now = typeof opened.value.roster === 'string' ? splitRoster(opened.value.roster) : null
+    const next = edit(now)
+    const { roster: _old, ...rest } = opened.value
+    const revision = stored.revision + 1
+    let envelope: string
+    try {
+      envelope = await sealScopeRecord(session.masterKeys, session.envelopeBinding, SETTINGS_SCOPE, id, revision, next ? { ...rest, roster: [...new Set(next)].join('') } : rest)
+    } catch {
+      envelope = await sealScopeRecord(session.masterKeys, session.envelopeBinding, SETTINGS_SCOPE, id, revision, rest)
+    }
+    return { puts: [{ id, revision, envelope }], deletes: [], done: revision }
+  })
+  if (written) await revisionGuard(session).accept(GUARD_SCOPE, calendarId, written)
 }
 
 /** Writes a calendar's settings record at the next revision (a newer client's fields kept). */
@@ -496,7 +560,8 @@ export async function createCalendar(session: Session, account: MailAccount, nam
   // The fingerprint is the server's to read from the key, not to be told.
   const body = { publicKey: made.publicKey, lockedSecretKey: made.lockedSecretKey, passphraseShare: made.passphraseShare, metadata: made.metadata }
   const record = await settingsId(session, id)
-  const revision = await writeSettings(session, record, { color, display: true })
+  // A new calendar's roster: nobody but its owner yet.
+  const revision = await writeSettings(session, record, { color, display: true, roster: '' })
   try {
     await api.post('/calendar/calendars', { id, ...body })
   } catch (error) {

@@ -414,10 +414,11 @@ Trade-offs decided (stricter than Proton):
   a declined one read first, and one that expired after it was read mark
   the calendar `rotation_due`. When the owner's app next loads the calendar
   it asks the pins about everyone who would get the new key, without
-  recording anyone: only when every one is verified or was pinned before
-  does it rotate unasked (the removal's code, nobody removed). Otherwise
-  (someone first met, as a member the server slipped in would be; a
-  changed identity), or when the rotation fails, the calendar's row says
+  recording anyone: only when every one is on the owner's roster (below)
+  and verified or pinned before does it rotate unasked (the removal's code,
+  nobody removed). Otherwise (no roster, someone not on it, as a removed
+  member the server brought back would be; someone first met; a changed
+  identity), or when the rotation fails, the calendar's row says
   "Key change pending — review", which opens a dialog naming each
   recipient with what the pins say before the owner confirms.
 - **T2, links on removal.** The remove dialog lists the keyed links with
@@ -429,6 +430,20 @@ Trade-offs decided (stricter than Proton):
 - **T3, recipients.** The remove dialog lists who gets the new key, each
   with what the pins say (verified, as before, first time, changed, not
   signed, someone else now), so an account the server slipped in shows.
+
+**Roster.** The server says who a calendar's members and invitees are,
+and a pin only says someone was met before, anywhere in Drive. So the
+owner keeps its own roster of who it gave the key to, in its sealed
+`calendarSettings` record (synced across its devices, out of the server's
+reach): a keyed tag per account (the first 6 bytes of `hashed_object` of
+the calendar id and the account id, 8 base64url characters, concatenated;
+`CalendarSettingsV1::roster`, an optional field older readers keep). A new
+calendar starts with an empty one; an invitation adds its invitee, a
+revoked one comes off, and every rotation writes it as exactly who gets the
+new key before the key changes (the removed member and anyone who left are
+off it; not written, no key change). A calendar from before the roster, or
+whose roster outgrew the 511-byte record (about 55 people), has none, and
+every due key change goes to review.
 
 **Compaction.** Each removal or due rotation adds a key generation. The
 owner's app compacts a calendar when it holds 90% of

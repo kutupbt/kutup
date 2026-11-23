@@ -130,7 +130,7 @@ vi.mock('@kutup/drive-core/identity', () => ({ driveIdentityOf: vi.fn() }))
 vi.mock('@kutup/mail-core/keys', () => ({
   addressKeys: (address: string) => Promise.resolve({ accountRef: { server: 'kutup.test', accountId: address === 'bo@kutup.test' ? BO : 'someone' }, all: [address === 'bo@kutup.test' ? 'bo-key' : 'other-key'] }),
 }))
-const records = vi.hoisted(() => ({ filed: [] as string[], forgotten: [] as string[] }))
+const records = vi.hoisted(() => ({ filed: [] as string[], forgotten: [] as string[], roster: null as string[] | null }))
 vi.mock('@kutup/calendar-core/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@kutup/calendar-core/api')>()),
   fileSharedCalendarSettings: (_s: unknown, id: string) => {
@@ -140,6 +140,12 @@ vi.mock('@kutup/calendar-core/api', async (importOriginal) => ({
   },
   forgetCalendarSettings: (_s: unknown, id: string) => {
     records.forgotten.push(id)
+    return Promise.resolve()
+  },
+  rosterTag: (_s: unknown, _calendarId: string, accountId: string) => Promise.resolve(`tag-${accountId}`),
+  editRoster: (_s: unknown, _calendarId: string, edit: (tags: string[] | null) => string[] | null) => {
+    records.roster = edit(records.roster)
+    server.calls.push({ method: 'roster', url: (records.roster ?? []).join(',') })
     return Promise.resolve()
   },
 }))
@@ -164,6 +170,7 @@ const {
   keyRecipients,
   LinksNotRemade,
   removeMember,
+  revokeInvitation,
   rotateKey,
   SelfShare,
   showLink,
@@ -211,6 +218,7 @@ beforeEach(() => {
   pins.pinned = new Set(['bo@kutup.test', 'cy@kutup.test'])
   records.filed = []
   records.forgotten = []
+  records.roster = []
 })
 
 describe('presets', () => {
@@ -335,16 +343,50 @@ describe('replacing links, and a rotation that is due', () => {
     expect(server.calls.some((c) => c.url.endsWith('/keys/rotate'))).toBe(true)
   })
 
-  it('rotates a due key unasked only when everyone who gets it is already known', async () => {
+  it('rotates a due key unasked only when everyone who gets it is on the roster and already known', async () => {
     server.members = [{ accountId: BO, address: 'bo@kutup.test', permissions: 96, addedAt: '' }]
-    expect(await dueRotation(session, me, account, calendar)).toEqual({ kind: 'rotated' })
+    expect(await dueRotation(session, me, account, { ...calendar, roster: [`tag-${BO}`, `tag-${CY}`] })).toEqual({ kind: 'rotated' })
+    // The roster is now exactly who got the key: Cy, who left, is off it.
+    expect(records.roster).toEqual([`tag-${BO}`])
     // Someone the server added, never met before: shown for review, nothing sent.
     server.calls = []
     pins.people.set('eve@kutup.test', person('00000000-0000-4000-8000-0000000000e1', 'eve@kutup.test'))
     server.members.push({ accountId: '00000000-0000-4000-8000-0000000000e1', address: 'eve@kutup.test', permissions: 96, addedAt: '' })
-    const outcome = await dueRotation(session, me, account, calendar)
+    const outcome = await dueRotation(session, me, account, { ...calendar, roster: [`tag-${BO}`] })
     expect(outcome).toMatchObject({ kind: 'review', recipients: [{ address: 'bo@kutup.test', state: 'verified' }, { address: 'eve@kutup.test', state: 'new' }] })
     expect(server.calls.some((c) => c.url.endsWith('/keys/rotate'))).toBe(false)
+  })
+
+  it('reviews a removed member the server brought back, though still pinned', async () => {
+    // Bo was removed (off the roster) but is pinned from before: known, yet not on it.
+    server.members = [
+      { accountId: BO, address: 'bo@kutup.test', permissions: 96, addedAt: '' },
+      { accountId: CY, address: 'cy@kutup.test', permissions: 96, addedAt: '' },
+    ]
+    const outcome = await dueRotation(session, me, account, { ...calendar, roster: [`tag-${CY}`] })
+    expect(outcome).toMatchObject({ kind: 'review', recipients: [{ accountId: BO, state: 'verified' }, { accountId: CY, state: 'verified' }] })
+    expect(server.calls.some((c) => c.url.endsWith('/keys/rotate'))).toBe(false)
+  })
+
+  it('reviews when there is no roster (none written, or unreadable now)', async () => {
+    server.members = [{ accountId: BO, address: 'bo@kutup.test', permissions: 96, addedAt: '' }]
+    expect(await dueRotation(session, me, account, { ...calendar, roster: null })).toMatchObject({ kind: 'review' })
+    expect(server.calls.some((c) => c.url.endsWith('/keys/rotate'))).toBe(false)
+  })
+
+  it('puts invitees on the roster, takes a revoked one off, and writes it before a removal’s new key', async () => {
+    await invite(session, me, calendar, 'bo@kutup.test', 'view')
+    expect(records.roster).toEqual([`tag-${BO}`])
+    await revokeInvitation(session, 'cal-1', { id: 'i1', accountId: BO })
+    expect(records.roster).toEqual([])
+    server.members = [
+      { accountId: BO, address: 'bo@kutup.test', permissions: 96, addedAt: '' },
+      { accountId: CY, address: 'cy@kutup.test', permissions: 96, addedAt: '' },
+    ]
+    records.roster = [`tag-${BO}`, `tag-${CY}`]
+    await removeMember(session, me, account, calendar, BO)
+    const order = server.calls.map((c) => `${c.method} ${c.url}`)
+    expect(order.indexOf(`roster tag-${CY}`)).toBeLessThan(order.indexOf('post /calendar/calendars/cal-1/keys/rotate'))
   })
 
   it('rotates with nobody removed when one is due: everyone stays', async () => {

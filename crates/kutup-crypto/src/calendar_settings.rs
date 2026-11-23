@@ -26,6 +26,8 @@ pub const CALENDAR_SETTINGS_VERSION: u16 = 1;
 pub const MAX_PLAIN_LEN: usize = 511;
 
 const WHAT: &str = "calendar settings";
+/// One roster tag's length, in base64url characters (6 bytes).
+pub const ROSTER_TAG_CHARS: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +39,13 @@ pub struct CalendarSettingsV1 {
     pub color: String,
     /// The calendar's events are shown.
     pub display: bool,
+    /// The owner's roster (docs/plans/calendar-e3.md, "Roster"): everyone it
+    /// gave the calendar's key to, each as a keyed tag (the first 6 bytes of
+    /// `hashed_object` of the calendar id and the account id, base64url, 8
+    /// characters), concatenated. Kept where the server can't change it, so
+    /// a key change goes unasked only to people on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roster: Option<String>,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
     pub extra: Extra,
 }
@@ -48,6 +57,7 @@ impl CalendarSettingsV1 {
             min: None,
             color: color.into(),
             display,
+            roster: None,
             extra: Extra::new(),
         }
     }
@@ -59,6 +69,17 @@ impl CalendarSettingsV1 {
             return Err(CryptoError::InvalidInput(format!(
                 "{WHAT}: the colour is #rrggbb"
             )));
+        }
+        if let Some(roster) = &self.roster {
+            if roster.len() % ROSTER_TAG_CHARS != 0
+                || !roster
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return Err(CryptoError::InvalidInput(format!(
+                    "{WHAT}: the roster is {ROSTER_TAG_CHARS}-character base64url tags"
+                )));
+            }
         }
         Ok(())
     }
@@ -106,6 +127,18 @@ mod tests {
         assert!(String::from_utf8(hidden.encode().unwrap())
             .unwrap()
             .contains(r#""order":3"#));
+    }
+
+    #[test]
+    fn a_roster_is_whole_tags_and_round_trips() {
+        let mut settings = CalendarSettingsV1::new("#1da583", true);
+        settings.roster = Some("AAAAAAAA_-zz0099".into());
+        let bytes = settings.encode().unwrap();
+        assert_eq!(CalendarSettingsV1::decode(&bytes).unwrap(), settings);
+        for bad in ["AAAAAAA", "AAAAAAA+", "AAAA AAA"] {
+            settings.roster = Some(bad.into());
+            assert!(settings.encode().is_err(), "{bad}");
+        }
     }
 
     #[test]

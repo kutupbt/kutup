@@ -90,7 +90,7 @@ function PeoplePanel({ calendar }: { calendar: Calendar }) {
 
   const add = useCalendarMutation((confirm: boolean) => invite(session, me.data!, calendar, address, preset, confirm))
   const change = useCalendarMutation((v: { member: MemberRow; preset: Preset }) => setMemberPreset(calendar.id, v.member.accountId, v.preset))
-  const revoke = useCalendarMutation((invitation: SentInvitationRow) => revokeInvitation(calendar.id, invitation.id))
+  const revoke = useCalendarMutation((invitation: SentInvitationRow) => revokeInvitation(session, calendar.id, invitation))
   const remove = useCalendarMutation((v: { member: MemberRow; confirmed: Set<string> }) =>
     removeMember(session, me.data!, account.data!, calendar, v.member.accountId, v.confirmed, replaceLinks),
   )

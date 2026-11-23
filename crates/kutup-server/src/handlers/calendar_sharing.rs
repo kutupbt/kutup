@@ -1983,8 +1983,22 @@ pub async fn stale_events(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<StaleEvents>> {
     let user_id = trusted_uuid(&user.account_id)?;
+    // Read without the calendar's lock: a listing changes nothing, and the
+    // rewrap checks every event again under it.
     let mut tx = state.pool.begin().await?;
-    let (newest, generations) = owned_calendar(&mut tx, user_id, id).await?;
+    if member_permissions(&mut tx, user_id, id).await? & SUPER_OWNER == 0 {
+        return Err(AppError::forbidden("only the owner compacts a calendar"));
+    }
+    let newest: i32 = sqlx::query_scalar("SELECT key_generation FROM calendars WHERE id = $1")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let generations: Vec<i32> = sqlx::query_scalar(
+        "SELECT key_generation FROM calendar_keys WHERE calendar_id = $1 ORDER BY key_generation",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
     let ids = generation_key_ids(&mut tx, id).await?;
     let newest_id = ids
         .iter()
