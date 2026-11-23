@@ -94,7 +94,15 @@ fn a_link_password_gates_the_link_and_survives_a_rekey() {
     kutup_crypto::primitives::random(&mut link_key);
     let salt = [7u8; 16];
     let protection = link_password::protect_with(
-        &secret, "hunter2", &link_key, &link_id, &owner.id, 2, &fast(), &salt, &[9u8; 24],
+        &secret,
+        "hunter2",
+        &link_key,
+        &link_id,
+        &owner.id,
+        2,
+        &fast(),
+        &salt,
+        &[9u8; 24],
     )
     .unwrap();
     let password_body = |from: i32, epoch: u32, key: &[u8; 32]| {
@@ -184,7 +192,12 @@ fn a_link_password_gates_the_link_and_survives_a_rekey() {
     .unwrap();
     assert_eq!(folder_key.as_slice(), &folder.key);
     assert_eq!(
-        get(&c, format!("{share_url}/files"), Some(right.proof.as_slice())).0,
+        get(
+            &c,
+            format!("{share_url}/files"),
+            Some(right.proof.as_slice())
+        )
+        .0,
         StatusCode::OK
     );
 
