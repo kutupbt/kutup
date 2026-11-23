@@ -1125,7 +1125,7 @@
         "driveTrashRetentionDays": "Keep trashed items (days)",
         "driveTrashRetentionDaysHint": "How long a deleted file or folder can be restored before it is deleted for good. 0 keeps the trash until its owner empties it.",
         "drivePublicLinkMaxExpiryDays": "Furthest public link expiry (days)",
-        "drivePublicLinkMaxExpiryDaysHint": "How far ahead an owner may set a public link to expire. 0: no limit, and links may never expire; any other value makes every link expire.",
+        "drivePublicLinkMaxExpiryDaysHint": "How far ahead an owner may set a public link to expire. 0: no limit, and links may never expire; any other value makes every link expire. It applies to links made or changed from then on: existing links keep their expiry (or none) until their owner changes it.",
         "drivePublicLinkPasswordMaxChars": "Longest public link password (characters)",
         "drivePublicLinkPasswordMaxCharsHint": "The longest password an owner may set on a public link.",
         "driveUploadMaxBytes": "Largest upload (bytes)",

@@ -125,6 +125,28 @@ pub async fn add(
     .await?)
 }
 
+/// Gives back one count reserved in the current window of `window_seconds`
+/// (a try that turned out right). Nothing when the window has turned since:
+/// the new one started from nothing.
+pub async fn give_back(
+    pool: &sqlx::PgPool,
+    scope: Scope,
+    subject: &[u8; 32],
+    window_seconds: i64,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE rate_counters SET count = count - 1
+          WHERE scope = $1 AND subject = $2 AND count > 0
+            AND window_start = to_timestamp(floor(extract(epoch FROM now()) / $3) * $3)",
+    )
+    .bind(scope.as_str())
+    .bind(subject.as_slice())
+    .bind(window_seconds)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// The subject's count in the scope's current window of `window_seconds`
 /// (0 when none), and the seconds until that window ends. A read: nothing
 /// is reserved.

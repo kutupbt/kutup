@@ -154,8 +154,10 @@ for every viewer). Wrong proofs count per link and address in
 (`drive.rate.link_password_address_failures`, 30 an hour), both editable.
 Past either, that address gets `429 linkPasswordLocked` with `Retry-After`
 (and `retryAfterSeconds`) until its window ends; other addresses still open
-the link. A right proof only reads the count (no lock, no write); a wrong one
-adds to it. The page says Proton's "Incorrect password. Please try again."
+the link. Every try is reserved in both counts before its proof is checked
+(the link and address's row in its own short transaction, the address
+limiter in memory), so a parallel burst gets no more checks than the
+limits; a right proof gives its reservations back, a wrong one keeps them. The page says Proton's "Incorrect password. Please try again."
 and, locked, "Too many attempts. Please try again in N minutes." from
 `Retry-After`; the session client neither refreshes on the link's `401`s nor
 retries its `429`. No human-verification step: Kutup has no CAPTCHA.
@@ -166,7 +168,9 @@ retries its `429`. No human-verification step: Kutup has no CAPTCHA.
 expire, as Proton's. Above 0 it caps the expiry and every link expires: one
 made without an expiry gets the cap, `PUT …/expiry` refuses null
 (`expiryRequired`), and the dialog keeps the expiry on with the cap as its
-last day.
+last day. The cap applies to links made or changed from then on: setting or
+lowering it leaves existing links' expiry (or none) as it is until their
+owner changes it.
 
 ## Reports on password links
 

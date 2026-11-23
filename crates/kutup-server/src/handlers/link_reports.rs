@@ -474,9 +474,12 @@ pub async fn block_link(
         return Err(AppError::not_found("not found"));
     };
     sqlx::query(
-        // The reporter's link stays: under a legal order it may be evidence.
+        // Erased on every resolution, as the others: a resolved report keeps
+        // no link or link password (the table's CHECKs); the block's own
+        // record (reason, reference, the audit log) is what stays.
         "UPDATE drive_public_link_reports
-            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'blocked'
+            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'blocked',
+                link = NULL, link_password = NULL
           WHERE share_id = $1 AND resolved_at IS NULL",
     )
     .bind(share)

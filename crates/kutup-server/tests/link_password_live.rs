@@ -484,6 +484,91 @@ fn wrong_passwords_lock_one_address_not_the_link() {
     let other = format!("203.0.113.{}", 1 + rand_octet());
     assert_eq!(open_from(&other, "right").status(), StatusCode::OK);
 
+    // A burst in parallel from one address gets no more checks than the
+    // limit: every try is reserved before its proof is checked.
+    let burst = format!("192.0.2.{}", 1 + rand_octet());
+    let answers: Vec<StatusCode> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..40)
+            .map(|_| scope.spawn(|| open_from(&burst, "wrong").status()))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let checked = answers
+        .iter()
+        .filter(|s| **s == StatusCode::UNAUTHORIZED)
+        .count();
+    assert!(
+        checked <= 2,
+        "{checked} wrong passwords were checked: {answers:?}"
+    );
+    assert!(
+        answers
+            .iter()
+            .all(|s| *s == StatusCode::UNAUTHORIZED || *s == StatusCode::TOO_MANY_REQUESTS),
+        "{answers:?}"
+    );
+
+    // A report carrying the link and its password; blocking the link
+    // resolves it and erases both.
+    let drive_app =
+        std::env::var("KUTUP_DRIVE_URL").unwrap_or_else(|_| "https://drive.localhost:38443".into());
+    let reported = c
+        .post(format!("{base}/api/v1/drive/public-links/{token}/report"))
+        .header("X-Real-IP", format!("198.18.0.{}", 1 + rand_octet()))
+        .json(&json!({
+            "reason": "abuse",
+            "details": "asks for a password",
+            "link": format!("{}/s/{token}", drive_app.trim_end_matches('/')),
+            "linkPassword": "right",
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(
+        reported.status(),
+        StatusCode::NO_CONTENT,
+        "{:?}",
+        reported.text()
+    );
+    let open_reports: Value = bearer(c.get(format!("{base}/api/v1/admin/reports")), &admin)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let mine = open_reports
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["shareId"] == link_id)
+        .expect("the report");
+    assert_eq!(mine["linkPassword"], "right");
+    let blocked = bearer(
+        c.post(format!("{base}/api/v1/admin/public-links/{link_id}/block")),
+        &admin,
+    )
+    .json(&json!({ "reason": "abuse", "reference": "report 1" }))
+    .send()
+    .unwrap();
+    assert!(blocked.status().is_success(), "{}", blocked.status());
+    let resolved: Value = bearer(
+        c.get(format!("{base}/api/v1/admin/reports?status=resolved")),
+        &admin,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let mine = resolved
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["shareId"] == link_id)
+        .expect("the resolved report");
+    assert_eq!(mine["resolution"], "blocked");
+    assert!(
+        mine["link"].is_null() && mine["linkPassword"].is_null(),
+        "{mine}"
+    );
+
     purge_accounts(&c, &base, &[&owner]);
 }
 

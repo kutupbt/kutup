@@ -18,8 +18,9 @@
 //! everyone: wrong guesses count per link and address
 //! (`drive.rate.link_password_failures`, in the database, every server
 //! process together) and per address over every link
-//! (`drive.rate.link_password_address_failures`). A right proof only reads
-//! the count; a wrong one adds to it.
+//! (`drive.rate.link_password_address_failures`). Every try is reserved in
+//! both before its proof is checked; a right proof gives its reservations
+//! back, so a parallel burst gets no more checks than the limits.
 
 use std::net::SocketAddr;
 
@@ -100,6 +101,15 @@ fn subject(link_id: Uuid, client: &str) -> [u8; 32] {
     .into()
 }
 
+/// Reserves one try in a link and address's count, in its own short
+/// transaction; the new count.
+async fn reserve(pool: &PgPool, counted: &[u8; 32], window: i64) -> AppResult<i64> {
+    let mut tx = pool.begin().await?;
+    let count = counters::add(&mut tx, Scope::DriveLinkPassword, counted, 1, window).await?;
+    tx.commit().await?;
+    Ok(count)
+}
+
 /// A protected link opened: its key under the password wrap key (purpose 14).
 pub struct Unlocked {
     pub link_key_envelope: String,
@@ -122,25 +132,39 @@ pub async fn unlock(pool: &PgPool, token: &str, proof: &LinkProof) -> AppResult<
     let Some(sent) = proof.proof.as_deref() else {
         return Err(required());
     };
-    let wait = LINK_PASSWORD_ADDRESS_FAILURES.wait(&proof.client);
-    if !wait.is_zero() {
-        return Err(locked(wait.as_secs()));
+    // Each try is reserved before it is checked, so a burst in parallel
+    // gets no more checks than the limits: one in the address limiter, one
+    // in this link and address's counter (its own row, no shared hotspot).
+    // A right proof gives both back.
+    if !LINK_PASSWORD_ADDRESS_FAILURES.allow(&proof.client) {
+        return Err(locked(
+            LINK_PASSWORD_ADDRESS_FAILURES.wait(&proof.client).as_secs(),
+        ));
     }
     let (limit, window) = crate::ratelimit::budget(Limit::LinkPasswordFailures);
     let counted = subject(link_id, &proof.client);
-    let (count, left) = counters::current(pool, Scope::DriveLinkPassword, &counted, window).await?;
-    if count >= limit {
+    let reserved = reserve(pool, &counted, window).await;
+    let count = match reserved {
+        Ok(count) => count,
+        Err(error) => {
+            LINK_PASSWORD_ADDRESS_FAILURES.pop(&proof.client);
+            return Err(error);
+        }
+    };
+    if count > limit {
+        // Over: this try is refused, and its reservation stays counted (the
+        // window ends at the same time either way).
+        LINK_PASSWORD_ADDRESS_FAILURES.pop(&proof.client);
+        let (_, left) = counters::current(pool, Scope::DriveLinkPassword, &counted, window).await?;
         return Err(locked(u64::try_from(left).unwrap_or(1)));
     }
     let right = STANDARD
         .decode(sent)
         .is_ok_and(|bytes| kutup_crypto::link_password::verify(&bytes, &verifier));
     if right {
+        LINK_PASSWORD_ADDRESS_FAILURES.pop(&proof.client);
+        counters::give_back(pool, Scope::DriveLinkPassword, &counted, window).await?;
         return Ok(Some(Unlocked { link_key_envelope }));
     }
-    let mut tx = pool.begin().await?;
-    counters::add(&mut tx, Scope::DriveLinkPassword, &counted, 1, window).await?;
-    tx.commit().await?;
-    LINK_PASSWORD_ADDRESS_FAILURES.allow(&proof.client);
     Err(wrong())
 }

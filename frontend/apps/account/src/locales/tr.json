@@ -1125,7 +1125,7 @@
         "driveTrashRetentionDays": "Çöp kutusundakileri sakla (gün)",
         "driveTrashRetentionDaysHint": "Silinen bir dosya ya da klasörün kalıcı olarak silinmeden önce geri yüklenebildiği süre. 0, çöp kutusunu sahibi boşaltana kadar tutar.",
         "drivePublicLinkMaxExpiryDays": "En uzak bağlantı son kullanma tarihi (gün)",
-        "drivePublicLinkMaxExpiryDaysHint": "Sahibin bir herkese açık bağlantının son kullanma tarihini ne kadar ileriye koyabileceği. 0: sınır yok, bağlantılar hiç dolmayabilir; başka her değer her bağlantının süresinin dolmasını sağlar.",
+        "drivePublicLinkMaxExpiryDaysHint": "Sahibin bir herkese açık bağlantının son kullanma tarihini ne kadar ileriye koyabileceği. 0: sınır yok, bağlantılar hiç dolmayabilir; başka her değer her bağlantının süresinin dolmasını sağlar. O andan sonra oluşturulan ya da değiştirilen bağlantılara uygulanır: var olan bağlantılar, sahipleri değiştirene kadar son kullanma tarihlerini (ya da tarihsizliklerini) korur.",
         "drivePublicLinkPasswordMaxChars": "En uzun bağlantı parolası (karakter)",
         "drivePublicLinkPasswordMaxCharsHint": "Sahibin bir herkese açık bağlantıya koyabileceği en uzun parola.",
         "driveUploadMaxBytes": "En büyük yükleme (bayt)",
