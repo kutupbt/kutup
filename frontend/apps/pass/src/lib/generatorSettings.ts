@@ -36,4 +36,3 @@ export function saveGeneratorSettings(settings: GeneratorSettings): void {
     // Storage off: the options last this page.
   }
 }
-

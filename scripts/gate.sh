@@ -93,6 +93,10 @@ rust_workspace() {
   # --workspace on purpose: feature unification turns on kutup-crypto's
   # `mail` feature, and its vector tests need it (a per-crate run skips them).
   cargo test --locked --workspace --all-targets
+  # Offline against the workspace lockfile, so it runs where the workspace
+  # dependencies were fetched (not in the standalone job).
+  step "Vendored keepass crate's own tests"
+  scripts/test-vendored-keepass.sh
 }
 
 rust_standalone() {
@@ -102,8 +106,6 @@ rust_standalone() {
   cargo check --locked --manifest-path crates/kutup-client-ffi/Cargo.toml --all-targets
   step "Fuzz targets (lockfile current, compile)"
   cargo check --locked --manifest-path fuzz/Cargo.toml --bins
-  step "Vendored keepass crate's own tests"
-  scripts/test-vendored-keepass.sh
 }
 
 rust() {
