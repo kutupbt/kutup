@@ -1,4 +1,4 @@
-//! `GET /api/mail/notifications` — new mail to tell the reader about
+//! `GET /api/v1/mail/notifications` — new mail to tell the reader about
 //! (docs/plans/mail-parity.md, P6), as Proton's `useNewEmailNotification`:
 //! unread mail that arrived, or snoozed mail that came back, in the Inbox,
 //! Starred, or a folder with notifications on (never Spam or Trash). Mail
@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// At most this many in one answer; the reader then sees one grouped notice.
@@ -58,7 +58,7 @@ pub struct NewMailPage {
 
 #[utoipa::path(
     get,
-    path = "/api/mail/notifications",
+    path = "/api/v1/mail/notifications",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(NotificationsQuery),
@@ -69,10 +69,10 @@ pub struct NewMailPage {
 )]
 pub async fn new_mail(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<NotificationsQuery>,
 ) -> AppResult<Json<NewMailPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let now: OffsetDateTime = sqlx::query_scalar("SELECT now()")
         .fetch_one(&state.pool)
         .await?;

@@ -79,9 +79,9 @@ impl Purpose {
 /// A grant as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Grant {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub session_id: Option<Uuid>,
-    pub target_user_id: Option<Uuid>,
+    pub target_account_id: Option<Uuid>,
 }
 
 fn hash(token: &str) -> Option<Vec<u8>> {
@@ -140,9 +140,9 @@ pub async fn peek<'e, E: sqlx::PgExecutor<'e>>(
             Some((
                 *purpose,
                 Grant {
-                    user_id,
+                    account_id: user_id,
                     session_id,
-                    target_user_id,
+                    target_account_id: target_user_id,
                 },
             ))
         }),
@@ -175,9 +175,9 @@ pub async fn take<'e, E: sqlx::PgExecutor<'e>>(
             Some((
                 *purpose,
                 Grant {
-                    user_id,
+                    account_id: user_id,
                     session_id,
-                    target_user_id,
+                    target_account_id: target_user_id,
                 },
             ))
         }),
@@ -197,12 +197,12 @@ pub async fn take_for_session<'e, E: sqlx::PgExecutor<'e>>(
     executor: E,
     token: &str,
     purpose: Purpose,
-    user: &crate::middleware::AuthUser,
+    user: &crate::middleware::AuthAccount,
 ) -> crate::error::AppResult<()> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     match take(executor, token, &[purpose]).await? {
         Some((_, grant))
-            if grant.user_id == user_id && grant.session_id == Some(user.session.session_id) =>
+            if grant.account_id == user_id && grant.session_id == Some(user.session.session_id) =>
         {
             Ok(())
         }

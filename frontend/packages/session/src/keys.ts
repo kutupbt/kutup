@@ -6,7 +6,7 @@ import { fromBase64, toBase64 } from '@kutup/crypto/base64'
 import { currentMasterKey, type MasterKeys } from '@kutup/crypto/masterKeys'
 
 export interface SessionKeys {
-  userId: string
+  accountId: string
   /** The account's current master key (32 bytes). */
   masterKey: Uint8Array
   /**
@@ -74,7 +74,7 @@ interface EncodedDevice {
  */
 interface EncodedKeys {
   v: 6
-  userId: string
+  accountId: string
   masterKey: string
   masterKeys: string
   roots: AccountRoots
@@ -92,7 +92,7 @@ export function encodeKeys(keys: SessionKeys): Uint8Array {
   if (!KEY_BINDING.test(keys.keyBinding)) throw new Error('session keys have no valid key binding')
   const value: EncodedKeys = {
     v: 6,
-    userId: keys.userId,
+    accountId: keys.accountId,
     masterKey: toBase64(keys.masterKey),
     masterKeys: keys.masterKeys,
     roots: keys.roots,
@@ -116,7 +116,7 @@ export function decodeKeys(bytes: Uint8Array): SessionKeys {
   const value = JSON.parse(new TextDecoder().decode(bytes)) as Partial<EncodedKeys>
   if (
     value.v !== 6 ||
-    typeof value.userId !== 'string' ||
+    typeof value.accountId !== 'string' ||
     typeof value.masterKey !== 'string' ||
     typeof value.masterKeys !== 'string' ||
     !isRoots(value.roots) ||
@@ -138,7 +138,7 @@ export function decodeKeys(bytes: Uint8Array): SessionKeys {
     throw new Error('session key payload has a master-key set of another key')
   }
   const keys: SessionKeys = {
-    userId: value.userId,
+    accountId: value.accountId,
     masterKey,
     masterKeys,
     roots: value.roots,

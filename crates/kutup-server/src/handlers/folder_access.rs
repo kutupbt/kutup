@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One epoch of a folder's key history.
@@ -91,22 +91,22 @@ fn public_key(value: &str) -> AppResult<Vec<u8>> {
     Ok(bytes)
 }
 
-/// `GET /api/collections/{id}/epochs` — the folder's key history, for the
+/// `GET /api/v1/drive/collections/{id}/epochs` — the folder's key history, for the
 /// owner and its members.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}/epochs",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/epochs",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "Key history, oldest first", body = Vec<EpochLink>))
 )]
 pub async fn epochs(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let collection_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     // The owner also opens trashed folders' files (the trash lists them).
     let owner: Option<Uuid> =
@@ -124,7 +124,7 @@ pub async fn epochs(
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessMember {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub account: String,
     pub account_incarnation_id: String,
     /// The member's Drive HPKE key, to seal them the next epoch's key.
@@ -206,22 +206,22 @@ async fn owned_folder(
         .ok_or_else(|| AppError::not_found("not found"))
 }
 
-/// `GET /api/collections/{id}/access` — everyone who can open the folder:
+/// `GET /api/v1/drive/collections/{id}/access` — everyone who can open the folder:
 /// members here, members elsewhere, public links. Owner only.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}/access",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/access",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "Who has access", body = FolderAccess))
 )]
 pub async fn access(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let owner = trusted_uuid(&user.user_id)?;
+    let owner = trusted_uuid(&user.account_id)?;
     let collection_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut conn = state.pool.acquire().await?;
     let (key_epoch, _, epoch_statement_hash) =
@@ -312,7 +312,7 @@ pub async fn access(
                     created_at,
                 )| {
                     AccessMember {
-                        user_id,
+                        account_id: user_id,
                         account: format!("{}@{domain}", username.unwrap_or_default()),
                         account_incarnation_id: incarnation,
                         drive_public_key: public_key,
@@ -378,7 +378,7 @@ pub async fn access(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct KeptMember {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub named_share_envelope: String,
 }
 
@@ -524,13 +524,13 @@ async fn rotate_album_items(
     Ok(())
 }
 
-/// `POST /api/collections/{id}/rotate` — move the folder to a new key, keep
+/// `POST /api/v1/drive/collections/{id}/rotate` — move the folder to a new key, keep
 /// who is listed, remove who is listed as removed. Owner only; all or
 /// nothing.
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/rotate",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/rotate",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = RotateRequest,
@@ -541,11 +541,11 @@ async fn rotate_album_items(
 )]
 pub async fn rotate(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<RotateRequest>,
 ) -> AppResult<Response> {
-    let owner = trusted_uuid(&user.user_id)?;
+    let owner = trusted_uuid(&user.account_id)?;
     let collection_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     let (epoch, name_revision, current_hash) =
@@ -639,7 +639,7 @@ pub async fn rotate(
     .bind(collection_id)
     .fetch_all(&mut *tx)
     .await?;
-    let kept_members: Vec<Uuid> = req.members.iter().map(|m| m.user_id).collect();
+    let kept_members: Vec<Uuid> = req.members.iter().map(|m| m.account_id).collect();
     let kept_links: Vec<Uuid> = req.public_links.iter().map(|l| l.id).collect();
     let kept_federated: Vec<Uuid> = req.federated_shares.iter().map(|f| f.id).collect();
     if !same_membership(
@@ -667,8 +667,8 @@ pub async fn rotate(
         .collect();
     let next_u32 = u32::try_from(next).map_err(|_| AppError::conflict("invalid epoch"))?;
     for member in &req.members {
-        let recipient_incarnation = &member_identity[&member.user_id];
-        let recipient = crate::account_ids::local(domain, member.user_id)?;
+        let recipient_incarnation = &member_identity[&member.account_id];
+        let recipient = crate::account_ids::local(domain, member.account_id)?;
         NamedShareEnvelopeV1::decode_b64(&member.named_share_envelope)
             .and_then(|share| {
                 share.verify_binding_and_signature(
@@ -766,7 +766,7 @@ pub async fn rotate(
              WHERE collection_id = $1 AND recipient_account_id = $2",
         )
         .bind(collection_id)
-        .bind(member.user_id)
+        .bind(member.account_id)
         .bind(&member.named_share_envelope)
         .execute(&mut *tx)
         .await?;
@@ -866,15 +866,15 @@ pub struct RekeyResult {
     pub key_generation: i32,
 }
 
-/// `POST /api/files/{id}/rekey` — give a file a new key, wrapped at its
+/// `POST /api/v1/drive/files/{id}/rekey` — give a file a new key, wrapped at its
 /// folder's current epoch, before writing to it: a file the folder has
 /// rotated past (docs/plans/drive-share-revocation.md). The key it leaves is
 /// sealed under the new one, so what was stored under it stays readable in
 /// any folder (docs/plans/drive-move.md). Editors only.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/rekey",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/rekey",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = RekeyRequest,
@@ -885,11 +885,11 @@ pub struct RekeyResult {
 )]
 pub async fn rekey(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<RekeyRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     if !crate::drive_writes::can_write_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::forbidden("forbidden"));

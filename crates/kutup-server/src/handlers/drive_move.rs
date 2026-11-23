@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::files::validate_envelope;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -75,14 +75,14 @@ pub(crate) async fn writable_folder(
     }
 }
 
-/// `POST /api/files/{id}/move` — move a file to another folder of the same
+/// `POST /api/v1/drive/files/{id}/move` — move a file to another folder of the same
 /// owner. Needs edit rights on both. The client re-seals only the file's
 /// key for the destination; a file its source folder has rotated past is
 /// re-keyed first, so no one removed from the source can follow it.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/move",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/move",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = MoveFileRequest,
@@ -94,11 +94,11 @@ pub(crate) async fn writable_folder(
 )]
 pub async fn move_file(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<MoveFileRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let from = Uuid::parse_str(&req.from_collection_id)
         .map_err(|_| AppError::bad_request("invalid request"))?;
@@ -190,13 +190,13 @@ pub struct MoveCollectionRequest {
     pub name_hash_generation: Option<u32>,
 }
 
-/// `POST /api/collections/{id}/move` — put a folder under another of the
+/// `POST /api/v1/drive/collections/{id}/move` — put a folder under another of the
 /// owner's folders, or at the top level. Owner only. A folder never goes
 /// into itself or anything under it.
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/move",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/move",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = MoveCollectionRequest,
@@ -207,11 +207,11 @@ pub struct MoveCollectionRequest {
 )]
 pub async fn move_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<MoveCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let folder = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let parent = req
         .parent_collection_id

@@ -17,21 +17,21 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::jobs;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{MessageResponse, TrashFileRow, TrashFolderRow, TrashResponse};
 use crate::AppState;
 
-/// `GET /api/trash` — the caller's trash roots (owned folders + files), newest first.
+/// `GET /api/v1/drive/trash` — the caller's trash roots (owned folders + files), newest first.
 #[utoipa::path(
     get,
-    path = "/api/trash",
-    tag = "trash",
+    path = "/api/v1/drive/trash",
+    tag = "drive",
     operation_id = "listTrash",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The caller's trash roots, newest first", body = TrashResponse))
 )]
-pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn list(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
 
     type FolderTuple = (
         Uuid,
@@ -72,8 +72,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         key_epoch: i32,
         key_generation: i32,
         metadata_revision: i64,
-        #[sqlx(rename = "owner_account_id")]
-        owner_user_id: Uuid,
+        owner_account_id: Uuid,
         owner_key_envelope: String,
         collection_key_epoch: i32,
         epoch_statement: String,
@@ -124,7 +123,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
                     deleted_at,
                 )| TrashFolderRow {
                     id: id.to_string(),
-                    owner_user_id: owner.to_string(),
+                    owner_account_id: owner.to_string(),
                     name_envelope: name,
                     owner_key_envelope: owner_key,
                     key_epoch: epoch,
@@ -148,7 +147,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
                 key_epoch: f.key_epoch,
                 key_generation: f.key_generation,
                 metadata_revision: f.metadata_revision,
-                collection_owner_user_id: f.owner_user_id.to_string(),
+                collection_owner_account_id: f.owner_account_id.to_string(),
                 collection_owner_key_envelope: f.owner_key_envelope,
                 collection_key_epoch: f.collection_key_epoch,
                 collection_epoch_statement: f.epoch_statement,
@@ -183,16 +182,16 @@ pub struct RestoreRequest {
     pub name_revision: Option<i64>,
 }
 
-/// `POST /api/trash/{id}/restore` — puts a trash root back where it was. A file whose
+/// `POST /api/v1/drive/trash/{id}/restore` — puts a trash root back where it was. A file whose
 /// folder is still in the trash is a 409 (restore the folder instead); a folder whose
 /// original parent is gone or trashed comes back at the top level. Its name must be
-/// free where it lands: a taken one is `409 name_taken`, and a folder landing at the
+/// free where it lands: a taken one is `409 nameTaken`, and a folder landing at the
 /// top level is `409 nameNeeded` (its hash belonged to the folder it left); the
 /// client then restores with a name of its own and its hash, in the same request.
 #[utoipa::path(
     post,
-    path = "/api/trash/{id}/restore",
-    tag = "trash",
+    path = "/api/v1/drive/trash/{id}/restore",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Trash-root id (file or folder)")),
     request_body(content = Option<RestoreRequest>, description = "A name to come back under"),
@@ -200,7 +199,7 @@ pub struct RestoreRequest {
 )]
 pub async fn restore(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Option<Json<RestoreRequest>>,
 ) -> AppResult<Response> {
@@ -210,7 +209,7 @@ pub async fn restore(
         .as_deref()
         .map(|hash| crate::drive_names::require_name_hash(Some(hash)))
         .transpose()?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let root_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let mut tx = state.pool.begin().await?;
@@ -412,22 +411,22 @@ pub async fn restore(
     .into_response())
 }
 
-/// `DELETE /api/trash/{id}` — permanently purges one trash root (DB rows + S3 blobs +
+/// `DELETE /api/v1/drive/trash/{id}` — permanently purges one trash root (DB rows + S3 blobs +
 /// quota release). Irreversible.
 #[utoipa::path(
     delete,
-    path = "/api/trash/{id}",
-    tag = "trash",
+    path = "/api/v1/drive/trash/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Trash-root id (file or folder)")),
     responses((status = 204, description = "Permanently purged"))
 )]
 pub async fn destroy(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let root_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let is_file_root: i64 = sqlx::query_scalar(
@@ -472,17 +471,17 @@ pub async fn destroy(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/trash` — empties the caller's whole trash. Irreversible.
+/// `DELETE /api/v1/drive/trash` — empties the caller's whole trash. Irreversible.
 #[utoipa::path(
     delete,
-    path = "/api/trash",
-    tag = "trash",
+    path = "/api/v1/drive/trash",
+    tag = "drive",
     operation_id = "emptyTrash",
     security(("BearerAuth" = [])),
     responses((status = 204, description = "Trash emptied"))
 )]
-pub async fn empty(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn empty(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
 
     let coll_roots: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM drive_collections WHERE owner_account_id = $1 AND trash_root_id = id",

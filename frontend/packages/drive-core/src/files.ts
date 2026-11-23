@@ -17,8 +17,8 @@ export const filesKey = (folderId: string) => ['files', folderId] as const
 export const folderFilesKey = (folder: Pick<Folder, 'id' | 'remoteShareId' | 'keyEpoch'>) =>
   [...filesKey(folder.remoteShareId ?? folder.id), folder.keyEpoch] as const
 
-export type FileRowLike = Omit<FileRow, 'uploaderUserId' | 'updatedAt'> & {
-  uploaderUserId?: string
+export type FileRowLike = Omit<FileRow, 'uploaderAccountId' | 'updatedAt'> & {
+  uploaderAccountId?: string
   updatedAt?: string
 }
 
@@ -51,7 +51,7 @@ export function toDriveFile(
   return {
     id: row.id,
     collectionId: row.collectionId,
-    uploaderUserId: row.uploaderUserId ?? null,
+    uploaderAccountId: row.uploaderAccountId ?? null,
     keyEpoch: row.keyEpoch,
     keyGeneration: row.keyGeneration,
     metadataRevision: row.metadataRevision,
@@ -86,8 +86,8 @@ export async function loadFolderFiles(folder: Folder): Promise<DriveFile[]> {
   const location = folderLocation(folder)
   const { data } = await api.get<FileRowLike[]>(
     location.kind === 'local'
-      ? `/collections/${location.collectionId}/files`
-      : `/drive/federation/shares/${location.shareId}/files`,
+      ? `/drive/collections/${location.collectionId}/files`
+      : `/drive/federation/folder-shares/${location.shareId}/files`,
   )
   return Promise.all(data.map((row) => openRow(row, folder)))
 }
@@ -135,7 +135,7 @@ export function useFolderFiles(folder: Folder | undefined) {
       // the stored share up to date (docs/plans/drive-share-revocation.md).
       if (folder!.remoteShareId && files.some((f) => f.keyEpoch > folder!.keyEpoch)) {
         await api
-          .post(`/drive/federation/shares/${folder!.remoteShareId}/refresh`)
+          .post(`/drive/federation/folder-shares/${folder!.remoteShareId}/refresh`)
           .then(() => queryClient.invalidateQueries({ queryKey: foldersKey }))
           .catch(() => {})
       }

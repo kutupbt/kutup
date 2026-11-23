@@ -155,7 +155,7 @@ export function ProfilePage() {
         <Section title={t('settings.profile.address')} description={t('settings.profile.addressDescription')}>
           <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
             <div className="rounded-xl border border-border bg-white p-3">
-              <QRCodeSVG value={contactUri({ username: address.split('@')[0], server: address.split('@')[1] })} size={144} aria-label={t('settings.profile.qr')} />
+              <QRCodeSVG value={contactUri({ server: address.split('@')[1], accountId: session.accountId })} size={144} aria-label={t('settings.profile.qr')} />
             </div>
             <div className="space-y-3">
               <code className="block break-all rounded-md bg-muted px-3 py-2 font-mono text-sm" data-testid="account-profile-address">{address}</code>

@@ -1,5 +1,5 @@
 //! Admin handlers — user CRUD, aggregate stats, the registration toggle, and the
-//! audit-log feed. Every route is behind the `AdminUser` extractor (authenticated +
+//! audit-log feed. Every route is behind the `AdminAccount` extractor (authenticated +
 //! `isAdmin`), so the handlers trust the caller.
 //!
 //! Every mutating handler writes an `admin_audit_log` row (who did what to whom,
@@ -23,7 +23,7 @@ use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::federation::{FederationDirection, FederationPolicyFeature};
 use crate::jobs;
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::AppState;
 
 /// Best-effort audit-log write, chained (`crate::audit_log`). The payload
@@ -59,7 +59,7 @@ pub(crate) async fn audit(
 /// (repeats within minutes folded; docs/plans/server-personal-data.md, A8).
 pub(crate) async fn viewed(
     state: &AppState,
-    admin: &AdminUser,
+    admin: &AdminAccount,
     target: Uuid,
     view: &str,
 ) -> AppResult<()> {
@@ -72,7 +72,7 @@ pub(crate) async fn viewed(
     }
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::AccountView,
         Some(target),
         serde_json::json!({ "view": view }),
@@ -108,16 +108,16 @@ async fn is_break_glass(state: &AppState, id: Uuid) -> AppResult<bool> {
 }
 
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
-#[schema(as = AdminUserRow)]
+#[schema(as = AdminAccountRow)]
 #[serde(rename_all = "camelCase")]
-struct UserRow {
+struct AccountRow {
     id: Uuid,
     username: String,
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
-    is_admin: bool,
-    /// The state is `active`.
-    is_active: bool,
+    /// `member`, `admin` or `breakGlassAdmin` (never demoted, suspended,
+    /// closed or reset).
+    role: String,
     /// `active`, `suspended` or `closing` (docs/plans/server-personal-data.md, A5).
     state: String,
     /// Why a suspended account is: `admin`, `operatorOrder` or `security`.
@@ -154,43 +154,46 @@ struct UserRow {
     public_sharing: String,
     /// Whether it talks to other servers: `on` or `off`.
     federation: String,
-    #[serde(rename = "totpEnabled")]
-    totp_enabled: bool,
-    /// Still on the admin-issued temp password (no key material yet). Gates the
-    /// admin "rotate temp password" action.
-    is_first_login: bool,
+    /// The authenticator app: `on`, `pending` (not confirmed by a first
+    /// code yet) or `off`.
+    two_factor: String,
+    /// The account has set up its keys; until then it is on the temporary
+    /// password an administrator gave (which "rotate temp password" replaces).
+    keys_set_up: bool,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String)]
     created_at: OffsetDateTime,
-    /// Marks the break-glass admin — the UI disables demote/disable/delete for this user.
-    is_protected: bool,
 }
 
-/// `GET /api/admin/users` — mirrors `ListUsers`.
+/// `GET /api/v1/admin/accounts` — mirrors `ListUsers`.
 #[utoipa::path(
     get,
-    path = "/api/admin/users",
+    path = "/api/v1/admin/accounts",
     tag = "admin",
     security(("BearerAuth" = [])),
-    responses((status = 200, description = "All user accounts", body = Vec<UserRow>))
+    responses((status = 200, description = "All user accounts", body = Vec<AccountRow>))
 )]
-pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
-    let users: Vec<UserRow> = sqlx::query_as(
+pub async fn list_users(
+    State(state): State<AppState>,
+    _admin: AdminAccount,
+) -> AppResult<Response> {
+    let users: Vec<AccountRow> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username,
                   COALESCE((SELECT value FROM account_entitlements
                              WHERE account_id = accounts.id AND key = $1 AND value > 0),
                            $2) AS storage_quota_bytes,
                   storage_used_bytes,
-                  role <> 'member' AS is_admin, state = 'active' AS is_active, state,
+                  role, state,
                   suspended_reason, closes_at,
                   legal_hold_reference, legal_hold_at, deletion_attempts, data_key_lost_at,
                   CASE WHEN (SELECT value FROM account_entitlements
                               WHERE account_id = accounts.id AND key = $3) = 0
                        THEN 'off' ELSE 'on' END AS public_sharing,
                   CASE WHEN kutup_account_federates(id) THEN 'on' ELSE 'off' END AS federation,
-                  totp_secret_sealed IS NOT NULL AS totp_enabled,
-                  keys_set_up_at IS NULL AS is_first_login, created_at,
-                  role = 'breakGlassAdmin' AS is_protected
+                  CASE WHEN totp_secret_sealed IS NOT NULL THEN 'on'
+                       WHEN totp_pending_secret_sealed IS NOT NULL THEN 'pending'
+                       ELSE 'off' END AS two_factor,
+                  keys_set_up_at IS NOT NULL AS keys_set_up, created_at
            FROM accounts ORDER BY created_at DESC"#,
     )
     .bind(crate::entitlements::STORAGE_QUOTA)
@@ -231,14 +234,15 @@ impl TempRegistration {
 async fn take_reset_grant(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     token: &str,
-    admin: &AdminUser,
+    admin: &AdminAccount,
     target: Uuid,
 ) -> AppResult<()> {
-    let admin_id = Uuid::parse_str(&admin.user_id).map_err(|_| AppError::forbidden("forbidden"))?;
+    let admin_id =
+        Uuid::parse_str(&admin.account_id).map_err(|_| AppError::forbidden("forbidden"))?;
     match crate::grants::take(&mut **tx, token, &[crate::grants::Purpose::AdminReset]).await? {
         Some((_, grant))
-            if grant.user_id == admin_id
-                && grant.target_user_id == Some(target)
+            if grant.account_id == admin_id
+                && grant.target_account_id == Some(target)
                 && grant.session_id == Some(admin.session_id) =>
         {
             Ok(())
@@ -249,7 +253,7 @@ async fn take_reset_grant(
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct CreateUserRequest {
+pub struct CreateAccountRequest {
     username: String,
     /// The temporary password, registered by the administrator's client.
     #[serde(flatten)]
@@ -258,22 +262,22 @@ pub struct CreateUserRequest {
     storage_quota_bytes: i64,
 }
 
-/// `POST /api/admin/users` — creates a first-login account under a temporary
+/// `POST /api/v1/admin/accounts` — creates a first-login account under a temporary
 /// password the administrator's browser derived (the server never sees it);
 /// the user establishes their E2EE key material on first sign-in. It signs in
 /// with its username; no email is asked (a recovery email is the user's own).
 #[utoipa::path(
     post,
-    path = "/api/admin/users",
+    path = "/api/v1/admin/accounts",
     tag = "admin",
     security(("BearerAuth" = [])),
-    request_body = crate::models::CreateAdminUserRequest,
+    request_body = crate::models::CreateAdminAccountRequest,
     responses((status = 201, description = "First-login account created"))
 )]
 pub async fn create_user(
     State(state): State<AppState>,
-    admin: AdminUser,
-    Json(req): Json<CreateUserRequest>,
+    admin: AdminAccount,
+    Json(req): Json<CreateAccountRequest>,
 ) -> AppResult<Response> {
     let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     if req.username.is_empty() {
@@ -291,7 +295,7 @@ pub async fn create_user(
     }
     let own_quota = (req.storage_quota_bytes > 0).then_some(req.storage_quota_bytes);
 
-    let federation_default = crate::federation_switch::site_default(&state.pool).await?;
+    let federation_default = crate::federation_switch::new_account_state(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     // One account per folded name (docs/plans/username-renames.md). The
     // break-glass account itself is made by `bootstrap_admin`, not here.
@@ -350,7 +354,7 @@ pub async fn create_user(
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::AccountCreate,
         Some(new_id),
         json!({
@@ -367,32 +371,49 @@ pub async fn create_user(
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct UpdateUserRequest {
+pub struct UpdateAccountRequest {
     storage_quota_bytes: Option<i64>,
-    is_active: Option<bool>,
+    /// `active` or `suspended`.
+    state: Option<String>,
     suspended_reason: Option<String>,
     public_sharing: Option<String>,
     federation: Option<String>,
-    is_admin: Option<bool>,
+    /// `member` or `admin` (the break-glass administrator is made only by
+    /// `bootstrap_admin`).
+    role: Option<crate::models::AccountRole>,
 }
 
-/// `PUT /api/admin/users/{id}` — mirrors `UpdateUser`. Each present field is one UPDATE.
+/// `PUT /api/v1/admin/accounts/{id}` — mirrors `UpdateUser`. Each present field is one UPDATE.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}",
+    path = "/api/v1/admin/accounts/{id}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
-    request_body = crate::models::UpdateAdminUserRequest,
+    request_body = crate::models::UpdateAdminAccountRequest,
     responses((status = 200, description = "User updated"))
 )]
 pub async fn update_user(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
-    Json(req): Json<UpdateUserRequest>,
+    Json(req): Json<UpdateAccountRequest>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let make_active = match req.state.as_deref() {
+        None => None,
+        Some("active") => Some(true),
+        Some("suspended") => Some(false),
+        Some(_) => return Err(AppError::bad_request("state must be active or suspended")),
+    };
+    let make_admin = match req.role {
+        None => None,
+        Some(crate::models::AccountRole::Member) => Some(false),
+        Some(crate::models::AccountRole::Admin) => Some(true),
+        Some(crate::models::AccountRole::BreakGlassAdmin) => {
+            return Err(AppError::bad_request("role must be member or admin"))
+        }
+    };
 
     // Load the target's current state for the break-glass + last-admin guards.
     let (target_is_admin, target_is_active): (bool, bool) =
@@ -402,8 +423,8 @@ pub async fn update_user(
             .await?
             .ok_or_else(|| AppError::not_found("not found"))?;
 
-    let wants_demote = req.is_admin == Some(false);
-    let wants_disable = req.is_active == Some(false);
+    let wants_demote = make_admin == Some(false);
+    let wants_disable = make_active == Some(false);
     let suspended_reason = req.suspended_reason.as_deref().unwrap_or("admin");
     if !["admin", "operatorOrder", "security"].contains(&suspended_reason) {
         return Err(AppError::bad_request(
@@ -448,7 +469,7 @@ pub async fn update_user(
         .await?;
         crate::audit_log::append_in(
             &mut tx,
-            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.user_id)?),
+            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.account_id)?),
             AdminAction::AccountSetEntitlement,
             Some(target),
             &json!({
@@ -460,7 +481,7 @@ pub async fn update_user(
         .await?;
         tx.commit().await?;
     }
-    if let Some(a) = req.is_active {
+    if let Some(a) = make_active {
         let mut tx = state.pool.begin().await?;
         if a {
             // Active again: a suspension lifted, or a closing account kept
@@ -489,7 +510,7 @@ pub async fn update_user(
                     target,
                     crate::security_events::Kind::AccountKept,
                     None,
-                    Some(crate::handlers::trusted_uuid(&admin.user_id)?),
+                    Some(crate::handlers::trusted_uuid(&admin.account_id)?),
                 )
                 .await?;
             }
@@ -519,7 +540,7 @@ pub async fn update_user(
             crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
             // Their public links are down with them (link_reports::ensure_link_up):
             // reports on those links are answered.
-            if let Ok(admin_uuid) = Uuid::parse_str(&admin.user_id) {
+            if let Ok(admin_uuid) = Uuid::parse_str(&admin.account_id) {
                 crate::handlers::link_reports::resolve_reports_of_owner(
                     &state.pool,
                     target,
@@ -530,10 +551,9 @@ pub async fn update_user(
         }
     }
     if let Some(federation) = req.federation.as_deref() {
-        // An administrator's switch. The consent is the user's to give: with
-        // a `federationAbroad` text published, on needs the user's own
-        // consent already given (`409 consentRequired`; a transfer abroad
-        // rests on it), and records none.
+        // An administrator's switch. The consent is the user's to give:
+        // where the site asks for the `federation` consent, on needs the
+        // user's own already given (`409 consentRequired`), and records none.
         if !["on", "off"].contains(&federation) {
             return Err(AppError::bad_request("federation must be on or off"));
         }
@@ -557,7 +577,7 @@ pub async fn update_user(
         }
         crate::audit_log::append_in(
             &mut tx,
-            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.user_id)?),
+            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.account_id)?),
             AdminAction::AccountSetFederation,
             Some(target),
             &json!({ "federation": federation }),
@@ -585,7 +605,7 @@ pub async fn update_user(
         .await?;
         crate::audit_log::append_in(
             &mut tx,
-            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.user_id)?),
+            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.account_id)?),
             AdminAction::AccountSetPublicSharing,
             Some(target),
             &json!({ "publicSharing": sharing }),
@@ -593,7 +613,7 @@ pub async fn update_user(
         .await?;
         tx.commit().await?;
     }
-    if let Some(a) = req.is_admin {
+    if let Some(a) = make_admin {
         // The break-glass administrator keeps its role (guarded above for a
         // demotion; a promotion leaves it as it is).
         let role = if a {
@@ -614,14 +634,14 @@ pub async fn update_user(
     if let Some(q) = req.storage_quota_bytes {
         changes.insert("storageQuotaBytes".into(), json!(q));
     }
-    if let Some(a) = req.is_active {
-        changes.insert("isActive".into(), json!(a));
-        if !a {
+    if let Some(wanted) = &req.state {
+        changes.insert("state".into(), json!(wanted));
+        if make_active == Some(false) {
             changes.insert("suspendedReason".into(), json!(suspended_reason));
         }
     }
-    if let Some(a) = req.is_admin {
-        changes.insert("isAdmin".into(), json!(a));
+    if let Some(role) = req.role {
+        changes.insert("role".into(), json!(role.as_str()));
     }
     if let Some(sharing) = &req.public_sharing {
         changes.insert("publicSharing".into(), json!(sharing));
@@ -631,7 +651,7 @@ pub async fn update_user(
     }
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::AccountUpdate,
         Some(target),
         json!({ "changes": changes }),
@@ -640,10 +660,10 @@ pub async fn update_user(
     Ok(Json(json!({"message": "updated"})).into_response())
 }
 
-/// `DELETE /api/admin/users/{id}` — mirrors `DeleteUser` (cascades via FKs).
+/// `DELETE /api/v1/admin/accounts/{id}` — mirrors `DeleteUser` (cascades via FKs).
 #[utoipa::path(
     delete,
-    path = "/api/admin/users/{id}",
+    path = "/api/v1/admin/accounts/{id}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -651,7 +671,7 @@ pub async fn update_user(
 )]
 pub async fn delete_user(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -680,7 +700,7 @@ pub async fn delete_user(
     .await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::AccountDelete,
         Some(target),
         json!({}),
@@ -689,12 +709,12 @@ pub async fn delete_user(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/admin/users/{id}/close` — closes the account: deleted after
+/// `POST /api/v1/admin/accounts/{id}/close` — closes the account: deleted after
 /// `account.closing_days`, unless kept (by its owner at sign-in, or here with
-/// `isActive: true`) (docs/plans/server-personal-data.md, A5).
+/// `state: active`) (docs/plans/server-personal-data.md, A5).
 #[utoipa::path(
     post,
-    path = "/api/admin/users/{id}/close",
+    path = "/api/v1/admin/accounts/{id}/close",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -702,7 +722,7 @@ pub async fn delete_user(
 )]
 pub async fn close_user(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -744,7 +764,7 @@ pub async fn close_user(
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::AccountClose,
         Some(target),
         json!({ "closesAt": closes_at.unix_timestamp() }),
@@ -753,7 +773,7 @@ pub async fn close_user(
     Ok(Json(crate::handlers::closing::Closed::new(closes_at)).into_response())
 }
 
-/// `PUT /api/admin/users/{id}/legal-hold` body.
+/// `PUT /api/v1/admin/accounts/{id}/legal-hold` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LegalHoldRequest {
@@ -761,12 +781,12 @@ pub struct LegalHoldRequest {
     reference: String,
 }
 
-/// `PUT /api/admin/users/{id}/legal-hold` — sets (or changes) a legal hold
+/// `PUT /api/v1/admin/accounts/{id}/legal-hold` — sets (or changes) a legal hold
 /// (docs/plans/server-personal-data.md, A5): while it is set nothing deletes
 /// the account or anything of it.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}/legal-hold",
+    path = "/api/v1/admin/accounts/{id}/legal-hold",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -775,7 +795,7 @@ pub struct LegalHoldRequest {
 )]
 pub async fn set_legal_hold(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(req): Json<LegalHoldRequest>,
 ) -> AppResult<Response> {
@@ -786,7 +806,7 @@ pub async fn set_legal_hold(
             "a hold needs a reference of 1 to 200 characters",
         ));
     }
-    let admin_id = crate::handlers::trusted_uuid(&admin.user_id)?;
+    let admin_id = crate::handlers::trusted_uuid(&admin.account_id)?;
     let set = sqlx::query(
         "UPDATE accounts SET legal_hold_reference = $2, legal_hold_at = now(), legal_hold_by_account_id = $3
           WHERE id = $1 AND deleting_at IS NULL",
@@ -811,7 +831,7 @@ pub async fn set_legal_hold(
     }
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::AccountSetLegalHold,
         Some(target),
         json!({ "reference": reference }),
@@ -820,11 +840,11 @@ pub async fn set_legal_hold(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/admin/users/{id}/legal-hold` — ends a legal hold; deletions
+/// `DELETE /api/v1/admin/accounts/{id}/legal-hold` — ends a legal hold; deletions
 /// that waited (a closing account past its date) go ahead.
 #[utoipa::path(
     delete,
-    path = "/api/admin/users/{id}/legal-hold",
+    path = "/api/v1/admin/accounts/{id}/legal-hold",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -832,7 +852,7 @@ pub async fn set_legal_hold(
 )]
 pub async fn clear_legal_hold(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -851,7 +871,7 @@ pub async fn clear_legal_hold(
     if let Some(reference) = previous {
         audit(
             &state.pool,
-            &admin.user_id,
+            &admin.account_id,
             AdminAction::AccountClearLegalHold,
             Some(target),
             json!({ "reference": reference }),
@@ -1028,12 +1048,12 @@ pub(crate) async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppR
     Ok(())
 }
 
-/// `DELETE /api/admin/users/{id}/2fa` — mirrors `ForceDisable2FA`. Clears the target's TOTP
+/// `DELETE /api/v1/admin/accounts/{id}/2fa` — mirrors `ForceDisable2FA`. Clears the target's TOTP
 /// (the admin caller is already authenticated + admin-gated, so no TOTP-code challenge).
 /// Allowed on the break-glass admin too — it's a recovery aid and can't lock anyone out.
 #[utoipa::path(
     delete,
-    path = "/api/admin/users/{id}/2fa",
+    path = "/api/v1/admin/accounts/{id}/2fa",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -1041,7 +1061,7 @@ pub(crate) async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppR
 )]
 pub async fn force_disable_2fa(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -1060,13 +1080,13 @@ pub async fn force_disable_2fa(
         target,
         crate::security_events::Kind::TwoFactorOff,
         None,
-        Uuid::parse_str(&admin.user_id).ok(),
+        Uuid::parse_str(&admin.account_id).ok(),
     )
     .await?;
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::AccountDisableTwoFactor,
         Some(target),
         json!({}),
@@ -1079,8 +1099,8 @@ pub async fn force_disable_2fa(
 #[schema(as = AdminStatsResponse)]
 #[serde(rename_all = "camelCase")]
 struct StatsResponse {
-    total_users: i64,
-    active_users: i64,
+    total_accounts: i64,
+    active_accounts: i64,
     total_files: i64,
     /// DB sum — logical per-account usage.
     #[serde(rename = "totalStorageUsedBytes")]
@@ -1093,15 +1113,15 @@ struct StatsResponse {
     storage_backend_used_bytes: i64,
 }
 
-/// `GET /api/admin/stats` — mirrors `GetStats`.
+/// `GET /api/v1/admin/stats` — mirrors `GetStats`.
 #[utoipa::path(
     get,
-    path = "/api/admin/stats",
+    path = "/api/v1/admin/stats",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Aggregate instance stats", body = StatsResponse))
 )]
-pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
+pub async fn get_stats(State(state): State<AppState>, _admin: AdminAccount) -> AppResult<Response> {
     let scalar = |sql: &'static str| {
         let pool = state.pool.clone();
         async move {
@@ -1127,8 +1147,8 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
     }
 
     let stats = StatsResponse {
-        total_users: scalar("SELECT COUNT(*) FROM accounts").await,
-        active_users: scalar("SELECT COUNT(*) FROM accounts WHERE state = 'active'").await,
+        total_accounts: scalar("SELECT COUNT(*) FROM accounts").await,
+        active_accounts: scalar("SELECT COUNT(*) FROM accounts WHERE state = 'active'").await,
         total_files: scalar("SELECT COUNT(*) FROM drive_files").await,
         // ::bigint — SUM(bigint) yields NUMERIC, which sqlx cannot decode as i64;
         // without the cast this silently fell back to 0 via unwrap_or.
@@ -1143,18 +1163,23 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
     Ok(Json(stats).into_response())
 }
 
-/// `GET /api/admin/settings` — mirrors `GetSettings`.
+/// `GET /api/v1/admin/settings` — mirrors `GetSettings`.
 #[utoipa::path(
     get,
-    path = "/api/admin/settings",
+    path = "/api/v1/admin/settings",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Site settings", body = crate::models::AdminSettingsResponse))
 )]
-pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
+pub async fn get_settings(
+    State(state): State<AppState>,
+    _admin: AdminAccount,
+) -> AppResult<Response> {
     let registration_mode = crate::registration::mode(&state).await?;
     let public_sharing = crate::public_sharing::site(&state.pool).await?;
     let federation_default = crate::federation_switch::site_default(&state.pool).await?;
+    let federation_consent_required =
+        crate::federation_switch::consent_required(&state.pool).await?;
     let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
         &state.pool,
         crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
@@ -1184,6 +1209,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         "registrationMode": registration_mode,
         "publicSharing": public_sharing,
         "federationDefault": federation_default,
+        "federationConsentRequired": federation_consent_required,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
@@ -1210,6 +1236,7 @@ pub struct UpdateSettingsRequest {
     registration_mode: Option<crate::registration::RegistrationMode>,
     public_sharing: Option<crate::public_sharing::PublicSharing>,
     federation_default: Option<bool>,
+    federation_consent_required: Option<bool>,
     default_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
@@ -1242,10 +1269,10 @@ fn present<'de, D: serde::Deserializer<'de>>(
     Option::<i64>::deserialize(deserializer).map(Some)
 }
 
-/// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
+/// `PUT /api/v1/admin/settings` — mirrors `UpdateSettings`.
 #[utoipa::path(
     put,
-    path = "/api/admin/settings",
+    path = "/api/v1/admin/settings",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = crate::models::UpdateAdminSettingsRequest,
@@ -1253,12 +1280,13 @@ fn present<'de, D: serde::Deserializer<'de>>(
 )]
 pub async fn update_settings(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(req): Json<UpdateSettingsRequest>,
 ) -> AppResult<Response> {
     if req.registration_mode.is_none()
         && req.public_sharing.is_none()
         && req.federation_default.is_none()
+        && req.federation_consent_required.is_none()
         && req.default_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
@@ -1388,6 +1416,9 @@ pub async fn update_settings(
     if let Some(on) = req.federation_default {
         crate::federation_switch::set_site_default(&mut transaction, on).await?;
     }
+    if let Some(required) = req.federation_consent_required {
+        crate::federation_switch::set_consent_required(&mut transaction, required).await?;
+    }
     for (key, value) in [
         (
             crate::storage_pool::DEFAULT_QUOTA_SETTING,
@@ -1480,13 +1511,14 @@ pub async fn update_settings(
     transaction.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::SettingsUpdate,
         None,
         json!({
             "registrationMode": req.registration_mode,
             "publicSharing": req.public_sharing,
             "federationDefault": req.federation_default,
+            "federationConsentRequired": req.federation_consent_required,
             "defaultStorageQuotaBytes": req.default_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
@@ -1792,14 +1824,14 @@ pub struct RepinFederationPeerRequest {
 
 #[utoipa::path(
     get,
-    path = "/api/admin/federation",
+    path = "/api/v1/admin/federation",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Unified federation policy and peer trust state", body = FederationControlPlaneResponse))
 )]
 pub async fn get_federation_control_plane(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Response> {
     type FeatureRow = (String, String, String);
     let global_enabled: bool =
@@ -2050,7 +2082,7 @@ pub async fn get_federation_control_plane(
 
 #[utoipa::path(
     put,
-    path = "/api/admin/federation",
+    path = "/api/v1/admin/federation",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = UpdateFederationPolicyRequest,
@@ -2058,7 +2090,7 @@ pub async fn get_federation_control_plane(
 )]
 pub async fn update_federation_policy(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(req): Json<UpdateFederationPolicyRequest>,
 ) -> AppResult<Response> {
     let feature = canonical_federation_feature(&req.feature)?;
@@ -2085,7 +2117,7 @@ pub async fn update_federation_policy(
     wake_federation_outbox(&state.pool, None).await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::FederationUpdatePolicy,
         None,
         json!({"globalEnabled": req.global_enabled, "feature": feature,
@@ -2097,7 +2129,7 @@ pub async fn update_federation_policy(
 
 #[utoipa::path(
     put,
-    path = "/api/admin/federation/rules/{feature}/{domain}",
+    path = "/api/v1/admin/federation/rules/{feature}/{domain}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("feature" = String, Path), ("domain" = String, Path)),
@@ -2106,7 +2138,7 @@ pub async fn update_federation_policy(
 )]
 pub async fn upsert_federation_domain_rule(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path((feature, domain)): Path<(String, String)>,
     Json(req): Json<UpsertFederationDomainRuleRequest>,
 ) -> AppResult<Response> {
@@ -2140,7 +2172,7 @@ pub async fn upsert_federation_domain_rule(
     wake_federation_outbox(&state.pool, Some(&domain)).await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::FederationSetRule,
         None,
         json!({"domain": domain, "feature": feature, "inbound": req.inbound,
@@ -2152,7 +2184,7 @@ pub async fn upsert_federation_domain_rule(
 
 #[utoipa::path(
     delete,
-    path = "/api/admin/federation/rules/{feature}/{domain}",
+    path = "/api/v1/admin/federation/rules/{feature}/{domain}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("feature" = String, Path), ("domain" = String, Path)),
@@ -2160,7 +2192,7 @@ pub async fn upsert_federation_domain_rule(
 )]
 pub async fn delete_federation_domain_rule(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path((feature, domain)): Path<(String, String)>,
 ) -> AppResult<Response> {
     let feature = canonical_federation_feature(&feature)?;
@@ -2177,7 +2209,7 @@ pub async fn delete_federation_domain_rule(
     wake_federation_outbox(&state.pool, Some(&domain)).await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::FederationDeleteRule,
         None,
         json!({"domain": domain, "feature": feature}),
@@ -2188,7 +2220,7 @@ pub async fn delete_federation_domain_rule(
 
 #[utoipa::path(
     get,
-    path = "/api/admin/federation/peers/{domain}/evidence",
+    path = "/api/v1/admin/federation/peers/{domain}/evidence",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("domain" = String, Path)),
@@ -2199,7 +2231,7 @@ pub async fn delete_federation_domain_rule(
 )]
 pub async fn get_federation_peer_evidence(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Path(domain): Path<String>,
 ) -> AppResult<Response> {
     let domain = canonical_federation_domain(&domain)?;
@@ -2265,7 +2297,7 @@ pub async fn get_federation_peer_evidence(
 
 #[utoipa::path(
     post,
-    path = "/api/admin/federation/peers/{domain}/verify",
+    path = "/api/v1/admin/federation/peers/{domain}/verify",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("domain" = String, Path)),
@@ -2274,7 +2306,7 @@ pub async fn get_federation_peer_evidence(
 )]
 pub async fn verify_federation_peer(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(domain): Path<String>,
     Json(req): Json<VerifyFederationPeerRequest>,
 ) -> AppResult<Response> {
@@ -2283,7 +2315,7 @@ pub async fn verify_federation_peer(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::bad_request("federation is not configured"))?;
-    let admin_id = Uuid::parse_str(&admin.user_id)
+    let admin_id = Uuid::parse_str(&admin.account_id)
         .map_err(|_| AppError::internal("invalid administrator identity"))?;
     federation
         .trust()
@@ -2301,7 +2333,7 @@ pub async fn verify_federation_peer(
 
 #[utoipa::path(
     post,
-    path = "/api/admin/federation/peers/{domain}/retry",
+    path = "/api/v1/admin/federation/peers/{domain}/retry",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("domain" = String, Path)),
@@ -2309,7 +2341,7 @@ pub async fn verify_federation_peer(
 )]
 pub async fn retry_federation_peer(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(domain): Path<String>,
 ) -> AppResult<Response> {
     let domain = canonical_federation_domain(&domain)?;
@@ -2317,7 +2349,7 @@ pub async fn retry_federation_peer(
     wake_federation_outbox(&state.pool, Some(&domain)).await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::FederationRetryPeer,
         None,
         json!({"domain": domain, "refreshed": result.is_ok(), "error": result.err()}),
@@ -2328,7 +2360,7 @@ pub async fn retry_federation_peer(
 
 #[utoipa::path(
     post,
-    path = "/api/admin/federation/peers/retry",
+    path = "/api/v1/admin/federation/peers/retry",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = BulkRetryFederationPeersRequest,
@@ -2336,7 +2368,7 @@ pub async fn retry_federation_peer(
 )]
 pub async fn bulk_retry_federation_peers(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(req): Json<BulkRetryFederationPeersRequest>,
 ) -> AppResult<Response> {
     if req.domains.is_empty() {
@@ -2375,7 +2407,7 @@ pub async fn bulk_retry_federation_peers(
     results.sort_by(|left, right| left.domain.cmp(&right.domain));
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::FederationRetryPeers,
         None,
         json!({"results": results.iter().map(|result| json!({
@@ -2431,7 +2463,7 @@ async fn retry_peer_resolution(state: &AppState, domain: &str) -> Result<(), Str
 
 #[utoipa::path(
     post,
-    path = "/api/admin/federation/peers/{domain}/repin",
+    path = "/api/v1/admin/federation/peers/{domain}/repin",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("domain" = String, Path)),
@@ -2440,7 +2472,7 @@ async fn retry_peer_resolution(state: &AppState, domain: &str) -> Result<(), Str
 )]
 pub async fn repin_federation_peer(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(domain): Path<String>,
     Json(req): Json<RepinFederationPeerRequest>,
 ) -> AppResult<Response> {
@@ -2449,7 +2481,7 @@ pub async fn repin_federation_peer(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::bad_request("federation is not configured"))?;
-    let admin_id = Uuid::parse_str(&admin.user_id)
+    let admin_id = Uuid::parse_str(&admin.account_id)
         .map_err(|_| AppError::internal("invalid administrator identity"))?;
     federation
         .trust()
@@ -2511,7 +2543,7 @@ pub struct RotateTempPasswordRequest {
     setup: TempRegistration,
 }
 
-/// `POST /api/admin/users/{id}/rotate-temp-password` — replaces the temp password of an
+/// `POST /api/v1/admin/accounts/{id}/rotate-temp-password` — replaces the temp password of an
 /// account that has not set up its keys (`keys_set_up_at` NULL). Such an account has no key material yet, so
 /// this destroys nothing. For an established account this is a `409`: under E2EE the
 /// server cannot reset a password without destroying the user's data — they self-serve
@@ -2519,7 +2551,7 @@ pub struct RotateTempPasswordRequest {
 /// Design: `docs/research/10-admin-password-reset.md`.
 #[utoipa::path(
     post,
-    path = "/api/admin/users/{id}/rotate-temp-password",
+    path = "/api/v1/admin/accounts/{id}/rotate-temp-password",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -2531,7 +2563,7 @@ pub struct RotateTempPasswordRequest {
 )]
 pub async fn rotate_temp_password(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(req): Json<RotateTempPasswordRequest>,
 ) -> AppResult<Response> {
@@ -2583,14 +2615,14 @@ pub async fn rotate_temp_password(
         target,
         crate::security_events::Kind::AdminReset,
         None,
-        Uuid::parse_str(&admin.user_id).ok(),
+        Uuid::parse_str(&admin.account_id).ok(),
     )
     .await?;
     tx.commit().await?;
 
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::AccountRotateTempPassword,
         Some(target),
         json!({}),
@@ -2607,13 +2639,13 @@ pub struct ResetGrantRequest {
     grant: String,
 }
 
-/// `POST /api/admin/users/{id}/reset-grant` — the admin's fresh password
+/// `POST /api/v1/admin/accounts/{id}/reset-grant` — the admin's fresh password
 /// proof (a reauth grant for `adminReset`), exchanged for one bound to this
 /// account: what its temporary password's registration and the reset itself
 /// take. Single use, five minutes, this admin session only.
 #[utoipa::path(
     post,
-    path = "/api/admin/users/{id}/reset-grant",
+    path = "/api/v1/admin/accounts/{id}/reset-grant",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -2625,12 +2657,13 @@ pub struct ResetGrantRequest {
 )]
 pub async fn reset_grant(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(req): Json<ResetGrantRequest>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let admin_id = Uuid::parse_str(&admin.user_id).map_err(|_| AppError::forbidden("forbidden"))?;
+    let admin_id =
+        Uuid::parse_str(&admin.account_id).map_err(|_| AppError::forbidden("forbidden"))?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)")
         .bind(target)
         .fetch_one(&state.pool)
@@ -2642,8 +2675,8 @@ pub async fn reset_grant(
     match crate::grants::take(&mut *tx, &req.grant, &[crate::grants::Purpose::AdminReset]).await? {
         // The admin's own, untargeted, from this session.
         Some((_, grant))
-            if grant.user_id == admin_id
-                && grant.target_user_id.is_none()
+            if grant.account_id == admin_id
+                && grant.target_account_id.is_none()
                 && grant.session_id == Some(admin.session_id) => {}
         _ => return Err(crate::grants::invalid()),
     }
@@ -2663,7 +2696,7 @@ pub async fn reset_grant(
 // No Debug: it carries a one-time grant (or tokens).
 #[derive(Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
-pub struct WipeUserRequest {
+pub struct ResetKeysRequest {
     /// An admin-reset grant for this account (`reset-grant`).
     grant: String,
     /// The temporary password it starts again with, registered by the
@@ -2672,7 +2705,7 @@ pub struct WipeUserRequest {
     setup: TempRegistration,
 }
 
-/// `POST /api/admin/users/{id}/wipe` — the destructive "reset" for a user who lost both
+/// `POST /api/v1/admin/accounts/{id}/reset-keys` — the destructive "reset" for a user who lost both
 /// password and recovery phrase. Their data is cryptographically unreachable anyway;
 /// this makes it official: purges every owned collection (files, versions, assets, S3
 /// blobs, shares), erases the key bundle + TOTP + device signing keys, and resets the
@@ -2680,18 +2713,18 @@ pub struct WipeUserRequest {
 /// survive. Irreversible. Design: `docs/research/10-admin-password-reset.md`.
 #[utoipa::path(
     post,
-    path = "/api/admin/users/{id}/wipe",
+    path = "/api/v1/admin/accounts/{id}/reset-keys",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
-    request_body = WipeUserRequest,
+    request_body = ResetKeysRequest,
     responses((status = 200, description = "Account wiped + reset to first-login"))
 )]
 pub async fn wipe_user(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
-    Json(req): Json<WipeUserRequest>,
+    Json(req): Json<ResetKeysRequest>,
 ) -> AppResult<Response> {
     let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -2802,7 +2835,7 @@ pub async fn wipe_user(
                key_binding = $1::uuid, opaque_record = $3, opaque_suite = $4,
                opaque_server_key_id = $5,
                totp_secret_sealed = NULL, totp_pending_secret_sealed = NULL,
-               keys_set_up_at = NULL, updated_at = NOW()
+               totp_last_step = NULL, keys_set_up_at = NULL, updated_at = NOW()
            WHERE id = $2"#,
     )
     .bind(&key_binding)
@@ -2827,7 +2860,7 @@ pub async fn wipe_user(
         target,
         crate::security_events::Kind::AccountReset,
         None,
-        Uuid::parse_str(&admin.user_id).ok(),
+        Uuid::parse_str(&admin.account_id).ok(),
     )
     .await?;
     tx.commit().await?;
@@ -2848,7 +2881,7 @@ pub async fn wipe_user(
 
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         AdminAction::AccountResetKeys,
         Some(target),
         json!({}),
@@ -2877,10 +2910,10 @@ struct ActivityEntry {
     /// The row's kind (an `AdminAction`, `area.verb`).
     action: String,
     /// The acting admin; the nil id for the server's own steps (actor `job`).
-    admin_user_id: Uuid,
+    admin_account_id: Uuid,
     /// The acting admin's live username — `null` once that account is deleted.
     admin_username: Option<String>,
-    target_user_id: Option<Uuid>,
+    target_account_id: Option<Uuid>,
     /// The target's live username — `null` once deleted (payloads name
     /// accounts by id only).
     target_username: Option<String>,
@@ -2909,17 +2942,17 @@ pub struct ActivityIntegrity {
     pub append_only: bool,
 }
 
-/// `GET /api/admin/activity/verify` — walks the admin log's hash chain.
+/// `GET /api/v1/admin/activity/verify` — walks the admin log's hash chain.
 #[utoipa::path(
     get,
-    path = "/api/admin/activity/verify",
+    path = "/api/v1/admin/activity/verify",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The chain checked, and whether the logs are append-only", body = ActivityIntegrity))
 )]
 pub async fn activity_verify(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<ActivityIntegrity>> {
     Ok(Json(ActivityIntegrity {
         chain: crate::audit_log::verify(&state.pool).await?,
@@ -2927,10 +2960,10 @@ pub async fn activity_verify(
     }))
 }
 
-/// `GET /api/admin/activity?limit=50&before=<id>` — the filterable audit-log feed.
+/// `GET /api/v1/admin/activity?limit=50&before=<id>` — the filterable audit-log feed.
 #[utoipa::path(
     get,
-    path = "/api/admin/activity",
+    path = "/api/v1/admin/activity",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(
@@ -2943,7 +2976,7 @@ pub async fn activity_verify(
 )]
 pub async fn activity(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Query(q): Query<ActivityQuery>,
 ) -> AppResult<Response> {
     let limit = q.limit.unwrap_or(50).clamp(1, 100);
@@ -2963,7 +2996,7 @@ pub async fn activity(
 
 #[utoipa::path(
     get,
-    path = "/api/admin/activity/export",
+    path = "/api/v1/admin/activity/export",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(
@@ -2976,14 +3009,14 @@ pub async fn activity(
 )]
 pub async fn activity_export(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Query(q): Query<ActivityQuery>,
 ) -> AppResult<Response> {
     validate_activity_query(&q)?;
     let limit = q.limit.unwrap_or(1000).clamp(1, 5000);
     let entries = load_activity_entries(&state.pool, &q, limit).await?;
     let mut csv = String::from(
-        "id,occurred_at,action,admin_user_id,admin_username,target_user_id,target_username,payload\n",
+        "id,occurred_at,action,admin_account_id,admin_username,target_account_id,target_username,payload\n",
     );
     for entry in entries {
         let values = [
@@ -2993,10 +3026,10 @@ pub async fn activity_export(
                 .format(&time::format_description::well_known::Rfc3339)
                 .map_err(|_| AppError::internal("could not format audit timestamp"))?,
             entry.action,
-            entry.admin_user_id.to_string(),
+            entry.admin_account_id.to_string(),
             entry.admin_username.unwrap_or_default(),
             entry
-                .target_user_id
+                .target_account_id
                 .map(|id| id.to_string())
                 .unwrap_or_default(),
             entry.target_username.unwrap_or_default(),
@@ -3089,9 +3122,9 @@ async fn load_activity_entries(
                 ActivityEntry {
                     id,
                     action,
-                    admin_user_id: admin_id,
+                    admin_account_id: admin_id,
                     admin_username: a_username,
-                    target_user_id: target_id,
+                    target_account_id: target_id,
                     target_username: t_username,
                     payload,
                     occurred_at: at,

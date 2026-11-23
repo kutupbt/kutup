@@ -17,7 +17,7 @@
 // Needs ffmpeg on the PATH, with libvpx (Chromium) or libx264 (WebKit);
 // skipped without it.
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test, type BrowserContext, type Locator, type Page, type Request } from '../fixtures/test'
@@ -29,7 +29,9 @@ const PASSWORD = 'Deneme123*StreamLongVideoPassword'
 const DURATION_S = 2 * 60 * 60
 const SEEK_TO_S = 90 * 60
 const BLOCK = 4 * 1024 * 1024
-const SOURCE = ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc=size=320x180:rate=4:duration=${DURATION_S}`]
+// Noise on the card, so the encoder spends its bitrate: libvpx (ffmpeg 7.1)
+// made 62 MB of a still card at 320 kbit/s, under the 50-block floor.
+const SOURCE = ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc=size=320x180:rate=4:duration=${DURATION_S},noise=alls=40:allf=t`]
 
 /** The test video for a browser: what it plays, and how ffmpeg makes it. */
 interface LongVideo {
@@ -68,15 +70,20 @@ function hasEncoder(encoder: string): boolean {
   }
 }
 
-/** Two hours of a moving test card at 4 fps. */
-function longVideo(spec: LongVideo): Buffer {
+/**
+ * Two hours of a moving, noisy test card at 4 fps, written to a file:
+ * Playwright takes a file over 50 MB by its path only. `remove` deletes it.
+ */
+function longVideo(spec: LongVideo): { path: string; size: number; remove: () => void } {
   const dir = mkdtempSync(join(tmpdir(), 'kutup-192-'))
+  const remove = () => rmSync(dir, { recursive: true, force: true })
   try {
-    const out = join(dir, spec.name)
-    execFileSync('ffmpeg', [...SOURCE, ...spec.args, out], { stdio: 'pipe', timeout: 15 * 60_000 })
-    return readFileSync(out)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
+    const path = join(dir, spec.name)
+    execFileSync('ffmpeg', [...SOURCE, ...spec.args, path], { stdio: 'pipe', timeout: 15 * 60_000 })
+    return { path, size: statSync(path).size, remove }
+  } catch (error) {
+    remove()
+    throw error
   }
 }
 
@@ -115,12 +122,12 @@ async function seekAndPlay(media: Locator, seconds: number): Promise<void> {
   await expect.poll(() => media.evaluate((element: HTMLMediaElement) => element.currentTime), { timeout: 20_000 }).toBeGreaterThan(seconds + 1)
 }
 
-async function uploadToPhotos(page: Page, spec: LongVideo, video: Buffer): Promise<void> {
+async function uploadToPhotos(page: Page, video: string): Promise<void> {
   await page.goto(appUrl('photos'))
   const upload = page.getByRole('button', { name: 'Upload', exact: true }).first()
   await expect(upload).toBeVisible({ timeout: 120_000 })
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), upload.click()])
-  await chooser.setFiles({ name: spec.name, mimeType: spec.mimeType, buffer: video })
+  await chooser.setFiles(video)
   await expect(page.getByText('Uploads complete')).toBeVisible({ timeout: 10 * 60_000 })
 }
 
@@ -130,12 +137,17 @@ test.describe('a long video streams by block', () => {
     test.skip(!hasEncoder(spec.encoder), `needs ffmpeg with ${spec.encoder} to make the two-hour ${spec.name} for ${browserName}`)
     test.setTimeout(30 * 60_000)
     const video = longVideo(spec)
-    expect(video.length).toBeGreaterThan(50 * BLOCK)
+    if (video.size <= 50 * BLOCK) video.remove()
+    expect(video.size, 'the video is above the 50-block floor').toBeGreaterThan(50 * BLOCK)
     const context = await browser.newContext()
     await registerAccount(context, newAccount('longvid', PASSWORD))
     const log = rangeLog(context)
     const page = await context.newPage()
-    await uploadToPhotos(page, spec, video)
+    try {
+      await uploadToPhotos(page, video.path)
+    } finally {
+      video.remove()
+    }
 
     // Photos' viewer.
     await page.getByRole('button', { name: new RegExp(`^${spec.name.replace('.', '\\.')},`) }).click()
@@ -145,12 +157,17 @@ test.describe('a long video streams by block', () => {
     const inPhotosPath = await playingPath(inPhotos, `Photos' viewer ${spec.name}`, { timeout: 10 * 60_000 })
     const beforeSeek = log.reads.length
     await seekAndPlay(inPhotos, SEEK_TO_S)
+    // The last block holds the WebM's cues (its index, at the end), which
+    // Chromium reads at the first seek: not counted with the media read there.
+    const lastBlock = Math.floor((video.size - 1) / BLOCK)
+    const mediaBlocks = (from: number) => [...log.blocksSince(from)].filter((block) => block < lastBlock)
     if (inPhotosPath === 'stream') {
-      // The block under 1:30:00 and the one read ahead, perhaps the next: a handful, not the file.
-      expect(log.blocksSince(beforeSeek).size).toBeLessThanOrEqual(4)
+      // The block under 1:30:00 and those read ahead (at 320 kbit/s a block
+      // is about 105 s): a handful, not the file.
+      expect(mediaBlocks(beforeSeek).length).toBeLessThanOrEqual(4)
       // From the first byte to here: the header, the manifest, the start, the index and the seek.
       expect(log.bytesSince(0)).toBeLessThan(12 * BLOCK)
-      expect(log.bytesSince(0)).toBeLessThan(video.length / 4)
+      expect(log.bytesSince(0)).toBeLessThan(video.size / 4)
     }
     await page.keyboard.press('Escape')
 
@@ -169,7 +186,7 @@ test.describe('a long video streams by block', () => {
     const beforeDriveSeek = log.reads.length
     await seekAndPlay(inDrive, SEEK_TO_S + 600)
     if (inDrivePath === 'stream') {
-      expect(log.blocksSince(beforeDriveSeek).size).toBeLessThanOrEqual(4)
+      expect(mediaBlocks(beforeDriveSeek).length).toBeLessThanOrEqual(4)
       expect(log.bytesSince(beforeDrive)).toBeLessThan(12 * BLOCK)
     }
     await context.close()

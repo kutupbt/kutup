@@ -17,6 +17,7 @@ import type { AdminSettings, PublicSharing, RegistrationMode, RegistrySetting, S
 import { SETTING_LABELS } from './limitLabels'
 import { useAdminSettings, useSettingsRegistry, useUpdateAdminSettings } from './api'
 import { Choice } from './federation/Choice'
+import { ClientVersionsSection } from './ClientVersions'
 import { bytesToGib, gibToBytes } from './helpers'
 
 const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
@@ -80,6 +81,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
     registrationMode: z.enum(['on', 'code', 'off']),
     publicSharing: z.enum(['on', 'signedIn', 'off']),
     federationDefault: z.enum(['on', 'off']),
+    federationConsentRequired: z.enum(['on', 'off']),
     quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
@@ -107,6 +109,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
       registrationMode: settings.registrationMode,
       publicSharing: settings.publicSharing,
       federationDefault: settings.federationDefault ? 'on' : 'off',
+      federationConsentRequired: settings.federationConsentRequired ? 'on' : 'off',
       quotaGib: bytesToGib(settings.defaultStorageQuotaBytes),
       mailboxDays: settings.chatMailboxRetentionDays,
       mediaDays: settings.chatMediaDeliveryRetentionDays,
@@ -127,6 +130,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
         registrationMode: v.registrationMode,
         publicSharing: v.publicSharing,
         federationDefault: v.federationDefault === 'on',
+        federationConsentRequired: v.federationConsentRequired === 'on',
         defaultStorageQuotaBytes: gibToBytes(v.quotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
@@ -192,6 +196,19 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
                       name="federationDefault"
                       render={({ field }) => (
                         <Choice value={field.value} options={ON_OFF} labelPrefix="admin.settings.federationDefaultMode" onChange={field.onChange} ariaLabel={t('admin.settings.federationDefault')} />
+                      )}
+                    />
+                  )}
+                </Field>
+              </div>
+              <div className="mt-5 max-w-sm">
+                <Field label={t('admin.settings.federationConsentRequired')} description={t('admin.settings.federationConsentRequiredHint')}>
+                  {() => (
+                    <Controller
+                      control={control}
+                      name="federationConsentRequired"
+                      render={({ field }) => (
+                        <Choice value={field.value} options={ON_OFF} labelPrefix="admin.settings.federationDefaultMode" onChange={field.onChange} ariaLabel={t('admin.settings.federationConsentRequired')} />
                       )}
                     />
                   )}
@@ -323,11 +340,19 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
             </CardContent>
           </Card>
         </Section>
+        <Section title={t('admin.settings.sessions')} description={t('admin.settings.sessionsHint')}>
+          <Card>
+            <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+              {numericFields('sessions')}
+            </CardContent>
+          </Card>
+        </Section>
         {update.isError ? <Alert variant="error">{apiErrorMessage(update.error, t('admin.settings.saveFailed'))}</Alert> : null}
         <div className="flex justify-end">
           <Button type="submit" loading={update.isPending} disabled={!isDirty}>{t('common.save')}</Button>
         </div>
       </form>
+      <ClientVersionsSection />
     </PageBody>
   )
 }

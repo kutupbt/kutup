@@ -106,7 +106,7 @@ impl<'a> Signer<'a> {
             client,
             store,
             sess,
-            account: AccountRef::new(&server, &sess.user_id)
+            account: AccountRef::new(&server, &sess.account_id)
                 .map_err(|_| anyhow!("this session's account is malformed"))?,
             server,
             identity: sess.identity()?,
@@ -137,7 +137,7 @@ impl<'a> Signer<'a> {
     /// lists it with its key; else a new one registered and listed now.
     pub fn device(&self) -> Result<Device> {
         if let Some(kept) = self.store.collab_device()? {
-            if kept.server == self.server && kept.user_id == self.sess.user_id {
+            if kept.server == self.server && kept.account_id == self.sess.account_id {
                 if let Some(device) = self.listed(&kept)? {
                     return Ok(device);
                 }
@@ -233,7 +233,7 @@ impl<'a> Signer<'a> {
             .context("list this CLI in the account's manifest")?;
         self.store.put_collab_device(Some(&CollabDevice {
             server: self.server.clone(),
-            user_id: self.sess.user_id.clone(),
+            account_id: self.sess.account_id.clone(),
             device_id: device.id,
             seed: STANDARD.encode(device.seed.as_ref()),
             credential: STANDARD.encode(device.credential.as_ref()),

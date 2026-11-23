@@ -30,7 +30,7 @@ use super::call_links::{
     vouched_name, SEALED_NAME_BYTES,
 };
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// People who can wait at one meeting at a time.
@@ -144,7 +144,7 @@ pub struct DecideKnockRequest {
 /// still waiting in.
 #[utoipa::path(
     put,
-    path = "/api/chat/call-links/{roomId}/waiting-room",
+    path = "/api/v1/chat/call-links/{roomId}/waiting-room",
     tag = "chat",
     operation_id = "setChatCallLinkWaitingRoom",
     params(("roomId" = String, Path, description = "The link's room id")),
@@ -157,7 +157,7 @@ pub struct DecideKnockRequest {
 )]
 pub(crate) async fn set_waiting_room(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Path(room_id): Path<String>,
     Json(request): Json<SetWaitingRoomRequest>,
 ) -> AppResult<StatusCode> {
@@ -195,7 +195,7 @@ pub(crate) async fn set_waiting_room(
 /// Ask to be let into a meeting with a waiting room. No account.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/knock",
+    path = "/api/v1/chat/call-links/knock",
     tag = "chat",
     operation_id = "knockChatCallLink",
     request_body = KnockRequest,
@@ -287,7 +287,7 @@ pub(crate) async fn knock(
 /// the knock was decided; then it changes nothing.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/knock/leave",
+    path = "/api/v1/chat/call-links/knock/leave",
     tag = "chat",
     operation_id = "leaveChatCallLinkKnock",
     request_body = KnockStatusRequest,
@@ -333,7 +333,7 @@ pub(crate) async fn leave_knock(
 /// receives the SFU token. Asking also says the knocker is still there.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/knock/status",
+    path = "/api/v1/chat/call-links/knock/status",
     tag = "chat",
     operation_id = "getChatCallLinkKnockStatus",
     request_body = KnockStatusRequest,
@@ -417,7 +417,7 @@ pub(crate) async fn knock_status(
 /// Who is waiting to be let in, oldest first, for the meeting's hosts.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/knocks",
+    path = "/api/v1/chat/call-links/knocks",
     tag = "chat",
     operation_id = "listChatCallLinkKnocks",
     request_body = HostCredentials,
@@ -465,7 +465,7 @@ pub(crate) async fn knocks(
 /// Admit or turn away one person waiting, as a host.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/knocks/decide",
+    path = "/api/v1/chat/call-links/knocks/decide",
     tag = "chat",
     operation_id = "decideChatCallLinkKnock",
     request_body = DecideKnockRequest,

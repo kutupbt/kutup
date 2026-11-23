@@ -76,14 +76,14 @@ Only `mail_messages` carries the change feed (`srv/change_feed.rs`).
 
 ### 2.2 One API
 
-- `GET /api/account/records/:scope?after=<seq>`: a page of the scope's
+- `GET /api/v1/account/records/:scope?after=<seq>`: a page of the scope's
   changes after `after` (records and tombstones in counter order, at most a
   site-set number), the next cursor, `more`, and the account head, all from
   one snapshot. `after=0` (a new device) lists every record and is never
   told to start over; a cursor below the forgotten tombstones' floor is
   (`resync`).
-- `GET /api/account/records/:scope/:id`.
-- `POST /api/account/records` with `{ head, puts: [{ scope, id, baseRevision,
+- `GET /api/v1/account/records/:scope/:id`.
+- `POST /api/v1/account/records` with `{ head, puts: [{ scope, id, baseRevision,
   envelope }], deletes: [{ scope, id, baseRevision }] }`.
   - It is applied in one transaction under the account lock, and the head
     advances last (`account_heads::advance`).
@@ -94,7 +94,7 @@ Only `mail_messages` carries the change feed (`srv/change_feed.rs`).
   - A retried batch that already landed fails its revision checks: the
     client reads again and finds its change there (Signal's model). No
     replay table.
-  - A conflict answers `409 revision_conflict` with the current revision of
+  - A conflict answers `409 revisionConflict` with the current revision of
     each record that conflicted.
 - `values` for the record scopes becomes one generic query on
   `account_records`. Contacts, mail names and calendars keep their own query
@@ -244,7 +244,7 @@ parallel.
 
 Slice 4 moves `kutup-client-ffi`'s pins to the records routes with today's
 behaviour: read unverified, written without a head (an account that keeps
-one refuses it with `head_required`). The FFI has no head manager yet, and
+one refuses it with `headRequired`). The FFI has no head manager yet, and
 building one is the native-apps work: it is done together with
 `start_client`'s head check (docs/roadmap.md, "Native iOS and Android
 apps"), not as a half head manager here.
@@ -264,8 +264,8 @@ apps"), not as a half head manager here.
 - **The ledger keeps each entity's newest revision only** (decision 1).
 - **Gone:** `photos_library`, `chat_attachment_ledger_{entities,history,
   operations}`, `chat_attachment_ledger_cursor_seq`, `GET`/`PUT
-  /api/photos/library`, `GET /api/chat/media/ledger`, `PUT
-  /api/chat/media/ledger/:entityId`, their wire types in kutup-chat-proto,
+  /api/v1/photos/library`, `GET /api/v1/chat/media/ledger`, `PUT
+  /api/v1/chat/media/ledger/:entityId`, their wire types in kutup-chat-proto,
   the WASM digest and inspect calls, and both browser-local chain pins
   (migration `20261111210000`, reversible). `account_records.envelope` now
   takes up to 4 MiB + header (the library's bound); each envelope is still
@@ -300,9 +300,9 @@ apps"), not as a half head manager here.
   they stay on the member row, as Proton's server reads its calendars'
   notification defaults. Sealing them would leave events without their own
   reminders silent; that needs a decision (client-computed alarms) first.
-- **Removed:** `GET/POST /api/contacts/groups`, `PUT/DELETE
-  /api/contacts/groups/:id`, `GET/POST/DELETE /api/chat/joined-meetings`,
-  `DELETE /api/chat/joined-meetings/:id`, and the tables `contact_groups`,
+- **Removed:** `GET/POST /api/v1/contacts/groups`, `PUT/DELETE
+  /api/v1/contacts/groups/:id`, `GET/POST/DELETE /api/v1/chat/joined-meetings`,
+  `DELETE /api/v1/chat/joined-meetings/:id`, and the tables `contact_groups`,
   `contact_group_members`, `chat_joined_meetings` (migration
   `20261111220000`). The head's index still reads the old stores of slices
   3 to 5's scopes until those slices land; that last part of "the old index

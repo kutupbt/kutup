@@ -47,7 +47,7 @@ pub fn server_domain(c: &Client, base: &str) -> String {
         return domain.clone();
     }
     let settings: Value = c
-        .get(format!("{base}/api/auth/settings"))
+        .get(format!("{base}/api/v1/auth/settings"))
         .send()
         .unwrap()
         .json()
@@ -223,7 +223,7 @@ pub fn try_opaque_register_answer(
 ) -> Result<(String, u16, kutup_crypto::opaque::ExportKey, Value), (StatusCode, Value)> {
     let (registering, request) = kutup_crypto::opaque::client_registration_start(password).unwrap();
     let mut req = c
-        .post(format!("{base}/api/auth/opaque/register/start"))
+        .post(format!("{base}/api/v1/auth/opaque/register/start"))
         .json(&json!({ "keyBinding": key_binding, "registrationRequest": b64(&request), "grant": grant }));
     if let Some(token) = bearer_token {
         req = req.bearer_auth(token);
@@ -266,7 +266,7 @@ pub fn opaque_login(
         None => req,
     };
     let r = with_bearer(
-        c.post(format!("{base}/api/auth/login/start"))
+        c.post(format!("{base}/api/v1/auth/login/start"))
             .header("x-kutup-client", "cli")
             .json(&json!({
                 // A reauth names no account: it is the session's own.
@@ -288,7 +288,7 @@ pub fn opaque_login(
     let Ok(signed_in) = signing_in.finish(&response) else {
         // A wrong password: ended, as a client does (the account's log counts it).
         let r = c
-            .post(format!("{base}/api/auth/login/abort"))
+            .post(format!("{base}/api/v1/auth/login/abort"))
             .json(&json!({ "loginId": started["loginId"] }))
             .send()
             .unwrap();
@@ -296,7 +296,7 @@ pub fn opaque_login(
         return (StatusCode::UNAUTHORIZED, Value::Null, None);
     };
     let r = with_bearer(
-        c.post(format!("{base}/api/auth/login/finish"))
+        c.post(format!("{base}/api/v1/auth/login/finish"))
             .header("x-kutup-client", "cli")
             .json(&json!({
                 "loginId": started["loginId"],
@@ -318,7 +318,7 @@ pub fn opaque_login(
 /// The account's security log (`query`: its `?…`).
 pub fn security_events(c: &Client, base: &str, token: &str, query: &str) -> Value {
     let r = bearer(
-        c.get(format!("{base}/api/user/security-events{query}")),
+        c.get(format!("{base}/api/v1/account/security-events{query}")),
         token,
     )
     .send()
@@ -345,7 +345,7 @@ pub struct Renamed {
 /// Renames `user` to `to` as the apps do: the signed statement and, unless `no_key` (a held name whose
 /// address kept its keys: the check's `needsKey` false), its first key.
 pub fn rename_account(c: &Client, base: &str, user: &User, to: &str, no_key: bool) -> Renamed {
-    let me: Value = bearer(c.get(format!("{base}/api/user/me")), &user.token)
+    let me: Value = bearer(c.get(format!("{base}/api/v1/account")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -388,7 +388,7 @@ pub fn rename_account(c: &Client, base: &str, user: &User, to: &str, no_key: boo
         })
     });
     let grant = reauth_grant(c, base, user, "rename");
-    let r = bearer(c.post(format!("{base}/api/user/rename")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/account/rename")), &user.token)
         .json(&json!({ "grant": grant, "rename": statement,
                        "mailAddress": mail_address }))
         .send()
@@ -505,7 +505,7 @@ fn sign_up_sent(
             "masterKeyEnvelope": export_key.seal_master_key(&master_key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &key_binding).unwrap(),
             "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountRecordPurpose::RecoveryMasterKey),
             "accountRoots": sealed_roots(&roots, &master_key, &key_binding),
-            "publicKey": b64(&identity.drive_hpke_public_key()),
+            "driveXwingPublicKey": b64(&identity.drive_xwing_public_key()),
             "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
             "accountAuthorityKeyId": identity.authority_key_id(),
             "accountIncarnationId": identity.incarnation_id(),
@@ -529,7 +529,7 @@ fn sign_up_sent(
     tweak(&mut body);
     // Sign-up answers the session, as a sign-in does.
     let r = c
-        .post(format!("{base}/api/auth/register"))
+        .post(format!("{base}/api/v1/auth/register"))
         .header("x-kutup-client", "cli")
         .json(&body)
         .send()
@@ -542,7 +542,7 @@ fn sign_up_sent(
         .as_str()
         .unwrap()
         .to_string();
-    let id = bearer(c.get(format!("{base}/api/user/me")), &token)
+    let id = bearer(c.get(format!("{base}/api/v1/account")), &token)
         .send()
         .unwrap()
         .json::<Value>()
@@ -568,7 +568,7 @@ fn sign_up_sent(
 }
 
 /// The account's roots as its server hands them to its session
-/// (`GET /api/account/roots`), opened with its master key and checked
+/// (`GET /api/v1/account/roots`), opened with its master key and checked
 /// against its authority.
 #[allow(dead_code)]
 pub fn fetch_roots(
@@ -578,7 +578,7 @@ pub fn fetch_roots(
     master_key: &[u8; 32],
     binding: &str,
 ) -> kutup_crypto::account_roots::AccountRoots {
-    let answer: Value = bearer(c.get(format!("{base}/api/account/roots")), token)
+    let answer: Value = bearer(c.get(format!("{base}/api/v1/account/roots")), token)
         .send()
         .unwrap()
         .json()
@@ -621,7 +621,7 @@ pub fn sealed_roots(
 }
 
 pub fn me(c: &Client, base: &str, token: &str) -> Value {
-    bearer(c.get(format!("{base}/api/user/me")), token)
+    bearer(c.get(format!("{base}/api/v1/account")), token)
         .send()
         .unwrap()
         .json()
@@ -662,7 +662,7 @@ pub fn create_folder_in(c: &Client, base: &str, owner: &User, parent: Option<&st
     let id = uuid();
     let mut key = [0u8; 32];
     kutup_crypto::primitives::random(&mut key);
-    let r = bearer(c.post(format!("{base}/api/collections")), &owner.token)
+    let r = bearer(c.post(format!("{base}/api/v1/drive/collections")), &owner.token)
         .json(&json!({
             "id": id,
             "ownerKeyEnvelope": owner_collection_key(&key, owner, &id, 1),
@@ -688,17 +688,20 @@ pub fn share(c: &Client, base: &str, owner: &User, folder: &Folder, to: &User, c
         owner.identity.drive_signing_key(),
         &to.person,
         &to.identity.incarnation_id(),
-        &to.identity.drive_hpke_public_key(),
+        &to.identity.drive_xwing_public_key(),
     )
     .unwrap()
     .encode_b64()
     .unwrap();
     let r = bearer(
-        c.post(format!("{base}/api/collections/{}/share", folder.id)),
+        c.post(format!(
+            "{base}/api/v1/drive/collections/{}/share",
+            folder.id
+        )),
         &owner.token,
     )
     .json(&json!({
-        "recipientUserId": to.id,
+        "recipientAccountId": to.id,
         "namedShareEnvelope": envelope,
         "canUpload": can_upload,
         "canDelete": false,
@@ -800,7 +803,7 @@ pub fn seal_file(folder: &Folder, id: &str, plain: &[u8]) -> Sealed {
     }
 }
 
-/// A whole-buffer upload of `file` into `folder` (`POST /api/files/upload`),
+/// A whole-buffer upload of `file` into `folder` (`POST /api/v1/drive/files`),
 /// committed inline as its first revision.
 pub fn upload(c: &Client, base: &str, token: &str, folder: &Folder, file: &Sealed) -> Response {
     let form = multipart::Form::new()
@@ -819,16 +822,19 @@ pub fn upload(c: &Client, base: &str, token: &str, folder: &Folder, file: &Seale
             "file",
             multipart::Part::bytes(file.blob.clone()).file_name("encrypted"),
         );
-    bearer(c.post(format!("{base}/api/files/upload")), token)
+    bearer(c.post(format!("{base}/api/v1/drive/files")), token)
         .multipart(form)
         .send()
         .unwrap()
 }
 
 pub fn download(c: &Client, base: &str, token: &str, file_id: &str) -> (StatusCode, Vec<u8>) {
-    let r = bearer(c.get(format!("{base}/api/files/{file_id}/download")), token)
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.get(format!("{base}/api/v1/drive/files/{file_id}/download")),
+        token,
+    )
+    .send()
+    .unwrap();
     (r.status(), r.bytes().unwrap().to_vec())
 }
 
@@ -877,10 +883,10 @@ impl Version {
     }
 }
 
-/// `POST /api/files/{id}/versions` with `fields`, committing `version`
+/// `POST /api/v1/drive/files/{id}/versions` with `fields`, committing `version`
 /// inline with the file's next metadata. The test doesn't track the file's
 /// metadata revision: a first request names revision 1, which no stored
-/// file can take next, and the `409 revision_conflict` it gets names the
+/// file can take next, and the `409 revisionConflict` it gets names the
 /// current one, on top of which the save is sealed again (as clients do).
 /// Any other answer to the first request is the answer.
 pub fn save_version(
@@ -904,7 +910,10 @@ pub fn save_version(
             multipart::Part::bytes(version.blob.clone()).file_name("version"),
         );
         bearer(
-            c.post(format!("{base}/api/files/{}/versions", version.file_id)),
+            c.post(format!(
+                "{base}/api/v1/drive/files/{}/versions",
+                version.file_id
+            )),
             token,
         )
         .multipart(form)
@@ -915,7 +924,7 @@ pub fn save_version(
     let current = (first.status == StatusCode::CONFLICT)
         .then(|| first.json::<Value>().ok())
         .flatten()
-        .filter(|body| body["code"] == "revision_conflict")
+        .filter(|body| body["code"] == "revisionConflict")
         .and_then(|body| body["metadataRevision"].as_i64());
     match current {
         Some(current) => Answer::of(send(current + 1)),
@@ -985,7 +994,10 @@ pub fn put_asset(
         )
         .unwrap();
     bearer(
-        c.put(format!("{base}/api/files/{}/assets/{asset_id}", file.id)),
+        c.put(format!(
+            "{base}/api/v1/drive/files/{}/assets/{asset_id}",
+            file.id
+        )),
         token,
     )
     .multipart(
@@ -1015,7 +1027,7 @@ pub fn tus_create(
     .map(|(k, v)| format!("{k} {}", b64(v.as_bytes())))
     .collect::<Vec<_>>()
     .join(",");
-    bearer(c.post(format!("{base}/api/uploads")), token)
+    bearer(c.post(format!("{base}/api/v1/drive/uploads")), token)
         .header("Tus-Resumable", "1.0.0")
         .header("Upload-Length", length.to_string())
         .header("Upload-Metadata", meta)
@@ -1074,7 +1086,7 @@ pub fn purge_accounts(c: &Client, base: &str, users: &[&User]) {
     let token = admin_token(c, base, password, name);
     for user in users {
         let r = bearer(
-            c.delete(format!("{base}/api/admin/users/{}", user.id)),
+            c.delete(format!("{base}/api/v1/admin/accounts/{}", user.id)),
             &token,
         )
         .send()
@@ -1176,7 +1188,7 @@ fn setup_keys(
     let setup_token = first_login["setupToken"].as_str().unwrap();
     let person = AccountRef::new(
         &server_domain(c, base),
-        first_login["userId"].as_str().unwrap(),
+        first_login["accountId"].as_str().unwrap(),
     )
     .unwrap();
     let mut master_key = [0u8; 32];
@@ -1202,7 +1214,7 @@ fn setup_keys(
         .unwrap()
     };
     let completed = c
-        .post(format!("{base}/api/auth/complete-setup"))
+        .post(format!("{base}/api/v1/auth/complete-setup"))
         .header("x-kutup-client", "cli")
         .bearer_auth(setup_token)
         .json(&json!({
@@ -1211,7 +1223,7 @@ fn setup_keys(
             "masterKeyEnvelope": export_key.seal_master_key(&master_key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &binding).unwrap(),
             "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountRecordPurpose::RecoveryMasterKey),
             "accountRoots": sealed_roots(&roots, &master_key, &binding),
-            "publicKey": b64(&identity.drive_hpke_public_key()),
+            "driveXwingPublicKey": b64(&identity.drive_xwing_public_key()),
             "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
             "accountAuthorityKeyId": identity.authority_key_id(),
             "accountIncarnationId": identity.incarnation_id(),
@@ -1264,7 +1276,10 @@ pub fn wipe_and_set_up(c: &Client, base: &str, admin: &str, user: &mut User) {
     let mut setup = temp_registration(c, base, "Temporary*Password123", &admin_token, Some(&grant));
     setup["grant"] = json!(grant);
     let r = bearer(
-        c.post(format!("{base}/api/admin/users/{}/wipe", user.id)),
+        c.post(format!(
+            "{base}/api/v1/admin/accounts/{}/reset-keys",
+            user.id
+        )),
         &admin_token,
     )
     .json(&setup)
@@ -1299,7 +1314,7 @@ pub fn admin_reset_grant(
     );
     assert_eq!(status, StatusCode::OK, "admin reauth: {body}");
     let r = bearer(
-        c.post(format!("{base}/api/admin/users/{target}/reset-grant")),
+        c.post(format!("{base}/api/v1/admin/accounts/{target}/reset-grant")),
         admin_token,
     )
     .json(&json!({ "grant": body["grant"] }))
@@ -1350,7 +1365,7 @@ pub fn account_manifest(
 ) -> Option<kutup_chat_proto::AccountManifestV3> {
     let r = bearer(
         c.get(format!(
-            "{base}/api/chat/accounts/{}/manifest",
+            "{base}/api/v1/chat/accounts/{}/manifest",
             user.person.account_id
         )),
         &user.token,
@@ -1407,7 +1422,7 @@ pub fn publish_manifest(
     by: &str,
     manifest: &kutup_chat_proto::AccountManifestV3,
 ) -> reqwest::blocking::Response {
-    bearer(c.post(format!("{base}/api/chat/manifest")), &user.token)
+    bearer(c.post(format!("{base}/api/v1/chat/manifest")), &user.token)
         .header(kutup_chat_proto::DEVICE_HEADER, by)
         .json(manifest)
         .send()
@@ -1425,15 +1440,18 @@ pub fn register_device(c: &Client, base: &str, user: &User) -> Device {
         kutup_crypto::primitives::SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &seed)
             .verifying_key()
             .to_array::<32>();
-    let r = bearer(c.post(format!("{base}/api/devices")), &user.token)
-        .json(&json!({
-            "kind": "editor",
-            "name": "live-test editor",
-            "frameKey": STANDARD.encode(key),
-            "credential": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credential),
-        }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/account/devices")),
+        &user.token,
+    )
+    .json(&json!({
+        "kind": "editor",
+        "name": "live-test editor",
+        "frameKey": STANDARD.encode(key),
+        "credential": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credential),
+    }))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::OK, "register a device");
     let body: Value = r.json().unwrap();
     let id = body["deviceId"].as_u64().unwrap() as u32;
@@ -1481,7 +1499,7 @@ pub fn set_password(
             Err((status, _)) => return status,
         };
     let mut request = c
-        .post(format!("{base}/api/auth/opaque/register/finish"))
+        .post(format!("{base}/api/v1/auth/opaque/register/finish"))
         .json(&json!({
             "grant": grant, "keyBinding": user.binding,
             "opaqueRecord": record, "opaqueServerKeyId": key_id,
@@ -1493,8 +1511,14 @@ pub fn set_password(
     request.send().unwrap().status()
 }
 
-/// The authenticator app's code now for `secret` (the setup's base32).
+/// An authenticator app's code for `secret` (the setup's base32) the server
+/// takes now: one from a step not used yet ([`fresh_totp_step`]).
 pub fn totp_now(secret: &str) -> String {
+    totp_at(secret, fresh_totp_step(secret))
+}
+
+/// The code for `secret` at time step `step` (30 s each).
+pub fn totp_at(secret: &str, step: u64) -> String {
     totp_rs::TOTP::new(
         totp_rs::Algorithm::SHA1,
         6,
@@ -1507,8 +1531,34 @@ pub fn totp_now(secret: &str) -> String {
         String::new(),
     )
     .unwrap()
-    .generate_current()
-    .unwrap()
+    .generate(step * 30)
+}
+
+/// The current time step.
+pub fn totp_step_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        / 30
+}
+
+/// A step `secret` has had no code from in this process: the server takes
+/// each code once (`accounts.totp_last_step`), within one step either side
+/// of now (`account.totp_skew_steps` at its default), so the next unused
+/// step up to now + 1, waiting for the clock once both are used.
+pub fn fresh_totp_step(secret: &str) -> u64 {
+    static LAST: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    let mut last = LAST.get_or_init(Default::default).lock().unwrap();
+    loop {
+        let now = totp_step_now();
+        let step = last.get(secret).map_or(now, |&used| now.max(used + 1));
+        if step <= now + 1 {
+            last.insert(secret.to_owned(), step);
+            return step;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
 }
 
 /// Metadata sealed for `file` at revision `revision` (key generation 1); the
@@ -1567,7 +1617,7 @@ pub fn revision_content_at(file: &Sealed, revision: &str) -> String {
     revision_content_of(file, revision, [0; 32], 0, 1)
 }
 
-/// `POST /api/files/{id}/revisions/{revisionId}/commit`
+/// `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`
 /// (docs/plans/drive-block-format.md §10 slice 3).
 #[allow(clippy::too_many_arguments)]
 pub fn commit(
@@ -1582,7 +1632,7 @@ pub fn commit(
 ) -> Response {
     bearer(
         c.post(format!(
-            "{base}/api/files/{file_id}/revisions/{revision_id}/commit"
+            "{base}/api/v1/drive/files/{file_id}/revisions/{revision_id}/commit"
         )),
         token,
     )

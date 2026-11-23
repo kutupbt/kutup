@@ -285,8 +285,8 @@ export async function checkServedRecord(
 
 /**
  * A revision whose sealed record comes with the response rather than from a
- * listing: the original upload (`/files/{id}/original`) and a public link's
- * saved state (`/share/{token}/state/{id}`). The caller names the revision
+ * listing: the original upload (`/drive/files/{id}/original`) and a public link's
+ * saved state (`/drive/public-links/{token}/files/{id}/state`). The caller names the revision
  * from what the file's sealed metadata commits to (`originalRevisionId`,
  * `stateRevisionId`), so the server can't pick another genuine revision:
  * the response must name this one, and its record (`x-kutup-revision`,

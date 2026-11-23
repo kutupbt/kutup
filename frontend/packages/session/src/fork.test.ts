@@ -27,7 +27,7 @@ import { clearSession, setSession } from './store'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const keys = {
-  userId: 'u1',
+  accountId: 'u1',
   // Fresh each time: a session replaced in the store zeroes its key.
   get masterKey() {
     return new Uint8Array(32).fill(1)
@@ -86,14 +86,14 @@ describe('requestFork', () => {
     expect(target.pathname).toBe('/authorize')
     expect(target.searchParams.get('app')).toBe('drive')
     const state = target.searchParams.get('state')!
-    expect(sessionStorage.getItem(`kutup-fork:${state}`)).toBe('/folders/abc?sort=name')
+    expect(sessionStorage.getItem(`kutup.session.fork:${state}`)).toBe('/folders/abc?sort=name')
   })
 })
 
 describe('produceFork', () => {
   it('sends the child to the origin the server names, key only in the fragment', async () => {
-    setSession({ sessionId: 's', ...keys, address: 'a@b.c', envelopeBinding: keys.keyBinding, username: null, isAdmin: false,
-      storageQuotaBytes: 0, storageUsedBytes: 0, totpEnabled: false, color: null,
+    setSession({ sessionId: 's', ...keys, address: 'a@b.c', envelopeBinding: keys.keyBinding, username: null, role: 'member',
+      storageQuotaBytes: 0, storageUsedBytes: 0, twoFactor: 'off', color: null,
       currentDeviceId: null, device: null }, 'token')
     post.mockResolvedValue({ data: { selector: 'SEL', childOrigin: 'https://drive.example.org' } })
     const url = new URL(await produceFork('drive', 'st_1'))
@@ -108,8 +108,8 @@ describe('produceFork', () => {
   })
 
   it('refuses a malformed state', async () => {
-    setSession({ sessionId: 's', ...keys, address: 'a@b.c', envelopeBinding: keys.keyBinding, username: null, isAdmin: false,
-      storageQuotaBytes: 0, storageUsedBytes: 0, totpEnabled: false, color: null,
+    setSession({ sessionId: 's', ...keys, address: 'a@b.c', envelopeBinding: keys.keyBinding, username: null, role: 'member',
+      storageQuotaBytes: 0, storageUsedBytes: 0, twoFactor: 'off', color: null,
       currentDeviceId: null, device: null }, 'token')
     await expect(produceFork('drive', 'bad state/..')).rejects.toThrow(/state/)
   })
@@ -118,32 +118,32 @@ describe('produceFork', () => {
 describe('consumeFork', () => {
   beforeEach(() => {
     post.mockResolvedValue({
-      data: { accessToken: 'AT', sessionId: 'S2', userId: 'u1', payload: 'ENV' },
+      data: { accessToken: 'AT', sessionId: 'S2', accountId: 'u1', payload: 'ENV' },
     })
   })
 
   it('wipes the fragment, redeems once, persists, and returns to the saved path', async () => {
-    sessionStorage.setItem('kutup-fork:st', '/folders/abc')
+    sessionStorage.setItem('kutup.session.fork:st', '/folders/abc')
     visit(`/login#selector=SEL&sk=${sk}&state=st`)
     expect(hasForkInLocation()).toBe(true)
     const next = await consumeFork()
     expect(window.location.hash).toBe('')
     expect(post).toHaveBeenCalledWith('/auth/forks/consume', { selector: 'SEL' })
-    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), 'AT', 'S2')
-    expect(persistKeys).toHaveBeenCalledWith('S2', expect.objectContaining({ userId: 'u1' }))
+    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'u1' }), 'AT', 'S2')
+    expect(persistKeys).toHaveBeenCalledWith('S2', expect.objectContaining({ accountId: 'u1' }))
     expect(next).toBe('/folders/abc')
-    expect(sessionStorage.getItem('kutup-fork:st')).toBeNull()
+    expect(sessionStorage.getItem('kutup.session.fork:st')).toBeNull()
   })
 
   it('never returns to another origin', async () => {
-    sessionStorage.setItem('kutup-fork:st', '//evil.example/phish')
+    sessionStorage.setItem('kutup.session.fork:st', '//evil.example/phish')
     visit(`/login#selector=SEL&sk=${sk}&state=st`)
     expect(await consumeFork()).toBe('/')
   })
 
   it('refuses keys for another account', async () => {
-    opened.value = encodeKeys({ ...keys, userId: 'someone-else' })
-    sessionStorage.setItem('kutup-fork:st', '/')
+    opened.value = encodeKeys({ ...keys, accountId: 'someone-else' })
+    sessionStorage.setItem('kutup.session.fork:st', '/')
     visit(`/login#selector=SEL&sk=${sk}&state=st`)
     await expect(consumeFork()).rejects.toThrow(/another account/)
     expect(activateSession).not.toHaveBeenCalled()
@@ -162,7 +162,7 @@ describe('consumeFork', () => {
   })
 
   it('redeems a state once: the same link twice is refused', async () => {
-    sessionStorage.setItem('kutup-fork:st', '/folders/abc')
+    sessionStorage.setItem('kutup.session.fork:st', '/folders/abc')
     visit(`/login#selector=SEL&sk=${sk}&state=st`)
     await consumeFork()
     visit(`/login#selector=SEL&sk=${sk}&state=st`)

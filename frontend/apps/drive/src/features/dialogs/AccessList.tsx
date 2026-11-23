@@ -135,20 +135,20 @@ export function AccessList({ folder }: { folder: Folder }) {
           const person = personOf(people.data, m.account)
           return (
             <Row
-              key={m.userId}
+              key={m.accountId}
               icon={person.profile ? <PersonAvatar {...person} /> : <User className="size-4" aria-hidden />}
               name={person.name}
               detail={person.profile ? m.account : ''}
               control={
                 <>
-                  <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                  <VerifyPersonButton account={m.account} claimed={{ driveXwingPublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
                   <RoleMenu
                     name={person.name}
                     canUpload={m.canUpload}
                     canDelete={m.canDelete}
                     busy={busy}
                     onChange={(canUpload, canDelete) => change(m, person.name, canUpload, canDelete)}
-                    onRemove={() => setPending({ label: person.name, removal: { ...none, members: [m.userId] } })}
+                    onRemove={() => setPending({ label: person.name, removal: { ...none, members: [m.accountId] } })}
                   />
                 </>
               }

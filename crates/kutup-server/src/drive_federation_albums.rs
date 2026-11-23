@@ -28,7 +28,7 @@ use crate::drive_federation::{
 };
 use crate::error::{AppError, AppResult};
 use crate::handlers::file_thumbnails::current_object;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Thumbnails are small pictures; anything larger is refused on the way in.
@@ -63,11 +63,11 @@ pub(crate) async fn share_reaches(
     .await?)
 }
 
-/// `GET /api/fed/drive/album` — the shared album's photos. Signed.
+/// `GET /api/fed/v2/drive/folder-shares/album` — the shared album's photos. Signed.
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/album",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/folder-shares/album",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized album items", body = Vec<FederatedAlbumItem>))
 )]
 pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
@@ -76,7 +76,7 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
         .authenticate_inbound(
             &headers,
             "GET",
-            "/api/fed/drive/album",
+            "/api/fed/v2/drive/folder-shares/album",
             None,
             &[],
             FederationFeature::DriveV1,
@@ -163,12 +163,12 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
     }
 }
 
-/// `GET /api/fed/drive/files/{fileId}/thumbnails/{variant}` — a thumbnail of
+/// `GET /api/fed/v2/drive/folder-shares/files/{fileId}/thumbnails/{variant}` — a thumbnail of
 /// a file the share reaches (sealed under the file key). Signed.
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/files/{fileId}/thumbnails/{variant}",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/folder-shares/files/{fileId}/thumbnails/{variant}",
+    tag = "drive.federation",
     params(("fileId" = String, Path), ("variant" = String, Path, description = "sm or lg")),
     responses((status = 200, description = "Signed sealed thumbnail"))
 )]
@@ -178,7 +178,7 @@ pub async fn thumbnail(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let path = format!("/api/fed/drive/files/{file_id}/thumbnails/{variant}");
+    let path = format!("/api/fed/v2/drive/folder-shares/files/{file_id}/thumbnails/{variant}");
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -231,26 +231,26 @@ pub async fn thumbnail(
     }
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/album` — the photos of an
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/album` — the photos of an
 /// album on another server, relayed.
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/album",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/album",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 200, description = "Verified remote album items", body = Vec<FederatedAlbumItem>))
 )]
 pub async fn proxy_album_items(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -259,7 +259,7 @@ pub async fn proxy_album_items(
             &share.remote_domain,
             drive_spec(
                 Method::GET,
-                "/api/fed/drive/album".into(),
+                "/api/fed/v2/drive/folder-shares/album".into(),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(&share.remote_capability),
@@ -276,26 +276,26 @@ pub async fn proxy_album_items(
         .into_response())
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/files/{fileId}/thumbnails/{variant}`
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/thumbnails/{variant}`
 /// — a thumbnail from another server, relayed (still sealed).
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/files/{fileId}/thumbnails/{variant}",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/thumbnails/{variant}",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path), ("fileId" = String, Path), ("variant" = String, Path)),
     responses((status = 200, description = "Digest-verified sealed thumbnail"))
 )]
 pub async fn proxy_thumbnail(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((share_id, file_id, variant)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -308,7 +308,7 @@ pub async fn proxy_thumbnail(
             drive_spec(
                 Method::GET,
                 format!(
-                    "/api/fed/drive/files/{file_id}/thumbnails/{}",
+                    "/api/fed/v2/drive/folder-shares/files/{file_id}/thumbnails/{}",
                     variant.as_str()
                 ),
                 JSON_CONTENT_TYPE.into(),

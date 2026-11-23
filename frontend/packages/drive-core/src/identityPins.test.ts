@@ -244,7 +244,7 @@ vi.mock('@kutup/session/accountHead', async () => {
   }
   const conflicted = (error: unknown) => {
     const code = (error as { response?: { status?: number; data?: { code?: string } } }).response?.data?.code
-    return code === 'head_conflict' || code === 'revision_conflict'
+    return code === 'headConflict' || code === 'revisionConflict'
   }
   const client = {
     records: () => (head.blocked ? Promise.reject(new actual.HeadBlockedError('fork')) : Promise.resolve().then(copy)),
@@ -276,7 +276,7 @@ vi.mock('@kutup/session/accountHead', async () => {
 vi.mock('@kutup/session/client', () => {
   const notFound = () => Object.assign(new Error('404'), { isAxiosError: true, response: { status: 404 } })
   const conflict = () =>
-    Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict' } } })
+    Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revisionConflict' } } })
   // The server's side of a pins batch: stored only on top of the revision it started from.
   head.store = (baseRevision: number, envelope: string, sealedHead: string) => {
     const body = { baseRevision, envelope, head: sealedHead }
@@ -304,8 +304,8 @@ vi.mock('@kutup/session/client', () => {
           const records = server.pins ? [{ id: 'pins', revision: server.pins.revision, envelope: server.pins.envelope, seq: 1 }] : []
           return Promise.resolve({ data: { records, deleted: [], next: records.length, more: false, resync: false, head: 'h', basis: null } })
         }
-        if (url.startsWith('/users/renames/')) {
-          const found = server.renames.get(decodeURIComponent(url.slice('/users/renames/'.length)))
+        if (/^\/accounts\/by-address\/[^/]+\/renames$/.test(url)) {
+          const found = server.renames.get(decodeURIComponent(url.split('/')[3] ?? ''))
           return Promise.resolve({ data: found ?? { version: 1, chains: [] } })
         }
         const held = server.heldNames.get(decodeURIComponent(url.split('/').pop()!))
@@ -318,7 +318,7 @@ vi.mock('@kutup/session/client', () => {
         return person ? Promise.resolve({ data: person }) : Promise.reject(notFound())
       }),
       post: vi.fn((url: string, body: { accounts: string[] }) => {
-        if (url !== '/users/drive-identities') return Promise.reject(new Error(url))
+        if (url !== '/drive/identities') return Promise.reject(new Error(url))
         server.batches.push(body.accounts)
         return Promise.resolve({ data: body.accounts.flatMap((a) => server.people.get(a) ?? []) })
       }),
@@ -355,7 +355,7 @@ import type { DriveIdentity } from './identity'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const me: DriveIdentity = {
-  userId: 'me-id',
+  accountId: 'me-id',
   account: 'me@kutup.dev',
   accountRef: { server: 'kutup.dev', accountId: 'me-id' },
   binding: ME_BINDING,
@@ -380,7 +380,7 @@ function publish(
     server: address.split('@')[1],
     accountId: id,
     accountAuthorityPublicKey: authority,
-    driveHpkePublicKey: hpke,
+    driveXwingPublicKey: hpke,
     driveSigningPublicKey: signing,
     driveKeyBinding: bound ? `bound-by-${authority}` : undefined,
     identitySuite: suite,
@@ -425,7 +425,7 @@ describe('checkIdentity', () => {
     publish('bob@kutup.dev', 'B')
     expect(await checkIdentity(me, 'bob@kutup.dev', { driveSigningPublicKey: 'B-sign' })).toEqual({ kind: 'ok', verified: false })
     expect(storedPins()).toMatchObject([{ id: 'acct-B', authorityPublicKey: 'B', addresses: ['bob@kutup.dev'] }])
-    expect(await checkIdentity(me, 'bob@kutup.dev', { driveHpkePublicKey: 'B-hpke' })).toEqual({ kind: 'ok', verified: false })
+    expect(await checkIdentity(me, 'bob@kutup.dev', { driveXwingPublicKey: 'B-hpke' })).toEqual({ kind: 'ok', verified: false })
     expect(server.puts).toBe(1)
   })
 
@@ -434,9 +434,9 @@ describe('checkIdentity', () => {
     // A share signed with a key that is not Bob's.
     expect(await checkIdentity(me, 'bob@kutup.dev', { driveSigningPublicKey: 'EVIL-sign' })).toEqual({ kind: 'invalid' })
     // A recipient key that is not Bob's.
-    expect(await checkIdentity(me, 'bob@kutup.dev', { driveHpkePublicKey: 'EVIL-hpke' })).toEqual({ kind: 'invalid' })
+    expect(await checkIdentity(me, 'bob@kutup.dev', { driveXwingPublicKey: 'EVIL-hpke' })).toEqual({ kind: 'invalid' })
     // A binding by another authority than the one published.
-    server.people.set('eve@kutup.dev', { account: 'eve@kutup.dev', server: 'kutup.dev', accountId: 'acct-E', accountAuthorityPublicKey: 'E', driveHpkePublicKey: 'x', driveSigningPublicKey: 'y', driveKeyBinding: 'bound-by-B', identitySuite: 2, driveKeyBindingEpoch: 1 })
+    server.people.set('eve@kutup.dev', { account: 'eve@kutup.dev', server: 'kutup.dev', accountId: 'acct-E', accountAuthorityPublicKey: 'E', driveXwingPublicKey: 'x', driveSigningPublicKey: 'y', driveKeyBinding: 'bound-by-B', identitySuite: 2, driveKeyBindingEpoch: 1 })
     expect(await checkIdentity(me, 'eve@kutup.dev')).toEqual({ kind: 'invalid' })
     // An incarnation that is not this authority's.
     expect(await checkIdentity(me, 'bob@kutup.dev', { incarnationId: 'inc-OTHER' })).toEqual({ kind: 'invalid' })
@@ -595,7 +595,7 @@ function answer(address: string, authority: string, label = address): AccountAns
     accountId: `acct-${authority}`,
     accountIncarnationId: `inc-${authority}`,
     accountAuthorityPublicKey: authority,
-    driveHpkePublicKey: `${authority}-hpke`,
+    driveXwingPublicKey: `${authority}-hpke`,
     driveSigningPublicKey: `${authority}-sign`,
     driveKeyBinding: `bound-by-${authority}`,
     identitySuite: 2,

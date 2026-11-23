@@ -92,12 +92,12 @@ export async function signDriveKeyBinding(identityRoot: IdentityRoot, account: A
 export async function verifyDriveKeyBinding(
   account: AccountRef,
   authorityPublicKey: string,
-  driveHpkePublicKey: string,
+  driveXwingPublicKey: string,
   driveSigningPublicKey: string,
   binding: string,
   bindingEpoch: number,
 ): Promise<boolean> {
-  return (await getCryptoWasm()).verifyDriveKeyBinding(account, authorityPublicKey, driveHpkePublicKey, driveSigningPublicKey, binding, bindingEpoch)
+  return (await getCryptoWasm()).verifyDriveKeyBinding(account, authorityPublicKey, driveXwingPublicKey, driveSigningPublicKey, binding, bindingEpoch)
 }
 
 /** The incarnation id an authority key stands for. */

@@ -31,16 +31,19 @@ fn make_link(
         &owner.id,
     )
     .unwrap();
-    let r = bearer(c.post(format!("{base}/api/share")), &owner.token)
-        .json(&json!({
-            "id": link_id,
-            "shareType": "collection",
-            "targetId": folder.id,
-            "collectionKeyEnvelope": drive_envelope::seal_b64(&folder.key, &link_key, context).unwrap(),
-            "ownerLinkKeyEnvelope": owner_link_key(&link_key, owner, &link_id),
-        }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/drive/public-links")),
+        &owner.token,
+    )
+    .json(&json!({
+        "id": link_id,
+        "shareType": "collection",
+        "targetId": folder.id,
+        "collectionKeyEnvelope": drive_envelope::seal_b64(&folder.key, &link_key, context).unwrap(),
+        "ownerLinkKeyEnvelope": owner_link_key(&link_key, owner, &link_id),
+    }))
+    .send()
+    .unwrap();
     let status = r.status();
     let body: Value = r.json().unwrap_or(Value::Null);
     if status != StatusCode::CREATED {
@@ -54,7 +57,7 @@ fn make_link(
 
 /// Opening the link: its status and the refusal's code.
 fn open(c: &Client, base: &str, token: &str, viewer: Option<&str>) -> (StatusCode, Value) {
-    let request = c.get(format!("{base}/api/share/{token}"));
+    let request = c.get(format!("{base}/api/v1/drive/public-links/{token}"));
     let r = match viewer {
         Some(viewer) => bearer(request, viewer),
         None => request,
@@ -78,17 +81,23 @@ fn every_route(
 ) -> Vec<(String, StatusCode, Value)> {
     let file = uuid();
     let gets = [
-        format!("{base}/api/share/{token}"),
-        format!("{base}/api/share/{token}/files"),
-        format!("{base}/api/share/{token}/epochs"),
-        format!("{base}/api/share/{token}/album"),
-        format!("{base}/api/share/{token}/thumbnails/{file}/sm"),
-        format!("{base}/api/share/{token}/state/{file}"),
+        format!("{base}/api/v1/drive/public-links/{token}"),
+        format!("{base}/api/v1/drive/public-links/{token}/files"),
+        format!("{base}/api/v1/drive/public-links/{token}/epochs"),
+        format!("{base}/api/v1/drive/public-links/{token}/album"),
+        format!("{base}/api/v1/drive/public-links/{token}/files/{file}/thumbnails/sm"),
+        format!("{base}/api/v1/drive/public-links/{token}/files/{file}/state"),
         // The block format's state by revision (a player's or editor's
         // exact saved state) passes the same check.
-        format!("{base}/api/share/{token}/state/{file}?revision={}", uuid()),
-        format!("{base}/api/share/{token}/files/{file}/assets/{}", uuid()),
-        format!("{base}/api/share/{token}/download/{file}"),
+        format!(
+            "{base}/api/v1/drive/public-links/{token}/files/{file}/state?revision={}",
+            uuid()
+        ),
+        format!(
+            "{base}/api/v1/drive/public-links/{token}/files/{file}/assets/{}",
+            uuid()
+        ),
+        format!("{base}/api/v1/drive/public-links/{token}/files/{file}/download"),
     ];
     let mut answers: Vec<(String, StatusCode, Value)> = gets
         .into_iter()
@@ -104,7 +113,7 @@ fn every_route(
             (url, status, r.json().unwrap_or(Value::Null))
         })
         .collect();
-    let url = format!("{base}/api/share/{token}/report");
+    let url = format!("{base}/api/v1/drive/public-links/{token}/report");
     let r = c
         .post(&url)
         .json(&json!({ "reason": "other", "details": "" }))
@@ -136,7 +145,7 @@ fn admin(c: &Client, base: &str) -> Option<String> {
 }
 
 fn set_site(c: &Client, base: &str, admin: &str, value: &str) {
-    let r = bearer(c.put(format!("{base}/api/admin/settings")), admin)
+    let r = bearer(c.put(format!("{base}/api/v1/admin/settings")), admin)
         .json(&json!({ "publicSharing": value }))
         .send()
         .unwrap();
@@ -154,7 +163,7 @@ struct SiteOn<'a> {
 impl Drop for SiteOn<'_> {
     fn drop(&mut self) {
         let _ = bearer(
-            self.c.put(format!("{}/api/admin/settings", self.base)),
+            self.c.put(format!("{}/api/v1/admin/settings", self.base)),
             self.admin,
         )
         .json(&json!({ "publicSharing": "on" }))
@@ -183,7 +192,7 @@ fn links_follow_blocks_and_both_switches() {
     // every route of it and of the folder's other link; no new link to it.
     let block = |reason: &str| {
         bearer(
-            c.post(format!("{base}/api/admin/shares/{link_id}/block")),
+            c.post(format!("{base}/api/v1/admin/public-links/{link_id}/block")),
             &admin,
         )
         .json(&json!({ "reason": reason, "reference": "order 17" }))
@@ -196,13 +205,13 @@ fn links_follow_blocks_and_both_switches() {
     assert_eq!(status, StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
     assert_eq!(
         (body["code"].as_str(), body["reason"].as_str()),
-        (Some("link_blocked"), Some("legalOrder"))
+        (Some("linkBlocked"), Some("legalOrder"))
     );
     for link in [&token, &second] {
         all_refuse(
             &every_route(&c, &base, link, None),
             StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-            "link_blocked",
+            "linkBlocked",
         );
     }
     let (status, body) = make_link(&c, &base, &owner, &folder).unwrap_err();
@@ -214,7 +223,7 @@ fn links_follow_blocks_and_both_switches() {
     assert_eq!(open(&c, &base, &second, None).0, StatusCode::GONE);
     assert_eq!(block("whim"), StatusCode::BAD_REQUEST);
     let r = bearer(
-        c.delete(format!("{base}/api/admin/shares/{link_id}/block")),
+        c.delete(format!("{base}/api/v1/admin/public-links/{link_id}/block")),
         &admin,
     )
     .send()
@@ -227,7 +236,7 @@ fn links_follow_blocks_and_both_switches() {
     // the holder not told whose switch it was; it makes none.
     let set_account = |value: &str| {
         bearer(
-            c.put(format!("{base}/api/admin/users/{}", owner.id)),
+            c.put(format!("{base}/api/v1/admin/accounts/{}", owner.id)),
             &admin,
         )
         .json(&json!({ "publicSharing": value }))
@@ -239,17 +248,17 @@ fn links_follow_blocks_and_both_switches() {
     let (status, body) = open(&c, &base, &token, None);
     assert_eq!(
         (status, body["code"].as_str(), body.get("scope")),
-        (StatusCode::GONE, Some("sharing_off"), None)
+        (StatusCode::GONE, Some("sharingOff"), None)
     );
     all_refuse(
         &every_route(&c, &base, &token, None),
         StatusCode::GONE,
-        "sharing_off",
+        "sharingOff",
     );
     let (status, body) = make_link(&c, &base, &owner, &folder).unwrap_err();
     assert_eq!(
         (status, body["code"].as_str(), body["scope"].as_str()),
-        (StatusCode::FORBIDDEN, Some("sharing_off"), Some("account"))
+        (StatusCode::FORBIDDEN, Some("sharingOff"), Some("account"))
     );
     assert_eq!(me(&c, &base, &owner.token)["publicSharing"], "off");
     assert_eq!(set_account("on"), StatusCode::OK);
@@ -265,7 +274,7 @@ fn links_follow_blocks_and_both_switches() {
     all_refuse(
         &every_route(&c, &base, &token, None)[..GET_ROUTES],
         StatusCode::FORBIDDEN,
-        "sign_in_required",
+        "signInRequired",
     );
     assert_eq!(
         open(&c, &base, &token, Some("not-a-token")).0,
@@ -279,10 +288,10 @@ fn links_follow_blocks_and_both_switches() {
     all_refuse(
         &every_route(&c, &base, &token, Some(&viewer.token))[..GET_ROUTES],
         StatusCode::GONE,
-        "sharing_off",
+        "sharingOff",
     );
     let settings: Value = c
-        .get(format!("{base}/api/auth/settings"))
+        .get(format!("{base}/api/v1/auth/settings"))
         .send()
         .unwrap()
         .json()

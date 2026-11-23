@@ -28,6 +28,10 @@ services:
       # Groups are off by default (until the pairwise design); the group
       # specs (36, 38, 48) still run here. Spec 39 covers them off.
       CHAT_GROUPS: "true"
+      # Groups need the server's identity, and in production mode that needs
+      # a canonical HTTPS SERVER_URL with a dotted host; without one the
+      # server only warns and runs with groups off.
+      SERVER_URL: ${SERVER_URL:-https://account.localhost:${KUTUP_HTTPS_PORT:-38443}}
       RATE_LIMIT_LOGIN_PER_MIN: 1000
       # Outside sending on at first, for spec 58's pause notice (no Stalwart
       # here); spec 59 turns it off and back on in Administration → Mail sending.
@@ -46,6 +50,10 @@ services:
       RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: 1000
       # Every page checks who shared what (docs/plans/drive-identity-pins.md).
       RATE_LIMIT_USER_LOOKUP_PER_MIN: 1000
+      # Recovery is 5 an hour per address; spec 156 and the CLI scripts run
+      # against this stack (docs/plans/wipe-final-test.md C9) share one.
+      # 500 is its ceiling (100 times the default, as a guessing guard).
+      RATE_LIMIT_RECOVERY_PER_HOUR: 500
       # The break-glass administrator for admin specs (fixtures/apps.ts,
       # signInAsAdmin); its first sign-in replaces this temporary password.
       ADMIN_ACCOUNT: admin:Bootstrap*Temporary123

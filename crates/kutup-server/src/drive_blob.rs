@@ -173,18 +173,18 @@ pub async fn ensure_object_stored(
     }
 }
 
-/// `409 revision_conflict`: the metadata is not the file's next revision
+/// `409 revisionConflict`: the metadata is not the file's next revision
 /// (exactly the current one + 1, or 1 for a new file).
 pub fn revision_conflict() -> AppError {
     AppError::conflict("metadata revision must advance exactly once")
-        .with_details(serde_json::json!({ "code": "revision_conflict" }))
+        .with_details(serde_json::json!({ "code": "revisionConflict" }))
 }
 
-/// [`revision_conflict`] with the file's metadata as it is now, for a saver
+/// [`revisionConflict`] with the file's metadata as it is now, for a saver
 /// that seals on top of it (a version save; docs/api.md).
 pub fn revision_conflict_at(metadata_revision: i64, metadata_envelope: Option<&str>) -> AppError {
     let mut details = serde_json::json!({
-        "code": "revision_conflict",
+        "code": "revisionConflict",
         "metadataRevision": metadata_revision,
     });
     if let Some(envelope) = metadata_envelope {

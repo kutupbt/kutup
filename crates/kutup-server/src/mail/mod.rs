@@ -122,7 +122,7 @@ pub const RESERVED_LOCAL_PARTS: [&str; 5] = [
 /// An accepted recipient: whose mail it is and the key it is encrypted to.
 #[derive(Debug, Clone)]
 pub struct Recipient {
-    pub(crate) user_id: Uuid,
+    pub(crate) account_id: Uuid,
     pub(crate) address_id: Uuid,
     pub(crate) public_key: Vec<u8>,
     /// Taken by a custom domain's catch-all (its domain and the owner's
@@ -187,7 +187,7 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
         return Err(full());
     }
     Ok(Recipient {
-        user_id,
+        account_id: user_id,
         address_id,
         public_key,
         caught,
@@ -406,7 +406,7 @@ pub async fn store(state: &AppState, recipient: &Recipient, raw: &[u8]) -> Reply
     match store_inner(state, recipient, raw).await {
         Ok(reply) => reply,
         Err(error) => {
-            tracing::warn!(user = %recipient.user_id, error = %error, "mail: storing failed");
+            tracing::warn!(user = %recipient.account_id, error = %error, "mail: storing failed");
             try_later()
         }
     }
@@ -428,7 +428,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
     if let Some(message_id) = &readable.message_id {
         let opener = sealed::Opener::load(
             &state.pool,
-            crate::account_data::KeyOwner::Account(recipient.user_id),
+            crate::account_data::KeyOwner::Account(recipient.account_id),
         )
         .await?;
         let hashes = sealed::thread_hashes(opener.keys(), &[message_id.as_str()])?;
@@ -454,7 +454,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
     }
 
     let id = Uuid::new_v4();
-    let key = object_key(recipient.user_id, id);
+    let key = object_key(recipient.account_id, id);
     let size = i64::try_from(ciphertext.len())?;
     state
         .storage
@@ -481,7 +481,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
                 auto_reply::spawn(
                     state,
                     auto_reply::Delivered {
-                        user_id: recipient.user_id,
+                        account_id: recipient.account_id,
                         message: id,
                     },
                 );
@@ -492,7 +492,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
                 if let Some(original) = &bounce.original_message_id {
                     if let Err(error) = safety::record_bounce(
                         &state.pool,
-                        recipient.user_id,
+                        recipient.account_id,
                         original,
                         bounce.failures,
                     )
@@ -544,7 +544,7 @@ async fn record(
     readable: &Readable,
 ) -> Result<Option<Reply>, Recorded> {
     let mut tx = state.pool.begin().await?;
-    let pool = crate::storage_pool::lock(&mut tx, recipient.user_id, Default::default()).await?;
+    let pool = crate::storage_pool::lock(&mut tx, recipient.account_id, Default::default()).await?;
     if !pool.fits(size, 0) {
         return Err(Recorded::Full);
     }
@@ -552,7 +552,7 @@ async fn record(
         &mut tx,
         NewMessage {
             id,
-            user_id: Some(recipient.user_id),
+            account_id: Some(recipient.account_id),
             address_id: recipient.address_id,
             thread_id: None,
             direction: "inbound",
@@ -589,7 +589,7 @@ pub(crate) struct NewMessage<'a> {
     pub id: Uuid,
     /// The account whose mailbox it is; none for a shared mailbox's message
     /// (then `group_id` is the mailbox).
-    pub user_id: Option<Uuid>,
+    pub account_id: Option<Uuid>,
     pub address_id: Uuid,
     /// The thread, when the caller knows it; otherwise the thread of an
     /// ancestor named in In-Reply-To or References, else a new one.
@@ -654,7 +654,7 @@ pub(crate) async fn insert_message(
     message: NewMessage<'_>,
 ) -> crate::error::AppResult<bool> {
     let readable = message.readable;
-    let key_owner = sealed::owner_of(message.user_id, message.group_id);
+    let key_owner = sealed::owner_of(message.account_id, message.group_id);
     let owner = key_owner.id();
     // The mailbox's key, made now if it has none, before the thread is
     // looked for under every key it has.
@@ -684,7 +684,7 @@ pub(crate) async fn insert_message(
     // (docs/plans/mail-filters.md, F3); a blocked message is not stored.
     let mut folder = message.folder;
     if let (Some(user_id), "inbound", "inbox" | "spam") =
-        (message.user_id, message.direction, folder)
+        (message.account_id, message.direction, folder)
     {
         match sender_rules::verdict(tx, user_id, from_address).await? {
             Some(sender_rules::Kind::Block) => return Ok(false),
@@ -709,7 +709,7 @@ pub(crate) async fn insert_message(
          RETURNING id",
     )
     .bind(message.id)
-    .bind(message.user_id)
+    .bind(message.account_id)
     .bind(message.address_id)
     .bind(thread.unwrap_or(message.id))
     .bind(message.direction)
@@ -741,7 +741,7 @@ pub(crate) async fn insert_message(
         return Ok(true);
     }
     // A shared mailbox's message is charged to its group.
-    let payer = match message.user_id {
+    let payer = match message.account_id {
         Some(_) => crate::storage_pool::Payer::Account(owner),
         None => crate::storage_pool::Payer::MailGroup(owner),
     };
@@ -750,7 +750,7 @@ pub(crate) async fn insert_message(
     // included) and its own sent copies; never on drafts, on mail filed as
     // spam, or on a shared mailbox's copy, which has no one owner yet
     // (docs/plans/mail-filters.md).
-    if let Some(user_id) = message.user_id.filter(|_| {
+    if let Some(user_id) = message.account_id.filter(|_| {
         (message.direction == "inbound" && folder == "inbox")
             || (message.direction == "outbound" && folder == "sent")
     }) {

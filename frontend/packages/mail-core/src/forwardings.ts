@@ -92,7 +92,7 @@ export function useOwnAddresses() {
 /**
  * Turns end-to-end encryption back on, once a session, for an address whose
  * last outside forwarding ended without this client (declined, or deleted
- * by the forwardee): `GET /api/mail/addresses` says `keyListOwed`.
+ * by the forwardee): `GET /api/v1/mail/addresses` says `keyListOwed`.
  */
 export function useSettleOwedKeyLists() {
   const session = useRequiredSession()
@@ -157,7 +157,7 @@ export async function forwardingKindOf(
   // other keys: refused, never the server's word over the person's.
   if (domainOf(email) !== account.serverDomain && (pinned?.(email)?.keys.length ?? 0) > 0) throw new ForwardeeRefused('pinnedConflict')
   // A person on this server: their account names this server, as the
-  // account's own does (`/user/me`).
+  // account's own does (`/account`).
   if (keys.accountRef?.server !== account.groupHolder.account.server) return { kind: 'outside' }
   return { kind: 'endToEnd', keys }
 }

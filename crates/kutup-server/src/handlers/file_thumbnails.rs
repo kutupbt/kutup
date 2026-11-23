@@ -18,7 +18,7 @@ use kutup_crypto::thumbnail::{self, ThumbnailVariant};
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, octet_stream_response, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Where one thumbnail upload is stored; `object_id` is the row's.
@@ -63,11 +63,11 @@ pub struct UploadQuery {
     revision: Option<String>,
 }
 
-/// `PUT /api/files/{fileId}/thumbnails/{variant}?source={versionId|original}&revision={revisionId}`
+/// `PUT /api/v1/drive/files/{fileId}/thumbnails/{variant}?source={versionId|original}&revision={revisionId}`
 #[utoipa::path(
     put,
-    path = "/api/files/{fileId}/thumbnails/{variant}",
-    tag = "thumbnails",
+    path = "/api/v1/drive/files/{fileId}/thumbnails/{variant}",
+    tag = "drive",
     operation_id = "uploadFileThumbnail",
     security(("BearerAuth" = [])),
     params(
@@ -84,12 +84,12 @@ pub struct UploadQuery {
 )]
 pub async fn upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, variant)): Path<(String, String)>,
     Query(query): Query<UploadQuery>,
     body: Bytes,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     let variant = parse_variant(&variant)?;
     if body.len() > kutup_crypto::drive_envelope::max_thumbnail_envelope_bytes(variant) {
@@ -266,11 +266,11 @@ async fn owns_trashed_file(
     .await
 }
 
-/// `GET /api/files/{fileId}/thumbnails/{variant}` — the envelope.
+/// `GET /api/v1/drive/files/{fileId}/thumbnails/{variant}` — the envelope.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/thumbnails/{variant}",
-    tag = "thumbnails",
+    path = "/api/v1/drive/files/{fileId}/thumbnails/{variant}",
+    tag = "drive",
     operation_id = "downloadFileThumbnail",
     security(("BearerAuth" = [])),
     params(
@@ -284,10 +284,10 @@ async fn owns_trashed_file(
 )]
 pub async fn download(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, variant)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     let variant = parse_variant(&variant)?;
     if !can_access_file(&state.pool, user_id, fid).await?
@@ -328,12 +328,12 @@ async fn serve(state: &AppState, fid: Uuid, variant: ThumbnailVariant) -> AppRes
     ))
 }
 
-/// `DELETE /api/files/{fileId}/thumbnails` — both variants, e.g. when the
+/// `DELETE /api/v1/drive/files/{fileId}/thumbnails` — both variants, e.g. when the
 /// content becomes something without a preview.
 #[utoipa::path(
     delete,
-    path = "/api/files/{fileId}/thumbnails",
-    tag = "thumbnails",
+    path = "/api/v1/drive/files/{fileId}/thumbnails",
+    tag = "drive",
     operation_id = "deleteFileThumbnails",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
@@ -341,10 +341,10 @@ async fn serve(state: &AppState, fid: Uuid, variant: ThumbnailVariant) -> AppRes
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(file_id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));

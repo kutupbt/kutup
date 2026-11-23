@@ -1,4 +1,4 @@
-//! `GET /api/user/storage`: what the caller's one storage pool holds, by app
+//! `GET /api/v1/account/storage`: what the caller's one storage pool holds, by app
 //! and by kind of stored bytes (docs/api.md). Sizes are the bytes the server
 //! stores and charges, all ciphertext; what the files are (images, documents,
 //! …) only the browser can tell, from the names it decrypts.
@@ -10,7 +10,7 @@ use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The caller's storage pool and what fills it.
@@ -88,16 +88,16 @@ pub struct ChatUsage {
 
 #[utoipa::path(
     get,
-    path = "/api/user/storage",
+    path = "/api/v1/account/storage",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The caller's storage, by app", body = StorageUsageResponse))
 )]
 pub async fn usage(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<StorageUsageResponse>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     type Row = (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64);
     let row: Row = sqlx::query_as(
         r#"SELECT u.storage_used_bytes,
@@ -202,20 +202,20 @@ pub struct VersionAge {
     pub count: i64,
 }
 
-/// `GET /api/user/storage/versions` — what "Delete versions older than…"
+/// `GET /api/v1/account/storage/versions` — what "Delete versions older than…"
 /// would free, so the browser can show it for any age before asking.
 #[utoipa::path(
     get,
-    path = "/api/user/storage/versions",
+    path = "/api/v1/account/storage/versions",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Deletable versions by age", body = [VersionAge]))
 )]
 pub async fn version_ages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<VersionAge>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<(i32, bool, i64, i64)> = sqlx::query_as(&format!(
         "SELECT FLOOR(EXTRACT(EPOCH FROM now() - v.created_at) / 86400)::int AS age,
                 v.keep_forever, SUM(v.size_bytes)::bigint, COUNT(*)::bigint
@@ -263,13 +263,13 @@ pub struct PruneVersionsResponse {
 /// At most this many versions go per request, so one call stays short.
 const PRUNE_BATCH: i64 = 500;
 
-/// `POST /api/user/storage/versions/prune` — deletes for good the earlier
+/// `POST /api/v1/account/storage/versions/prune` — deletes for good the earlier
 /// versions the caller saved more than `olderThanDays` ago, never a file's
 /// newest, and kept-forever ones only when asked. In batches: repeat while
 /// `more`.
 #[utoipa::path(
     post,
-    path = "/api/user/storage/versions/prune",
+    path = "/api/v1/account/storage/versions/prune",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = PruneVersionsRequest,
@@ -277,10 +277,10 @@ const PRUNE_BATCH: i64 = 500;
 )]
 pub async fn prune_versions(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<PruneVersionsRequest>,
 ) -> AppResult<Json<PruneVersionsResponse>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if !(0..=36_500).contains(&req.older_than_days) {
         return Err(AppError::bad_request(
             "olderThanDays must be between 0 and 36500",

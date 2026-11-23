@@ -4,7 +4,8 @@
 Mail feature parity in the end"). This is the gap list: every feature of
 Proton Mail's web client, where Kutup stands, and the order to close the
 gaps. Each slice gets its own plan before it is built; keep this list
-current as they land.
+current as they land. Last checked against the code: 2026-11-17
+(`wipe/account-records` with the Mail batch `batch/main-2026-11-09`).
 
 Read from `WebClients` (2026-10-11): the app in `applications/mail`, its
 settings in `applications/account/src/app/containers/mail/routes.tsx`
@@ -53,10 +54,10 @@ reference only where Proton has nothing.
 | Plain text mode, default font and size, text direction | `DraftTypeSelect.tsx`, `FontFaceSelect.tsx`, `TextDirectionSelect.tsx` | ✅ Settings → Appearance → Composer: mode (Normal, Plain text), text direction, Proton's ten fonts and 10–26 px; the composer's More options switches a message to plain text (text/plain alone, kept in its draft) or right to left; the sent HTML carries the font, size and direction (spec 105) |
 | Docked, minimised, maximised composer | `ComposerModeCards.tsx` | ✅ (dimmed when maximised) |
 | Insert and paste images, inline or attached, emoji | `ComposerInsertImageModal.tsx`, `EditorCustomPastePlugin.ts` | ✅ Insert image, paste or drop: asked Inline or Attachment (Proton's); inline images travel as `cid:` parts in `multipart/related`, kept in the draft and shown again when it opens, and are not listed as files; emoji-mart's picker, as Proton's (spec 106) |
-| Signatures per address, display name | `PMSignatureField.tsx`, `IdentitySection.tsx` | ✅ each address: Mail → Settings → Identity (rich signature, display name); a shared mailbox's signature there too, set by its owners and managers, which writing as it starts with (Kutup's own) |
-| From picker (addresses, shared mailboxes, aliases) | `SelectSender.tsx` | ✅ shared mailboxes; 🔶 aliases plan |
+| Signatures per address, display name | `PMSignatureField.tsx`, `IdentitySection.tsx` | ✅ each enabled address (custom-domain ones too): Mail → Settings → Identity and addresses (rich signature, display name); a shared mailbox's signature there too, set by its owners and managers, which writing as it starts with (Kutup's own) |
+| From picker (addresses, shared mailboxes, aliases) | `SelectSender.tsx` | ✅ every enabled address of the account and shared mailboxes; ❌ aliases (not built) |
 | Contact groups as recipients, drag between To/Cc/Bcc | `AddressesGroupItem.tsx`, `useAddressesInputDrag.ts` | ✅ contact groups among the suggestions ("Contact group · N members"), adding each member's addresses as recipients of their own (Proton keeps one group chip); recipients dragged between To, Cc and Bcc (spec 107) |
-| Pre-send warnings (keys, recipients) | `SendWithWarningsModal.tsx`, `useSendVerifications.tsx` | 🔶 per-recipient locks, refusals; ✅ Proton's questions before a send, each with Send anyway: a no-reply recipient (with Don't show again, kept in the browser), a missing subject, an attachment mentioned in what you wrote (not the quote or signature) with none added, in English (Proton's phrases) and Turkish (Kutup's) whatever the app's language (spec 173) |
+| Pre-send warnings (keys, recipients) | `SendWithWarningsModal.tsx`, `useSendVerifications.tsx` | ✅ per-recipient locks and refusals; Proton's questions before a send, each with Send anyway: a no-reply recipient (with Don't show again, kept in the browser), a missing subject, an attachment mentioned in what you wrote (not the quote or signature) with none added, in English (Proton's phrases) and Turkish (Kutup's) whatever the app's language (spec 173) |
 | Encrypt and sign: per contact, "Sign external messages" | `ContactEmailSettingsModal.tsx`, `ExternalPGPSettingsSection.tsx` | ✅ Contacts → Email settings: Encrypt, Sign, PGP scheme per address; "Sign outside mail" in General |
 | Contact keys: found online and trusted in one table, several per address, history | `ContactKeysTable.tsx`, `ContactPGPSettings.tsx` | ✅ [`contact-keys.md`](contact-keys.md): WKD/Proton/KOO keys, Trust, Untrust, Use for sending, Download, Remove; expired and revoked kept |
 | Per-message Encrypt and Sign toggles in the composer | (none) | ✅ beyond Proton ([`mail-encrypt-sign.md`](mail-encrypt-sign.md)) |
@@ -80,7 +81,7 @@ reference only where Proton has nothing.
 | Custom folders (nested), labels | `FoldersSection.tsx` | ✅ F1, names sealed ([`mail-filters.md`](mail-filters.md)) |
 | Filters, "Always move sender's emails", apply to existing | `FiltersSection.tsx` | ✅ F2 |
 | Block, spam, allow lists | `SpamFiltersSection.tsx` | ✅ F3 (allow needs DMARC) |
-| Sieve editor | `AdvancedFilterModal.tsx` | ✅ F4 as import and export (Kutup stores its own filters, not Sieve): Settings → Filters → Import Sieve reads a script in the browser (Proton's dialect and plain Sieve: `address`, `header`, `exists "X-Attached"`, `not`, `allof`/`anyof`, `:is`/`:contains`/`:matches`, `fileinto` by folder path or label, `addflag \\Seen`/`\\Flagged`), adds what Kutup's filters hold and names what it skipped; Export as Sieve writes them in Proton's dialect with its spam guard (spec 174). Filters for shared mailboxes: later |
+| Sieve editor | `AdvancedFilterModal.tsx` | ✅ F4 as import and export (Kutup stores its own filters, not Sieve): Settings → Filters → Import Sieve reads a script in the browser (Proton's dialect and plain Sieve: `address`, `header`, `exists "X-Attached"`, `not`, `allof`/`anyof`, `:is`/`:contains`/`:matches`, `fileinto` by folder path or label, `addflag \\Seen`/`\\Flagged`), adds what Kutup's filters hold and names what it skipped; Export as Sieve writes them in Proton's dialect with its spam guard (spec 174). The editor ("Add Sieve filter", "Edit as Sieve", CodeMirror, checked as typed) is the mail-sieve-editor plan on `feat/mail-sieve-editor`, not merged here (spec 200 comes with its browser runs); what Kutup's filters can't hold (vacation, redirect, body tests) is refused, pointing to Auto-reply and Forwarding; server-side Sieve is a roadmap item. Filters for shared mailboxes: later |
 | Search on subject and addresses | | ✅ |
 | Advanced search (from, to, dates, folder, attachments) | `AdvancedSearch.tsx` | ✅ the search box's options: keyword, location (any folder, label or All mail), start and end date (the end day included, the reader's time zone), sender, recipient (To, Cc, Bcc), address (your own and the distribution lists you are in, Kutup's own: Proton lists your addresses only; a shared mailbox's own), has attachments; kept in the address bar (`q`, `from`, `to`, `since`, `until`, `address`, `filter`); Reset; over the readable fields, no body search yet (spec 111) |
 | Body search in the browser (encrypted local index) | `contentSearch/` | ✅ Advanced search → Search message content (Enable asks first; progress, Pause, Resume; one tab builds at a time; out of room: "For messages newer than …"): subjects and text, quotes left out, indexed in this browser by a Rust/WASM word index (Chat's layout, Turkish folding, word starts) over records sealed per account; hits checked by the server against the place and the other criteria; "Results include message text, searched in this browser."; Settings → General: Delete local search data ([plan](mail-body-search.md); spec 113) |
@@ -94,13 +95,13 @@ reference only where Proton has nothing.
 | Address keys: rotate, import, export, retire | `AddressKeysSection.tsx` | ✅ C3 |
 | PGP settings: sign outside mail, attach key, PGP/MIME or inline | `ExternalPGPSettingsSection.tsx` | ✅ Settings → General: Sign outside mail, Attach public key, Default PGP scheme; Inline sends plain text with each file encrypted (`.pgp`) or signed (`.sig`); the reader opens and checks Inline with files; scheme per contact in Contacts → Email settings |
 | Key transparency, address verification | `KTToggle.tsx` | ❌ |
-| Post-quantum keys | `PostQuantumKeysOptInSection.tsx` | ❌ waiting on rPGP ([`mail-pq-openpgp.md`](mail-pq-openpgp.md)) |
+| Post-quantum keys | `PostQuantumKeysOptInSection.tsx` | ❌ waiting on rPGP ([`mail-pq-openpgp.md`](mail-pq-openpgp.md), user 2026-10-19); v6 keys in a key list are listed and kept, never used |
 | Distribution lists, shared mailboxes | (business: groups) | ✅ |
-| Aliases (hide-my-email) | Pass aliases | 🔶 aliases plan (`feat/mail-aliases`) |
-| Dots, dashes, capitals and `+tags` ignored | `CANONICALIZE_SCHEME.PROTON` | 🔶 aliases A0 |
-| Several addresses per account, default address | `AddressesSection.tsx` | ✅ Mail → Settings → Identity and addresses: the addresses in order, the first enabled one with a key the default ([`mail-address-keys.md`](mail-address-keys.md)) |
-| Custom domains (MX, SPF, DKIM, DMARC checks), catch-all | `DomainModal.tsx`, `CatchAllSection.tsx` | ✅ Mail → Settings → Domains with MX, SPF, DKIM and DMARC checks, catch-all ([`mail-custom-domains.md`](mail-custom-domains.md)); one domain shared by several accounts comes with organizations |
-| Forwarding (with conditions, end to end to Kutup users) | `ForwardSection.tsx` | ✅ Mail → Settings → Forwarding ([`mail-forwarding.md`](mail-forwarding.md)) |
+| Aliases (hide-my-email) | Pass aliases | ❌ not built: plan in `docs/roadmap.md` (relay.<domain>); `feat/mail-aliases` holds only A0 and is not merged |
+| Dots, dashes, capitals and `+tags` ignored | `CANONICALIZE_SCHEME.PROTON` | ✅ arrival folds `.`, `_`, `-` and case (`names::fold_address`) and drops a `+tag`, on the server's domain and custom domains |
+| Several addresses per account, default address | `AddressesSection.tsx` | ✅ Settings → Identity and addresses: addresses on the account's custom domains; order with the first enabled one as default ("Set as default", Proton's `PUT addresses/order`); disable, enable, delete; each with its own keys ([`mail-address-keys.md`](mail-address-keys.md)) |
+| Custom domains (MX, SPF, DKIM, DMARC checks), catch-all | `DomainModal.tsx`, `CatchAllSection.tsx` | ✅ [`mail-custom-domains.md`](mail-custom-domains.md) (#286): Settings → Domains, a wizard with the DNS records and their checks (verification, MX, SPF, DKIM, DMARC), re-checked by the server; catch-all to one address per domain; administrators' domain list and overrides in the Account app's admin area; one domain shared by several accounts comes with organizations |
+| Forwarding (with conditions, end to end to Kutup users) | `ForwardSection.tsx` | ✅ [`mail-forwarding.md`](mail-forwarding.md): Settings → Forwarding; end to end to Kutup addresses on this server (proxy re-encryption, accept or decline), outside addresses not end to end and confirmed by a code; conditions are the filter conditions; pause, delete |
 | Auto-reply (vacation responder, schedules) | `AutoReplySection.tsx` | ✅ fixed, daily, weekly, monthly, permanent in a time zone; once per sender every 7 days; never to lists or automatic mail; kept in Sent; Proton's banner on received auto-replies |
 | Save contacts automatically | `AutomaticallySaveContacts.tsx` | ➖ Kutup asks first (contacts plan) |
 
@@ -125,15 +126,16 @@ reference only where Proton has nothing.
 | Offline cache | (none; local search index only) | ❌ ([`browser-storage`](../research/16-browser-storage-architecture.md)) |
 | Calendar invitations in mail (Accept, Decline) | `ExtraEvent.tsx` | ➖ with Calendar |
 | Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | ✅ Settings → General: Load remote images (Ask each time, Always: Proton's "Auto show remote images"), the senders whose images always load with Remove, Confirm link URLs, Protect against email tracking (on by default), Auto show embedded images (off: "Load embedded images", spec 110) |
-| Security logs | `LogsSection.tsx` | 🔶 account app has sessions |
+| Security logs | `LogsSection.tsx` | ✅ Account → Security: the account's security log (sign-ins and failed ones, password, two-factor, security-key and session changes), append-only, no IPs ([`server-personal-data.md`](server-personal-data.md) A8) |
 | Language, date format | `LanguageAndTimeSection.tsx` | ✅ (account preferences) |
 | Settings for mail (one place) | mail routes | ✅ Mail → Settings: General, Appearance, Identity, Auto-reply, Folders and labels, Filters, Block and allow; keys in Account |
 
 ## Order
 
-Each is its own plan and pull request, Proton first:
+Each is its own plan and pull request, Proton first. P1–P6 are done
+except the rows above still marked ❌ or 🔶.
 
-1. **What is in flight:** aliases A0–A3.
+1. **Aliases** A0–A3 (not started; `feat/mail-aliases` has only A0).
 2. **P1 organising:** folders, labels, filters, block lists
    ([`mail-filters.md`](mail-filters.md) F1–F3), with the Mail → Settings
    area they need, auto-empty Spam and Trash, Empty folder, Almost all mail.
@@ -154,13 +156,14 @@ Each is its own plan and pull request, Proton first:
    (password-protected mail to outside people dropped, 2026-10-12).
 7. **P6 search and notifications:** advanced search, body search in the
    browser, desktop notifications and web push.
-8. **P7 moving in and out:** import (IMAP, Gmail, Outlook), export,
-   forwarding, a bridge for desktop clients.
-9. **P8 organisation:** several addresses, custom domains, catch-all,
-   categories, newsletter view, key transparency (Phase E for domains).
-10. **Post-quantum keys, then end-to-end forwarding**
-    ([`mail-pq-openpgp.md`](mail-pq-openpgp.md), decided 2026-10-18): a v6
+8. **P7 moving in and out:** import (IMAP, Gmail, Outlook), a bridge for
+   desktop clients. Forwarding and export are done.
+9. **P8 organisation:** categories, newsletter view, key transparency
+   (Phase E for domains). Several addresses, custom domains and catch-all
+   are done.
+10. **Post-quantum keys** ([`mail-pq-openpgp.md`](mail-pq-openpgp.md),
+    decided 2026-10-18, waiting on rPGP since 2026-10-19): a v6
     ML-DSA-65+Ed25519 / ML-KEM-768+X25519 key beside each v4 key, on by
-    default; then Proton's end-to-end forwarding (draft-wussler-openpgp-forwarding,
-    v4 Curve25519 only), with the address on classic encryption while
-    forwarding is on and the person told so.
+    default. Forwarding (built) stays on v4 Curve25519 keys
+    (draft-wussler-openpgp-forwarding): an address keeps classic encryption
+    while forwarding is on, and the person is told so.

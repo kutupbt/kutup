@@ -28,12 +28,12 @@ describe('account vectors', () => {
     const keys = await deriveAccountIdentityKeys(asIdentityRoot(vectors.senderMasterKey))
     expect(await signDriveKeyBinding(asIdentityRoot(vectors.senderMasterKey), sender, 1)).toBe(vectors.binding)
     const verify = (person: AccountRef) =>
-      verifyDriveKeyBinding(person, keys.authorityPublicKey, keys.driveHpkePublicKey, keys.driveSigningPublicKey, vectors.binding, 1)
+      verifyDriveKeyBinding(person, keys.authorityPublicKey, keys.driveXwingPublicKey, keys.driveSigningPublicKey, vectors.binding, 1)
     expect(await verify(sender)).toBe(true)
     expect(await verify(someoneElse(sender))).toBe(false)
     // The epoch is signed: the same binding claimed for another one fails.
     expect(
-      await verifyDriveKeyBinding(sender, keys.authorityPublicKey, keys.driveHpkePublicKey, keys.driveSigningPublicKey, vectors.binding, 2),
+      await verifyDriveKeyBinding(sender, keys.authorityPublicKey, keys.driveXwingPublicKey, keys.driveSigningPublicKey, vectors.binding, 2),
     ).toBe(false)
   })
 
@@ -44,7 +44,7 @@ describe('account vectors', () => {
       deriveAccountIdentityKeys(asIdentityRoot(vectors.senderMasterKey)),
       deriveAccountIdentityKeys(asIdentityRoot(vectors.recipientMasterKey)),
     ])
-    const privateKey = fromBase64(to.driveHpkePrivateKey)
+    const privateKey = fromBase64(to.driveXwingPrivateKey)
     const parties = (who: AccountRef, toWhom: AccountRef) => ({
       sender: who,
       senderIncarnationId: from.incarnationId,

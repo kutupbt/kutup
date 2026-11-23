@@ -88,6 +88,8 @@ admin_actions! {
         "chatGroupAvatarStoragePerGroupBytes", "chatGroupAvatarPendingSeconds", "passVaultMaxBytes",
     ],
     SettingsSetRateLimit = "settings.setRateLimit" ["key", "value", "previous"],
+    // The oldest client of a type the server accepts (`null` value: the floor).
+    ClientVersionSetMinimum = "clientVersion.setMinimum" ["clientType", "value"],
     MapsUpdateSettings = "maps.updateSettings" ["enabled", "providers", "proxy", "cacheMegabytes"],
     LegalPublish = "legal.publish" ["documentId", "kind", "version", "language", "requiredAtSignup"],
     MailUpdateSending = "mail.updateSending" ["perHour", "perDay", "paused", "clearFlag"],

@@ -102,7 +102,7 @@ export function LinkCallRoute() {
  * an access token with it when the person wants their account shown.
  */
 function signedInAccount(): string | null {
-  return readPersisted()?.userId ?? null
+  return readPersisted()?.accountId ?? null
 }
 
 function LinkCall({ link, hostToken }: { link: OpenCallLink; hostToken: string | null }) {
@@ -177,7 +177,7 @@ function Waiting({ controller, title }: { controller: LinkCallController; title:
   )
 }
 
-const SHOW_ACCOUNT_KEY = 'kutup-meeting-show-account'
+const SHOW_ACCOUNT_KEY = 'kutup.chat.meetingShowAccount'
 
 function rememberedShowAccount(): boolean {
   try {

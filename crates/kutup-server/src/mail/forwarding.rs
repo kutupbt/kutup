@@ -896,7 +896,7 @@ async fn deliver(
             &mut tx,
             super::NewMessage {
                 id,
-                user_id: Some(forwardee_user),
+                account_id: Some(forwardee_user),
                 address_id: forwardee_address,
                 thread_id: None,
                 direction: "inbound",

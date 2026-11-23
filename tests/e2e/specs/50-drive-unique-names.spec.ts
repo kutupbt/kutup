@@ -32,11 +32,11 @@ async function uploadFolder(page: Page, dir: string) {
 const panel = (page: Page) => page.getByRole('region', { name: 'Uploads' })
 const conflict = (page: Page) => page.getByRole('dialog').filter({ hasText: 'is already here' })
 
-/** Uploads created on the server (tus `POST /api/uploads`); `versions`: those of a new version (`versionOf`). */
+/** Uploads created on the server (tus `POST /api/v1/drive/uploads`); `versions`: those of a new version (`versionOf`). */
 function countUploads(page: Page): { count: number; versions: number } {
   const seen = { count: 0, versions: 0 }
   page.on('request', (r) => {
-    if (r.method() !== 'POST' || !/\/api\/uploads\/?$/.test(new URL(r.url()).pathname)) return
+    if (r.method() !== 'POST' || !/\/api\/v1\/drive\/uploads\/?$/.test(new URL(r.url()).pathname)) return
     seen.count++
     const meta = r.headers()['upload-metadata'] ?? ''
     if (meta.split(',').some((pair) => pair.startsWith('versionOf '))) seen.versions++

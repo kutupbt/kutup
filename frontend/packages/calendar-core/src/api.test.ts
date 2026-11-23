@@ -103,7 +103,7 @@ import {
 } from './api'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
-const session = { userId: 'u1', sessionId: 's1', masterKey: new Uint8Array(32), roots: testRoots(0) } as unknown as Session
+const session = { accountId: 'u1', sessionId: 's1', masterKey: new Uint8Array(32), roots: testRoots(0) } as unknown as Session
 const account = {
   key: { masterKeyBase64: 'm', binding: 'b', address: 'ada@kutup.test', envelope: 'e', fingerprint: 'k' },
   olderKeys: [],
@@ -125,7 +125,7 @@ function row(n: number, { metadataId = uuid(n), signer = 'owner', listed = 'own'
   const fingerprint = `fp${++fingerprints}`
   return {
     id: uuid(n),
-    ownerId,
+    ownerAccountId: ownerId,
     publicKey: 'P',
     fingerprint: listed === 'own' ? fingerprint : listed,
     lockedSecretKey: 'L',

@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import api from '@kutup/session/client'
 import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import { broadcastColor } from '@kutup/session/sessionSync'
+import type { AccountRole, TwoFactorState } from '@kutup/session/api-types'
 import { getSession, updateSession } from '@kutup/session/store'
 import { removeDevicesFromManifest } from '@kutup/crypto/accountManifest'
 import { listAccountDevices, ownAccount, publishNextManifest, type AccountDevice } from '@kutup/session/devices'
@@ -13,10 +14,10 @@ export const meKey = ['me'] as const
 export interface Me {
   id: string
   username: string
-  totpEnabled: boolean
+  twoFactor: TwoFactorState
   storageQuotaBytes: number
   storageUsedBytes: number
-  isAdmin: boolean
+  role: AccountRole
   color: string
   /** How long file versions are kept, in days (docs/plans/drive-versions-v2.md). */
   versionRetentionDays: number
@@ -28,7 +29,7 @@ export interface Me {
 export function useMe() {
   return useQuery({
     queryKey: meKey,
-    queryFn: async () => (await api.get<Me>('/user/me')).data,
+    queryFn: async () => (await api.get<Me>('/account')).data,
   })
 }
 
@@ -37,7 +38,7 @@ export function useUpdateColor() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (color: string) => {
-      await api.patch('/user/me', { color })
+      await api.patch('/account', { color })
       return color || null
     },
     onSuccess: async (color) => {
@@ -58,7 +59,7 @@ export interface TotpEnrolment {
 
 export function useStartTotp() {
   return useMutation({
-    mutationFn: async () => (await api.post<TotpEnrolment>('/user/2fa/setup')).data,
+    mutationFn: async () => (await api.post<TotpEnrolment>('/account/2fa/setup')).data,
   })
 }
 
@@ -74,11 +75,11 @@ export function useVerifyTotp() {
   return useMutation({
     mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      const { data } = await api.post<{ recoveryCodes: string[] }>('/user/2fa/verify', { code, grant })
+      const { data } = await api.post<{ recoveryCodes: string[] }>('/account/2fa/verify', { code, grant })
       return data.recoveryCodes
     },
     onSuccess: async () => {
-      updateSession({ totpEnabled: true })
+      updateSession({ twoFactor: 'on' })
       await queryClient.invalidateQueries({ queryKey: meKey })
       await queryClient.invalidateQueries({ queryKey: recoveryCodesKey })
     },
@@ -91,7 +92,7 @@ export const recoveryCodesKey = ['recoveryCodes'] as const
 export function useRecoveryCodesLeft(enabled: boolean) {
   return useQuery({
     queryKey: recoveryCodesKey,
-    queryFn: async () => (await api.get<{ remaining: number }>('/user/2fa/recovery-codes')).data.remaining,
+    queryFn: async () => (await api.get<{ remaining: number }>('/account/2fa/recovery-codes')).data.remaining,
     enabled,
   })
 }
@@ -106,7 +107,7 @@ export function useRenewRecoveryCodes() {
   return useMutation({
     mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      const { data } = await api.post<{ recoveryCodes: string[] }>('/user/2fa/recovery-codes', { code, grant })
+      const { data } = await api.post<{ recoveryCodes: string[] }>('/account/2fa/recovery-codes', { code, grant })
       return data.recoveryCodes
     },
     onSuccess: async () => {
@@ -120,10 +121,10 @@ export function useDisableTotp() {
   return useMutation({
     mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      await api.delete('/user/2fa', { data: { code, grant } })
+      await api.delete('/account/2fa', { data: { code, grant } })
     },
     onSuccess: async () => {
-      updateSession({ totpEnabled: false })
+      updateSession({ twoFactor: 'off' })
       await queryClient.invalidateQueries({ queryKey: meKey })
       await queryClient.invalidateQueries({ queryKey: recoveryCodesKey })
     },
@@ -279,7 +280,7 @@ export function useSecurityEvents() {
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) =>
       (
-        await api.get<SecurityEventsPage>('/user/security-events', {
+        await api.get<SecurityEventsPage>('/account/security-events', {
           params: { limit: 50, ...(pageParam ? { cursor: pageParam } : {}) },
         })
       ).data,

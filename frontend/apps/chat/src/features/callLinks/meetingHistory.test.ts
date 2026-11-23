@@ -17,7 +17,7 @@ describe('the meetings an account joined from this browser', () => {
 
   it('keeps no stay that belongs to no account', () => {
     // As an earlier version stored them: nobody was signed in.
-    localStorage.setItem('kutup-meeting-history', JSON.stringify([{ ...stay, id: 'A'.repeat(43) }, { ...stay, id: 'B'.repeat(43), account: '' }]))
+    localStorage.setItem('kutup.chat.meetingHistory', JSON.stringify([{ ...stay, id: 'A'.repeat(43) }, { ...stay, id: 'B'.repeat(43), account: '' }]))
     expect(joinedMeetings()).toEqual([])
   })
 
@@ -26,7 +26,7 @@ describe('the meetings an account joined from this browser', () => {
     const [entry] = joinedMeetings()
     forgetJoinedMeetings(new Set([entry.id]))
     expect(joinedMeetings()).toEqual([])
-    localStorage.setItem('kutup-meeting-history', JSON.stringify([{ ...stay, id: 'A'.repeat(43), account: 'user-1', fragment: 'short' }, { ...stay, account: 'user-1' }, 'x', null]))
+    localStorage.setItem('kutup.chat.meetingHistory', JSON.stringify([{ ...stay, id: 'A'.repeat(43), account: 'user-1', fragment: 'short' }, { ...stay, account: 'user-1' }, 'x', null]))
     expect(joinedMeetings()).toEqual([])
   })
 })

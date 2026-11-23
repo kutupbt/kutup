@@ -38,8 +38,8 @@ struct AccountIdentityKeysView {
     authority_public_key: String,
     authority_key_id: String,
     incarnation_id: String,
-    drive_hpke_public_key: String,
-    drive_hpke_private_key: String,
+    drive_xwing_public_key: String,
+    drive_xwing_private_key: String,
     drive_signing_public_key: String,
 }
 
@@ -573,7 +573,7 @@ pub fn seal_account_roots(
 }
 
 /// Opens the account's roots from its root records (`accountRoots` of the
-/// sign-in answer, or `GET /api/account/roots`). The newest identity root
+/// sign-in answer, or `GET /api/v1/account/roots`). The newest identity root
 /// must derive `registered_authority_base64` (the account's authority public
 /// key); otherwise the error is `identityRootMismatch`, and no older root
 /// stands in.
@@ -613,8 +613,8 @@ pub fn derive_account_identity_keys(identity_root_base64: &str) -> Result<JsValu
         authority_public_key: STANDARD.encode(identity.authority_public_key()),
         authority_key_id: identity.authority_key_id(),
         incarnation_id: identity.incarnation_id(),
-        drive_hpke_public_key: STANDARD.encode(identity.drive_hpke_public_key()),
-        drive_hpke_private_key: STANDARD.encode(identity.drive_hpke_private_key()),
+        drive_xwing_public_key: STANDARD.encode(identity.drive_xwing_public_key()),
+        drive_xwing_private_key: STANDARD.encode(identity.drive_xwing_private_key()),
         drive_signing_public_key: STANDARD.encode(identity.drive_signing_public_key()),
     })
     .map_err(|error| js_error(&format!("encode account identity: {error}")))
@@ -1512,7 +1512,7 @@ pub fn create_collection_epoch_statement(
     identity_root_base64: &str,
     collection_key_base64: &str,
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     epoch: u32,
     previous_statement_hash: &str,
 ) -> Result<String, JsValue> {
@@ -1527,7 +1527,7 @@ pub fn create_collection_epoch_statement(
     .map_err(|error| js_error(&error.to_string()))?;
     let statement = kutup_crypto::collection_epoch::CollectionEpochStatementV1::create(
         collection_id,
-        owner_user_id,
+        owner_account_id,
         epoch,
         (!previous_statement_hash.is_empty()).then_some(previous_statement_hash),
         &collection_key,
@@ -1584,7 +1584,7 @@ pub fn seal_previous_collection_key(
     previous_key_base64: &str,
     key_base64: &str,
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     epoch: u32,
 ) -> Result<String, JsValue> {
     let previous = decode_canonical_base64(previous_key_base64, "previous collection key")?;
@@ -1593,7 +1593,7 @@ pub fn seal_previous_collection_key(
         &previous,
         &key,
         collection_id,
-        owner_user_id,
+        owner_account_id,
         epoch,
     )
     .map_err(|error| js_error(&error.to_string()))
@@ -1609,13 +1609,13 @@ struct EpochLinkJson {
 
 /// Every key of a folder, oldest first, as an array of base64 strings, from
 /// its current key and complete signed history (`chain`: the
-/// `GET /api/collections/{id}/epochs` array). Fails unless every statement
+/// `GET /api/v1/drive/collections/{id}/epochs` array). Fails unless every statement
 /// is the owner's, chained, and every key matches its commitment.
 #[wasm_bindgen(js_name = unlockCollectionKeyring)]
 pub fn unlock_collection_keyring(
     current_key_base64: &str,
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     owner_authority_public_key_base64: &str,
     chain: JsValue,
 ) -> Result<JsValue, JsValue> {
@@ -1635,7 +1635,7 @@ pub fn unlock_collection_keyring(
     let keys = kutup_crypto::collection_keyring::unlock(
         &current,
         collection_id,
-        owner_user_id,
+        owner_account_id,
         &authority,
         &chain,
     )
@@ -1702,7 +1702,7 @@ pub fn file_key_at(
 pub fn seal_named_share_envelope(
     collection_key_base64: &str,
     sender_identity_root_base64: &str,
-    recipient_hpke_public_key_base64: &str,
+    recipient_xwing_public_key_base64: &str,
     collection_id: &str,
     epoch: u32,
     sender: JsValue,
@@ -1717,7 +1717,7 @@ pub fn seal_named_share_envelope(
         .try_into()
         .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
-        recipient_hpke_public_key_base64,
+        recipient_xwing_public_key_base64,
         "recipient HPKE public key",
     )?;
     let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
@@ -1784,7 +1784,7 @@ pub fn open_named_share_envelope(
 pub fn seal_file_share_envelope(
     file_key_base64: &str,
     sender_identity_root_base64: &str,
-    recipient_hpke_public_key_base64: &str,
+    recipient_xwing_public_key_base64: &str,
     file_id: &str,
     generation: u32,
     sender: JsValue,
@@ -1799,7 +1799,7 @@ pub fn seal_file_share_envelope(
         .try_into()
         .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
-        recipient_hpke_public_key_base64,
+        recipient_xwing_public_key_base64,
         "recipient HPKE public key",
     )?;
     let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
@@ -1865,7 +1865,7 @@ pub fn open_file_share_envelope(
 pub fn seal_profile_key_envelope(
     profile_key_base64: &str,
     sender_identity_root_base64: &str,
-    recipient_hpke_public_key_base64: &str,
+    recipient_xwing_public_key_base64: &str,
     sender: JsValue,
     sender_incarnation_id: &str,
     recipient: JsValue,
@@ -1877,7 +1877,7 @@ pub fn seal_profile_key_envelope(
             .try_into()
             .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
-        recipient_hpke_public_key_base64,
+        recipient_xwing_public_key_base64,
         "recipient HPKE public key",
     )?;
     let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
@@ -2624,7 +2624,7 @@ struct MailGroupKeyView {
 struct GroupMemberInput {
     account: kutup_crypto::account_ref::AccountRef,
     incarnation_id: String,
-    hpke_public_key: String,
+    xwing_public_key: String,
 }
 
 /// A group key as a member holds it: their share and what opens it.
@@ -2657,7 +2657,7 @@ fn seal_shares(
     members
         .iter()
         .map(|member| {
-            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.xwing_public_key, "member HPKE public key")?;
             kutup_crypto::mail_key::seal_group_key_share(
                 group_secret,
                 group_id,
@@ -3360,7 +3360,7 @@ pub fn reshare_mail_group_signer(
     members
         .iter()
         .map(|member| {
-            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.xwing_public_key, "member HPKE public key")?;
             kutup_crypto::mail_group::seal_group_signing_share(
                 &signer,
                 &group_id,
@@ -3416,7 +3416,7 @@ pub fn new_mail_group_signer(
     let shares = members
         .iter()
         .map(|member| {
-            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.xwing_public_key, "member HPKE public key")?;
             seal_group_signing_share(
                 &signer,
                 group_id,
@@ -3472,7 +3472,7 @@ fn public_key_32(value: &str, what: &str) -> Result<[u8; 32], JsValue> {
 
 /// A Drive HPKE public key: X-Wing's 1216 bytes (identity suite 2,
 /// docs/plans/pq-shares.md).
-fn drive_hpke_key(
+fn drive_xwing_key(
     value: &str,
     what: &str,
 ) -> Result<[u8; kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN], JsValue> {
@@ -3516,7 +3516,7 @@ pub fn sign_drive_key_binding(
 pub fn verify_drive_key_binding(
     account: JsValue,
     authority_public_key_base64: &str,
-    drive_hpke_public_key_base64: &str,
+    drive_xwing_public_key_base64: &str,
     drive_signing_public_key_base64: &str,
     binding_base64: &str,
     binding_epoch: u32,
@@ -3527,7 +3527,7 @@ pub fn verify_drive_key_binding(
             &account_arg(account, "account account")?,
             &public_key_32(authority_public_key_base64, "authority key")?,
             binding_epoch,
-            &drive_hpke_key(drive_hpke_public_key_base64, "Drive HPKE key")?,
+            &drive_xwing_key(drive_xwing_public_key_base64, "Drive HPKE key")?,
             &public_key_32(drive_signing_public_key_base64, "Drive signing key")?,
             &signature,
         )
@@ -5279,7 +5279,7 @@ struct MailForwardingMaterialView {
 /// the forwarder's address key is opened from its envelope here and never
 /// leaves WASM. Returns `{ forwardeePublicKey, instances: [{
 /// forwarderFingerprint, forwardeeFingerprint, proxyParameter }],
-/// activation }`, the body of `POST /api/mail/forwardings`' `endToEnd`. The
+/// activation }`, the body of `POST /api/v1/mail/forwardings`' `endToEnd`. The
 /// forwardee key itself leaves only sealed in the activation, to
 /// `forwardee_public_key_base64` (the forwardee address's primary key, from
 /// its verified key list), binding `forwarding_id` (a UUID v4 the client
@@ -5348,7 +5348,7 @@ struct AcceptedMailForwardingView {
 /// not from the server), for this forwarding and addresses and unexpired at
 /// `now_secs`, and that the key stands in for the forwarder's current key.
 /// Returns `{ publicKey, privateKeyEnvelope, fingerprint }` for `POST
-/// /api/mail/forwardings/{id}/accept`; the key itself never leaves WASM
+/// /api/v1/mail/forwardings/{id}/accept`; the key itself never leaves WASM
 /// unsealed.
 #[wasm_bindgen(js_name = acceptMailForwarding)]
 #[allow(clippy::too_many_arguments)]
@@ -5500,16 +5500,13 @@ struct ProfileLookup {
 /// What the account's own copy of its profile key is sealed for: the master
 /// key at `generation`, and the key binding.
 fn profile_owner(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     binding: &str,
 ) -> Result<chat_profile::ProfileOwnerKey, JsValue> {
-    let master_key: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
-        master_key
-            .try_into()
-            .map_err(|_| js_error("the account master key is 32 bytes"))?,
-    );
-    chat_profile::ProfileOwnerKey::new(&master_key, master_key_generation(generation)?, binding)
+    let master_keys = zeroize::Zeroizing::new(master_keys);
+    let keys = kutup_crypto::master_keys::MasterKeys::decode(&master_keys)
+        .map_err(|_| js_error("the account's master keys are malformed"))?;
+    chat_profile::ProfileOwnerKey::from_keys(&keys, binding)
         .map_err(|error| js_error(&error.to_string()))
 }
 
@@ -5537,18 +5534,17 @@ fn profile_lookup_of(key: &[u8]) -> Result<ProfileLookup, JsValue> {
     })
 }
 
-/// The account's own profile, opened from the master key.
+/// The account's own profile, opened with its master keys (`MasterKeys::encode`).
 #[wasm_bindgen(js_name = accountProfileOpen)]
 pub fn account_profile_open(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     current: JsValue,
     account: String,
     binding: String,
 ) -> Result<JsValue, JsValue> {
     let opened = chat_profile::open_own_profile(
         &sealed_profile(current)?,
-        &profile_owner(master_key, generation, &binding)?,
+        &profile_owner(master_keys, &binding)?,
         &profile_account(&account)?,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -5556,18 +5552,17 @@ pub fn account_profile_open(
 }
 
 /// The account's own profile key (to give to the people it shares files
-/// with), opened from the master key.
+/// with), opened with its master keys.
 #[wasm_bindgen(js_name = accountProfileKey)]
 pub fn account_profile_key(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     current: JsValue,
     account: String,
     binding: String,
 ) -> Result<JsValue, JsValue> {
     let opened = chat_profile::open_own_profile(
         &sealed_profile(current)?,
-        &profile_owner(master_key, generation, &binding)?,
+        &profile_owner(master_keys, &binding)?,
         &profile_account(&account)?,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -5602,12 +5597,11 @@ pub fn profile_open_peer(
     profile_output(&AccountProfileView::from(opened))
 }
 
-/// The account's next profile revision, sealed from the master key: the
-/// exact upload.
+/// The account's next profile revision, sealed under its current master
+/// key: the exact upload.
 #[wasm_bindgen(js_name = accountProfileSeal)]
 pub fn account_profile_seal(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     current: JsValue,
     update: JsValue,
     account: String,
@@ -5626,7 +5620,7 @@ pub fn account_profile_seal(
         .transpose()
         .map_err(|_| js_error("the avatar is standard base64"))?;
     let upload = chat_profile::seal_account_profile(
-        &profile_owner(master_key, generation, &binding)?,
+        &profile_owner(master_keys, &binding)?,
         current.as_ref(),
         &chat_profile::ProfileContents {
             display_name: update.display_name,

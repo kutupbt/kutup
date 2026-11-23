@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{FileRow, FileThumbnails, MessageResponse, UploadResult};
 use crate::AppState;
 
@@ -90,21 +90,21 @@ pub struct ClaimSeedResponse {
     committed: bool,
 }
 
-/// `GET /api/collections/{id}/files` — mirrors `ListFiles`.
+/// `GET /api/v1/drive/collections/{id}/files` — mirrors `ListFiles`.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}/files",
-    tag = "files",
+    path = "/api/v1/drive/collections/{id}/files",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "Files in the collection", body = Vec<FileRow>))
 )]
 pub async fn list_files(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
 
     if !can_access_collection(&state.pool, user_id, coll_id).await? {
@@ -115,20 +115,23 @@ pub async fn list_files(
     Ok(Json(out).into_response())
 }
 
-/// `GET /api/drive/files` — every file in the folders this account owns or
+/// `GET /api/v1/drive/files` — every file in the folders this account owns or
 /// has been given (not albums, not the trash), newest first: one request
 /// where listing each folder takes one per folder (the Office home lists
 /// documents across all of them; docs/research/18-web-performance.md).
-/// Rows are those of `GET /api/collections/{id}/files`.
+/// Rows are those of `GET /api/v1/drive/collections/{id}/files`.
 #[utoipa::path(
     get,
-    path = "/api/drive/files",
-    tag = "files",
+    path = "/api/v1/drive/files",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Files in every folder the account can read", body = Vec<FileRow>))
 )]
-pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn list_all_files(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let out = file_rows(
         &state.pool,
         "f.collection_id IN (
@@ -144,11 +147,11 @@ pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> Ap
     Ok(Json(out).into_response())
 }
 
-/// `POST /api/files/upload` — mirrors `Upload`.
+/// `POST /api/v1/drive/files` — mirrors `Upload`.
 #[utoipa::path(
     post,
-    path = "/api/files/upload",
-    tag = "files",
+    path = "/api/v1/drive/files",
+    tag = "drive",
     operation_id = "uploadFile",
     security(("BearerAuth" = [])),
     request_body(
@@ -160,10 +163,10 @@ pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> Ap
 )]
 pub async fn upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     // The upload limit is a setting, the site's or the account's own
     // (docs/plans/drive-block-format.md §7), counted as the file arrives.
     let mut budget = crate::drive_blob::BodyBudget::new(
@@ -245,10 +248,10 @@ pub async fn upload(
     .bind(coll_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((owner_user_id, key_epoch)) = collection else {
+    let Some((owner_account_id, key_epoch)) = collection else {
         return Err(AppError::forbidden("forbidden"));
     };
-    let is_owner = owner_user_id == user_id;
+    let is_owner = owner_account_id == user_id;
     if !is_owner {
         let can_upload: Option<bool> = sqlx::query_scalar(
             "SELECT can_upload FROM drive_collection_shares WHERE collection_id = $1 AND recipient_account_id = $2",
@@ -394,11 +397,11 @@ pub async fn upload(
         .into_response())
 }
 
-/// `GET /api/files/{id}/download` — mirrors `Download`.
+/// `GET /api/v1/drive/files/{id}/download` — mirrors `Download`.
 #[utoipa::path(
     get,
-    path = "/api/files/{id}/download",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/download",
+    tag = "drive",
     operation_id = "downloadFile",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
@@ -410,11 +413,11 @@ pub async fn upload(
 )]
 pub async fn download(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let exists: Option<Uuid> = sqlx::query_scalar(
@@ -456,13 +459,13 @@ pub(crate) const VERSION_HEADER: &str = "x-kutup-version";
 /// Names the original upload where a version id is expected.
 pub(crate) const ORIGINAL: &str = "original";
 
-/// `GET /api/files/{id}/original` — the original upload, while it is kept:
+/// `GET /api/v1/drive/files/{id}/original` — the original upload, while it is kept:
 /// the base of an office editing session that began before the file's first
 /// saved version.
 #[utoipa::path(
     get,
-    path = "/api/files/{id}/original",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/original",
+    tag = "drive",
     operation_id = "downloadFileOriginal",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
@@ -475,11 +478,11 @@ pub(crate) const ORIGINAL: &str = "original";
 )]
 pub async fn download_original(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::not_found("not found"));
@@ -507,19 +510,22 @@ pub struct DriveLimits {
     stream_blob_fallback_max_bytes: i64,
 }
 
-/// `GET /api/drive/limits` — the upload and streaming limits, as they are
+/// `GET /api/v1/drive/limits` — the upload and streaming limits, as they are
 /// for this account (its own where administrators set them).
 #[utoipa::path(
     get,
-    path = "/api/drive/limits",
-    tag = "files",
+    path = "/api/v1/drive/limits",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, body = DriveLimits))
 )]
-pub async fn limits(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<DriveLimits>> {
+pub async fn limits(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<DriveLimits>> {
     use crate::site_settings as s;
     let pool = &state.pool;
-    let account = trusted_uuid(&user.user_id)?;
+    let account = trusted_uuid(&user.account_id)?;
     Ok(Json(DriveLimits {
         upload_max_bytes: s::DRIVE_UPLOAD_MAX_BYTES.load_for(pool, account).await?,
         version_max_bytes: s::DRIVE_VERSION_MAX_BYTES.load_for(pool, account).await?,
@@ -538,11 +544,11 @@ pub async fn limits(State(state): State<AppState>, user: AuthUser) -> AppResult<
     }))
 }
 
-/// `PUT /api/files/{id}` — mirrors `UpdateMetadata` (rename).
+/// `PUT /api/v1/drive/files/{id}` — mirrors `UpdateMetadata` (rename).
 #[utoipa::path(
     put,
-    path = "/api/files/{id}",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = UpdateFileMetadataRequest,
@@ -550,11 +556,11 @@ pub async fn limits(State(state): State<AppState>, user: AuthUser) -> AppResult<
 )]
 pub async fn update_metadata(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateFileMetadataRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     if req.metadata_envelope.is_empty() || req.metadata_revision <= 1 {
@@ -631,13 +637,13 @@ pub async fn update_metadata(
     .into_response())
 }
 
-/// `DELETE /api/files/{id}` — soft-deletes into the trash (30-day retention). Quota stays
+/// `DELETE /api/v1/drive/files/{id}` — soft-deletes into the trash (30-day retention). Quota stays
 /// reserved while the file is in trash (the blob still occupies storage); the permanent
-/// path (`DELETE /api/trash/{id}` or the retention sweeper) releases it.
+/// path (`DELETE /api/v1/drive/trash/{id}` or the retention sweeper) releases it.
 #[utoipa::path(
     delete,
-    path = "/api/files/{id}",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}",
+    tag = "drive",
     operation_id = "deleteFile",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
@@ -645,10 +651,10 @@ pub async fn update_metadata(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(Uuid, Uuid)> = sqlx::query_as(
@@ -672,21 +678,21 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/files/{fileId}/claim-seed` — mirrors `ClaimSeed`.
+/// `POST /api/v1/drive/files/{fileId}/claim-seed` — mirrors `ClaimSeed`.
 #[utoipa::path(
     post,
-    path = "/api/files/{fileId}/claim-seed",
-    tag = "files",
+    path = "/api/v1/drive/files/{fileId}/claim-seed",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
     responses((status = 200, description = "Whether this caller won the first-seeder race", body = ClaimSeedResponse))
 )]
 pub async fn claim_seed(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(file_id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     // Seeding writes the document's first state: an editor's job.
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
@@ -754,8 +760,7 @@ pub(crate) async fn file_rows(
     struct Row {
         id: Uuid,
         collection_id: Uuid,
-        #[sqlx(rename = "uploader_account_id")]
-        uploader_user_id: Uuid,
+        uploader_account_id: Uuid,
         metadata_envelope: String,
         file_key_envelope: String,
         key_epoch: i32,
@@ -820,7 +825,7 @@ pub(crate) async fn file_rows(
         .map(|r| FileRow {
             id: r.id.to_string(),
             collection_id: r.collection_id.to_string(),
-            uploader_user_id: r.uploader_user_id.to_string(),
+            uploader_account_id: r.uploader_account_id.to_string(),
             metadata_envelope: r.metadata_envelope,
             file_key_envelope: r.file_key_envelope,
             key_epoch: r.key_epoch,

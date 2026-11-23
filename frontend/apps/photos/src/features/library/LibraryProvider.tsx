@@ -12,7 +12,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const library = useLibrary()
   const upload = useUploadPhotos(library.photos, library.preferences)
   const marks = useMarks()
-  useLibraryCatchUp(library.photos, session.userId, !library.loading)
+  useLibraryCatchUp(library.photos, session.accountId, !library.loading)
   const value = useMemo(() => ({ ...library, upload, marks }), [library, upload, marks])
   return <LibraryContext.Provider value={value}>{children}</LibraryContext.Provider>
 }

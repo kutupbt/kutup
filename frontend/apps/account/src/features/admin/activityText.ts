@@ -31,6 +31,7 @@ const ACTIONS = new Set([
   'account.setPublicSharing',
   'settings.update',
   'settings.setRateLimit',
+  'clientVersion.setMinimum',
   'account.setRateLimit',
   'account.setEntitlement',
   'registrationCode.create',
@@ -81,7 +82,7 @@ function limitName(e: AdminActivityEntry, t: TFunction): string {
  */
 export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
   const admin =
-    e.adminUserId === SYSTEM_ADMIN ? t('admin.activity.system') : (e.adminUsername ?? t('admin.activity.deletedAccount'))
+    e.adminAccountId === SYSTEM_ADMIN ? t('admin.activity.system') : (e.adminUsername ?? t('admin.activity.deletedAccount'))
   const target = e.targetUsername ?? t('admin.activity.deletedAccount')
   const key = actionKey(e.action)
   const values = {
@@ -107,9 +108,11 @@ export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
     version: text(e.payload.version),
     // An account's public links: `on` or `off`.
     state: text(e.payload.publicSharing),
+    // A client type (`web`, `cli`, …) whose oldest accepted version was set.
+    clientType: text(e.payload.clientType),
   }
   // A limit set to none is reset: `<key>Reset`.
-  const resets = ['settingsSetRateLimit', 'accountSetRateLimit', 'accountSetEntitlement']
+  const resets = ['clientVersionSetMinimum', 'settingsSetRateLimit', 'accountSetRateLimit', 'accountSetEntitlement']
   if (key && resets.includes(key) && values.value === '') return t(`admin.activity.actions.${key}Reset`, values)
   return key ? t(`admin.activity.actions.${key}`, values) : t('admin.activity.actions.unknown', values)
 }

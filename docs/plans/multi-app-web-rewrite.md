@@ -50,10 +50,10 @@ office.<d>   ──▶ │ /  → OnlyOffice bundle (no /api, no cookies)    │
 
 - **App origins come from server config**, not hostname guessing:
   `KUTUP_ACCOUNT_URL`, `KUTUP_DRIVE_URL`, `KUTUP_CHAT_URL`, `KUTUP_OFFICE_URL` (defaults derived
-  from one `KUTUP_BASE_DOMAIN`). `GET /api/auth/settings` publishes them, so
+  from one `KUTUP_BASE_DOMAIN`). `GET /api/v1/auth/settings` publishes them, so
   self-hosters can use any three hostnames. The fork redirect allowlist is the
   same config, enforced **server-side** (child client type → exact origin).
-- Cookies are host-only per app origin (refresh cookie `Path=/api/auth/refresh`,
+- Cookies are host-only per app origin (refresh cookie `Path=/api/v1/auth/refresh`,
   `HttpOnly; Secure; SameSite=Lax`). No cross-origin API calls, so no CORS
   beyond today's defaults.
 - `/.well-known/kutup/federation.json` and federation endpoints keep answering
@@ -94,13 +94,13 @@ rewrite; they go on `docs/roadmap.md` (no stub affordances).
 
 | Method + path | Auth | Purpose |
 |---|---|---|
-| existing `POST /api/auth/login`, `/login/2fa`, `/register`, `/complete-setup`, `/recover` | — | Now create a `sessions` row. Body field `clientType` (`web-account` or `cli`; others rejected until those clients exist). |
-| `POST /api/auth/refresh` | refresh cookie (web) or body (CLI) | Rotates the refresh token; rejects revoked sessions and reused (already rotated) tokens — reuse revokes the session. |
-| `POST /api/auth/forks` | parent session (`web-account` only) | `{childClientType, payload}` → `{selector}`. |
-| `POST /api/auth/forks/consume` | none | `{selector, clientType}` on the child origin → creates the child session, sets the refresh cookie **on this origin**, returns `{accessToken, payload, userId, …}`. Single use; `clientType` must match; request `Origin` must equal the configured origin for that client type. |
-| `PUT` / `GET /api/auth/sessions/current/local-key` | session | Store / fetch the per-session key that unlocks the persisted blob (below). |
-| `POST /api/auth/logout` | session | Revokes the current session. Revoking a `web-account` session also revokes its children. |
-| `GET /api/auth/sessions`, `DELETE /api/auth/sessions/:id`, `DELETE /api/auth/sessions` (all others) | session | Settings → Sessions, and CLI `kutup sessions`. |
+| existing `POST /api/v1/auth/login`, `/login/2fa`, `/register`, `/complete-setup`, `/recover` | — | Now create a `sessions` row. Body field `clientType` (`web-account` or `cli`; others rejected until those clients exist). |
+| `POST /api/v1/auth/refresh` | refresh cookie (web) or body (CLI) | Rotates the refresh token; rejects revoked sessions and reused (already rotated) tokens — reuse revokes the session. |
+| `POST /api/v1/auth/forks` | parent session (`web-account` only) | `{childClientType, payload}` → `{selector}`. |
+| `POST /api/v1/auth/forks/consume` | none | `{selector, clientType}` on the child origin → creates the child session, sets the refresh cookie **on this origin**, returns `{accessToken, payload, userId, …}`. Single use; `clientType` must match; request `Origin` must equal the configured origin for that client type. |
+| `PUT` / `GET /api/v1/auth/sessions/current/local-key` | session | Store / fetch the per-session key that unlocks the persisted blob (below). |
+| `POST /api/v1/auth/logout` | session | Revokes the current session. Revoking a `web-account` session also revokes its children. |
+| `GET /api/v1/auth/sessions`, `DELETE /api/v1/auth/sessions/:id`, `DELETE /api/v1/auth/sessions` (all others) | session | Settings → Sessions, and CLI `kutup sessions`. |
 
 ### Fork flow
 
@@ -108,10 +108,10 @@ rewrite; they go on `docs/roadmap.md` (no stub affordances).
    the return path is kept in `sessionStorage` under `state`.
 2. account (login first if needed) builds the payload
    `{masterKey, privateKey, publicKey, userId}`, encrypts it with a fresh
-   32-byte key, `POST /api/auth/forks`, and redirects to the **configured**
+   32-byte key, `POST /api/v1/auth/forks`, and redirects to the **configured**
    drive origin: `…/login#selector=<s>&sk=<key>&state=<state>`.
 3. drive reads and immediately clears the fragment
-   (`history.replaceState`), `POST /api/auth/forks/consume`, decrypts the
+   (`history.replaceState`), `POST /api/v1/auth/forks/consume`, decrypts the
    payload, persists it (below), and navigates to the saved return path.
    Only a fork whose `state` this tab saved in step 1 is redeemed: a link
    minted for someone else (login CSRF, signing this browser in to their

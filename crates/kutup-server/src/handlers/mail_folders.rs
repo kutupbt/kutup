@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::account_heads::{self, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Folders nest at most this deep: a top folder and two levels inside it
@@ -87,16 +87,19 @@ fn parse_id(id: &str) -> AppResult<Uuid> {
 /// id, parent, sealed name, colour, position, expanded, notify.
 type FolderRow = (Uuid, Option<Uuid>, Option<String>, String, i32, bool, bool);
 
-/// `GET /api/mail/places` — the account's folders and labels.
+/// `GET /api/v1/mail/places` — the account's folders and labels.
 #[utoipa::path(
     get,
-    path = "/api/mail/places",
+    path = "/api/v1/mail/places",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Folders and labels", body = MailPlaces))
 )]
-pub async fn places(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<MailPlaces>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn places(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<MailPlaces>> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let folders: Vec<FolderRow> = sqlx::query_as(
         "SELECT id, parent_id, kutup_b64(name_sealed), color, position, expanded, notify
            FROM mail_folders WHERE account_id = $1 ORDER BY position, created_at",
@@ -207,10 +210,10 @@ pub struct CreateMailFolder {
     pub head: Option<String>,
 }
 
-/// `POST /api/mail/folders` — a new folder, at the top or inside another.
+/// `POST /api/v1/mail/folders` — a new folder, at the top or inside another.
 #[utoipa::path(
     post,
-    path = "/api/mail/folders",
+    path = "/api/v1/mail/folders",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = CreateMailFolder,
@@ -222,10 +225,10 @@ pub struct CreateMailFolder {
 )]
 pub async fn create_folder(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CreateMailFolder>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = parse_id(&request.id)?;
     let parent = request.parent_id.as_deref().map(parse_id).transpose()?;
     check_sealed(&state, user_id, MailNameKind::Folder, &id, &request.name).await?;
@@ -306,11 +309,11 @@ pub struct UpdateMailFolder {
     pub head: Option<String>,
 }
 
-/// `PATCH /api/mail/folders/{id}` — rename (a new sealed name), recolour,
+/// `PATCH /api/v1/mail/folders/{id}` — rename (a new sealed name), recolour,
 /// move into another folder or to the top, reorder, fold, notify.
 #[utoipa::path(
     patch,
-    path = "/api/mail/folders/{id}",
+    path = "/api/v1/mail/folders/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Folder id")),
@@ -323,11 +326,11 @@ pub struct UpdateMailFolder {
 )]
 pub async fn update_folder(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateMailFolder>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such folder"))?;
     if let Some(color) = &request.color {
         check_color(color)?;
@@ -427,12 +430,12 @@ pub struct DeletedMailFolder {
     pub moved: u64,
 }
 
-/// `DELETE /api/mail/folders/{id}` — removes the folder and the folders in
+/// `DELETE /api/v1/mail/folders/{id}` — removes the folder and the folders in
 /// it. Their mail is never deleted: it moves to Archive (Proton: "emails
 /// stored in the folder will not be deleted and can be found in All Mail").
 #[utoipa::path(
     delete,
-    path = "/api/mail/folders/{id}",
+    path = "/api/v1/mail/folders/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Folder id")),
@@ -440,16 +443,16 @@ pub struct DeletedMailFolder {
     responses(
         (status = 200, description = "Removed", body = DeletedMailFolder),
         (status = 404, description = "No such folder"),
-        (status = 409, description = "head_conflict: the folders it removes are not those named"),
+        (status = 409, description = "headConflict: the folders it removes are not those named"),
     )
 )]
 pub async fn delete_folder(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Option<Json<DeleteMailFolder>>,
 ) -> AppResult<Json<DeletedMailFolder>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such folder"))?;
     let request = body.map(|Json(body)| body).unwrap_or_default();
     let head = NextHead::parse(request.head.as_deref())?;
@@ -484,7 +487,7 @@ pub async fn delete_folder(
         if named != actual {
             return Err(
                 AppError::conflict("the folders this removes changed: read them again")
-                    .with_details(serde_json::json!({ "code": "head_conflict" })),
+                    .with_details(serde_json::json!({ "code": "headConflict" })),
             );
         }
     }
@@ -539,10 +542,10 @@ pub struct CreateMailLabel {
     pub head: Option<String>,
 }
 
-/// `POST /api/mail/labels` — a new label.
+/// `POST /api/v1/mail/labels` — a new label.
 #[utoipa::path(
     post,
-    path = "/api/mail/labels",
+    path = "/api/v1/mail/labels",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = CreateMailLabel,
@@ -554,10 +557,10 @@ pub struct CreateMailLabel {
 )]
 pub async fn create_label(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CreateMailLabel>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = parse_id(&request.id)?;
     check_sealed(&state, user_id, MailNameKind::Label, &id, &request.name).await?;
     check_color(&request.color)?;
@@ -605,10 +608,10 @@ pub struct UpdateMailLabel {
     pub head: Option<String>,
 }
 
-/// `PATCH /api/mail/labels/{id}` — rename, recolour, reorder.
+/// `PATCH /api/v1/mail/labels/{id}` — rename, recolour, reorder.
 #[utoipa::path(
     patch,
-    path = "/api/mail/labels/{id}",
+    path = "/api/v1/mail/labels/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Label id")),
@@ -617,11 +620,11 @@ pub struct UpdateMailLabel {
 )]
 pub async fn update_label(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateMailLabel>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such label"))?;
     if let Some(color) = &request.color {
         check_color(color)?;
@@ -674,11 +677,11 @@ pub async fn update_label(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/mail/labels/{id}` — removes the label from every message;
+/// `DELETE /api/v1/mail/labels/{id}` — removes the label from every message;
 /// the mail stays where it is.
 #[utoipa::path(
     delete,
-    path = "/api/mail/labels/{id}",
+    path = "/api/v1/mail/labels/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Label id")),
@@ -687,11 +690,11 @@ pub async fn update_label(
 )]
 pub async fn delete_label(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Option<Json<crate::account_heads::HeadOnly>>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such label"))?;
     let head = NextHead::parse(body.and_then(|Json(body)| body.head).as_deref())?;
     let mut tx = state.pool.begin().await?;

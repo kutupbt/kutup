@@ -57,13 +57,13 @@ export function clearChatDeviceAuth(): void {
 /**
  * Every `/chat/*` call but the registration itself, the provisioning ticket
  * (a device being linked has no credential yet) and the anonymous routes;
- * and the socket ticket (`/device-ticket`, shared with the editing devices).
+ * and the socket ticket (`/account/devices/tickets`, shared with the editing devices).
  */
 export function isDeviceBoundChatRoute(url: string | undefined, method?: string): boolean {
-  if (url?.split('?')[0] === '/device-ticket') return true
+  if (url?.split('?')[0] === '/account/devices/tickets') return true
   if (!url || !url.startsWith('/chat/')) return false
   const path = url.split('?')[0]
-  if (path === '/chat/device' && method?.toLowerCase() === 'post') return false
+  if (path === '/chat/devices' && method?.toLowerCase() === 'post') return false
   if (path === '/chat/provisioning/ticket') return false
   return !path.startsWith('/chat/anonymous')
 }

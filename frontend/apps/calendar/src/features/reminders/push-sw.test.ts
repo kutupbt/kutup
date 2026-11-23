@@ -116,7 +116,7 @@ describe('the calendar’s service worker', () => {
     const { fire, openWindow } = worker()
     await fire('notificationclick', { notification: { close: () => undefined, data: { url: `/?event=${E1}` } } })
     expect(openWindow).toHaveBeenLastCalledWith(`/?event=${E1}`)
-    await fire('notificationclick', { notification: { close: () => undefined, data: { url: '/api/user/me' } } })
+    await fire('notificationclick', { notification: { close: () => undefined, data: { url: '/api/v1/account' } } })
     expect(openWindow).toHaveBeenLastCalledWith('/')
   })
 })

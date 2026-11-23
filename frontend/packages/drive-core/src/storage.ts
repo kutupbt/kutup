@@ -1,4 +1,4 @@
-// The account's one storage pool (docs/api.md, `GET /api/user/storage`): what
+// The account's one storage pool (docs/api.md, `GET /api/v1/account/storage`): what
 // fills it, as the server charges it, split further by file kind using the
 // names this browser decrypts. Shared by the Account storage page and the
 // storage summary in the Drive, Photos and Office sidebars.
@@ -50,7 +50,7 @@ export function useStorageUsage(enabled = true) {
   return useQuery({
     queryKey: storageKey,
     enabled,
-    queryFn: async () => (await api.get<StorageUsage>('/user/storage')).data,
+    queryFn: async () => (await api.get<StorageUsage>('/account/storage')).data,
   })
 }
 
@@ -159,7 +159,7 @@ export function useOwnFiles(enabled = true) {
     const folder = readable[i]
     if (!folder) return
     for (const file of list.data ?? []) {
-      if (file.uploaderUserId !== session.userId || !file.name || seen.has(file.id)) continue
+      if (file.uploaderAccountId !== session.accountId || !file.name || seen.has(file.id)) continue
       seen.add(file.id)
       files.push({ folder, file })
     }
@@ -192,7 +192,7 @@ export function largeFiles(files: OwnFile[], limit = 100): OwnFile[] {
     .slice(0, limit)
 }
 
-/** `GET /api/user/storage/versions`: the caller's deletable versions by age. */
+/** `GET /api/v1/account/storage/versions`: the caller's deletable versions by age. */
 export interface VersionAge {
   ageDays: number
   keepForever: boolean
@@ -206,7 +206,7 @@ export function useVersionAges(enabled = true) {
   return useQuery({
     queryKey: versionAgesKey,
     enabled,
-    queryFn: async () => (await api.get<VersionAge[]>('/user/storage/versions')).data,
+    queryFn: async () => (await api.get<VersionAge[]>('/account/storage/versions')).data,
   })
 }
 
@@ -228,7 +228,7 @@ export async function pruneVersions(days: number, includeKeptForever: boolean) {
   let freedBytes = 0
   for (;;) {
     const { data } = await api.post<{ deletedCount: number; freedBytes: number; more: boolean }>(
-      '/user/storage/versions/prune',
+      '/account/storage/versions/prune',
       { olderThanDays: days, includeKeptForever },
     )
     deletedCount += data.deletedCount

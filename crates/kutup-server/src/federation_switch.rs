@@ -13,9 +13,12 @@
 //!   `server.federation_default` (`on`) as it is made, so a later change of the
 //!   default leaves existing accounts as they are; an account without one
 //!   follows the default.
-//! - Turning it on asks the `federationAbroad` consent when a document for it
-//!   is published (`409 consentRequired` without it); withdrawing that
-//!   consent turns it off.
+//! - Where the site asks for it (the site setting
+//!   `server.federation_consent_required`, off in the core; a jurisdiction
+//!   that needs it turns it on), turning it on asks the `federation` consent
+//!   ("share data with other servers"): given before, or now under the
+//!   purpose's current text when one is published (`409 consentRequired`
+//!   without it). Withdrawing that consent turns it off, asked or not.
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -28,14 +31,19 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The site setting a new account's switch starts from (`on`, `off`).
 pub const DEFAULT_SETTING: &str = "server.federation_default";
 
 /// The consent purpose turning it on asks for.
-pub const PURPOSE: &str = "federationAbroad";
+pub const PURPOSE: &str = "federation";
+
+/// The site setting saying whether turning it on asks for [`PURPOSE`] (`on`,
+/// `off`; off unless set). Not `server.federation.…`: the entitlement key
+/// `server.federation` is never also a prefix.
+pub const CONSENT_REQUIRED_SETTING: &str = "server.federation_consent_required";
 
 /// The refusal of a request that would reach another server for an account
 /// whose federation is off.
@@ -74,6 +82,39 @@ pub async fn site_default(pool: &PgPool) -> AppResult<bool> {
     Ok(stored.as_deref() != Some("off"))
 }
 
+/// Where a new account's switch starts: the site's default, but off where
+/// the site asks for the consent (a new account hasn't given it).
+pub async fn new_account_state(pool: &PgPool) -> AppResult<bool> {
+    Ok(site_default(pool).await? && !consent_required(pool).await?)
+}
+
+/// Whether turning federation on asks for the consent: `off` unless an
+/// administrator set `on`.
+pub async fn consent_required<'e, E: sqlx::PgExecutor<'e>>(executor: E) -> sqlx::Result<bool> {
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT value FROM site_settings WHERE key = $1")
+            .bind(CONSENT_REQUIRED_SETTING)
+            .fetch_optional(executor)
+            .await?;
+    Ok(stored.as_deref() == Some("on"))
+}
+
+/// Stores whether turning federation on asks for the consent.
+pub async fn set_consent_required(
+    tx: &mut Transaction<'_, Postgres>,
+    required: bool,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO site_settings (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    )
+    .bind(CONSENT_REQUIRED_SETTING)
+    .bind(if required { "on" } else { "off" })
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// Stores the site's default.
 pub async fn set_site_default(tx: &mut Transaction<'_, Postgres>, on: bool) -> sqlx::Result<()> {
     sqlx::query(
@@ -104,8 +145,8 @@ async fn store(
     .await
 }
 
-/// Sets a new account's switch from the site's default, in its creating
-/// transaction (`default_on`: [`site_default`], read before it).
+/// Sets a new account's switch, in its creating transaction (`default_on`:
+/// [`new_account_state`], read before it).
 pub async fn start_account(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
@@ -168,31 +209,38 @@ pub async fn after_off(state: &AppState, user_id: Uuid) -> AppResult<()> {
     state.collab_federation.close_account(state, user_id).await
 }
 
-/// Turns it on, in the caller's transaction: with the `federationAbroad`
-/// consent given (now, under `document_id`, or before) when its document is
-/// published.
+/// Turns it on, in the caller's transaction. Where the site asks for the
+/// `federation` consent ([`consent_required`]), it is given now (under
+/// `document_id`, the purpose's current text, when one is published) or was
+/// given before; an administrator's switch gives none, so it needs the
+/// person's own.
 pub async fn turn_on(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     document_id: Option<Uuid>,
     by: By,
 ) -> AppResult<()> {
-    let text_published = crate::legal::current(&mut **tx)
-        .await?
-        .iter()
-        .any(|d| d.kind == PURPOSE);
-    if text_published {
-        match document_id {
-            Some(id) => {
+    if consent_required(&mut **tx).await? {
+        match (by, document_id) {
+            (By::Account, Some(id)) => {
                 crate::legal::set_consent(tx, user_id, PURPOSE, true, Some(id), by.channel())
                     .await?
             }
-            None if crate::legal::given(&mut **tx, user_id, PURPOSE).await? => {}
-            None => {
-                return Err(
-                    AppError::conflict("give the consent to talk to other servers first")
-                        .with_details(json!({ "code": "consentRequired", "purpose": PURPOSE })),
+            _ if crate::legal::given(&mut **tx, user_id, PURPOSE).await? => {}
+            // No text published: the person's yes is the consent itself.
+            (By::Account, None)
+                if !crate::legal::current(&mut **tx)
+                    .await?
+                    .iter()
+                    .any(|d| d.kind == PURPOSE) =>
+            {
+                crate::legal::set_consent(tx, user_id, PURPOSE, true, None, by.channel()).await?
+            }
+            _ => {
+                return Err(AppError::conflict(
+                    "give the consent to share data with other servers first",
                 )
+                .with_details(json!({ "code": "consentRequired", "purpose": PURPOSE })))
             }
         }
     }
@@ -200,35 +248,36 @@ pub async fn turn_on(
     Ok(())
 }
 
-/// `PUT /api/user/federation` body.
+/// `PUT /api/v1/account/federation` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FederationRequest {
     /// Talk to other servers.
     on: bool,
-    /// Turning it on: the `federationAbroad` text the person read, when one
-    /// is published (the consent is given with it).
+    /// Turning it on where the site asks for the consent: the `federation`
+    /// text the person read, when one is published (the consent is given
+    /// with it).
     document_id: Option<Uuid>,
 }
 
-/// `PUT /api/user/federation` — the account's own switch.
+/// `PUT /api/v1/account/federation` — the account's own switch.
 #[utoipa::path(
     put,
-    path = "/api/user/federation",
-    tag = "legal",
+    path = "/api/v1/account/federation",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = FederationRequest,
     responses(
         (status = 204, description = "Set"),
-        (status = 409, description = "consentRequired: a federationAbroad document is published and the consent isn't given"),
+        (status = 409, description = "consentRequired: the site asks for the federation consent and it isn't given"),
     )
 )]
 pub async fn put_federation(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<FederationRequest>,
 ) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     if req.on {
         turn_on(&mut tx, user_id, req.document_id, By::Account).await?;
@@ -259,9 +308,8 @@ mod tests {
     }
 
     /// Off: a peer's lookup finds nothing, as for an unknown account, while
-    /// this server's own still does. On again: found. With a text published
-    /// for the purpose, turning it on needs the consent; withdrawing the
-    /// consent turns it off.
+    /// this server's own still does. On again: found. Where the site asks for
+    /// the consent, turning it on needs it, given by the person.
     #[tokio::test]
     async fn live_an_account_that_doesnt_federate_is_no_account_to_peers() {
         let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
@@ -304,10 +352,10 @@ mod tests {
             "this server's own lookups still find it"
         );
 
-        // A text for the purpose: on needs the consent, given with it.
+        // A text for the purpose: the core asks for no consent.
         let text: Uuid = sqlx::query_scalar(
             "INSERT INTO legal_documents (kind, version, language, url, sha256)
-             VALUES ('federationAbroad', $1, 'en', 'https://example.org/f', sha256('f'))
+             VALUES ('federation', $1, 'en', 'https://example.org/f', sha256('f'))
              RETURNING id",
         )
         .bind(Uuid::new_v4().to_string())
@@ -315,11 +363,31 @@ mod tests {
         .await
         .unwrap();
         let mut tx = pool.begin().await.unwrap();
+        turn_on(&mut tx, user, None, By::Account).await.unwrap();
+        tx.rollback().await.unwrap();
+        // Where the site asks for it (set inside each transaction, so no other
+        // test sees it): on needs the consent, given with it; an
+        // administrator can't give it.
+        let mut tx = pool.begin().await.unwrap();
+        set_consent_required(&mut tx, true).await.unwrap();
         let refused = turn_on(&mut tx, user, None, By::Account).await.unwrap_err();
         assert_eq!(refused.status, StatusCode::CONFLICT);
         tx.rollback().await.unwrap();
         let mut tx = pool.begin().await.unwrap();
+        set_consent_required(&mut tx, true).await.unwrap();
+        let refused = turn_on(&mut tx, user, Some(text), By::Admin)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status, StatusCode::CONFLICT);
+        tx.rollback().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        set_consent_required(&mut tx, true).await.unwrap();
         turn_on(&mut tx, user, Some(text), By::Account)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM site_settings WHERE key = $1")
+            .bind(CONSENT_REQUIRED_SETTING)
+            .execute(&mut *tx)
             .await
             .unwrap();
         tx.commit().await.unwrap();

@@ -31,11 +31,11 @@ use crate::error::{AppError, AppResult};
 use crate::federation::FederationRequestSpec;
 use crate::handlers::chat::canonical_profile_version;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const JSON_CONTENT_TYPE: &str = "application/json";
-const FED_PATH: &str = "/api/fed/drive/profile-keys";
+const FED_PATH: &str = "/api/fed/v2/drive/profile-keys";
 /// An X-Wing envelope as text, as the column's CHECK allows (migration
 /// `20261018140000_identity_suite`).
 const MAX_ENVELOPE_CHARS: usize = 4096;
@@ -62,7 +62,7 @@ pub struct DrivePerson {
     /// Their address now, to show (`user@server`).
     pub account: String,
     /// On this server; the keys below are then filled in. For someone on
-    /// another server, look them up by id (`/api/users/by-id`).
+    /// another server, look them up by id (`/api/v1/accounts/by-id`).
     pub local: bool,
     pub account_incarnation_id: Option<String>,
     /// Their Drive HPKE key, to seal them your profile key.
@@ -97,7 +97,7 @@ pub struct FederatedProfileKey {
     pub profile_version: String,
 }
 
-struct LocalUser {
+struct LocalAccount {
     id: Uuid,
     incarnation: String,
     signing_public_key: String,
@@ -111,7 +111,7 @@ fn decode_envelope(envelope: &str) -> AppResult<ProfileKeyEnvelopeV1> {
         .map_err(|_| AppError::bad_request("invalid profile key envelope"))
 }
 
-async fn local_user(pool: &PgPool, id: Uuid, for_peer: bool) -> AppResult<Option<LocalUser>> {
+async fn local_user(pool: &PgPool, id: Uuid, for_peer: bool) -> AppResult<Option<LocalAccount>> {
     let row: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
         "SELECT id, COALESCE(encode(account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(drive_signing_public_key), '')
          FROM accounts WHERE id = $1 AND state = 'active'
@@ -124,7 +124,7 @@ async fn local_user(pool: &PgPool, id: Uuid, for_peer: bool) -> AppResult<Option
     .fetch_optional(pool)
     .await?;
     Ok(row.and_then(|(id, incarnation, signing)| {
-        signing.map(|signing_public_key| LocalUser {
+        signing.map(|signing_public_key| LocalAccount {
             id,
             incarnation,
             signing_public_key,
@@ -208,21 +208,21 @@ async fn store(
     Ok(())
 }
 
-/// `GET /api/drive/people` — everyone you share a folder with or who
+/// `GET /api/v1/drive/people` — everyone you share a folder with or who
 /// shares one with you, with what you need to exchange profile keys, and
 /// the keys exchanged so far.
 #[utoipa::path(
     get,
-    path = "/api/drive/people",
+    path = "/api/v1/drive/people",
     tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "People you share with", body = DrivePeopleResponse))
 )]
 pub async fn list_people(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<DrivePeopleResponse>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let domain = state.config.chat_server_name.as_str();
     type LocalRow = (Uuid, String, String, String, i16, Option<String>);
     let local: Vec<LocalRow> = sqlx::query_as(
@@ -324,12 +324,12 @@ pub async fn list_people(
     Ok(Json(DrivePeopleResponse { people }))
 }
 
-/// `PUT /api/drive/profile-keys` — give someone you share a folder with
+/// `PUT /api/v1/drive/profile-keys` — give someone you share a folder with
 /// (either way round) your profile key. Delivered to their server when
 /// they are on another one; `404` when there is no share between you.
 #[utoipa::path(
     put,
-    path = "/api/drive/profile-keys",
+    path = "/api/v1/drive/profile-keys",
     tag = "drive",
     security(("BearerAuth" = [])),
     request_body = PutProfileKeyRequest,
@@ -340,13 +340,13 @@ pub async fn list_people(
 )]
 pub async fn put_profile_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<PutProfileKeyRequest>,
 ) -> AppResult<Response> {
     if !canonical_profile_version(&request.profile_version) {
         return Err(AppError::bad_request("invalid profile version"));
     }
-    let me = local_user(&state.pool, trusted_uuid(&user.user_id)?, false)
+    let me = local_user(&state.pool, trusted_uuid(&user.account_id)?, false)
         .await?
         .ok_or_else(|| AppError::conflict("account identity is unavailable"))?;
     let local_domain = state.config.chat_server_name.as_str();
@@ -468,8 +468,8 @@ pub async fn put_profile_key(
 /// client checks the sender's signature; this server checks the parties.
 #[utoipa::path(
     put,
-    path = "/api/fed/drive/profile-keys",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/profile-keys",
+    tag = "drive.federation",
     request_body = FederatedProfileKey,
     responses(
         (status = 200, description = "Stored"),

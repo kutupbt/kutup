@@ -29,7 +29,7 @@ impl Client {
         if resp.status().as_u16() == 409 {
             let body: serde_json::Value = resp.json().unwrap_or_default();
             return match body["code"].as_str() {
-                Some("head_conflict" | "revision_conflict") => Ok(None),
+                Some("headConflict" | "revisionConflict") => Ok(None),
                 Some(kutup_crypto::master_keys::MASTER_KEY_STALE) => {
                     bail!("the account's master key was rotated on another device: sign in again")
                 }

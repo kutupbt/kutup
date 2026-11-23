@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// More folders than anyone arranges photos in; keeps listing bounded.
@@ -28,19 +28,19 @@ pub struct PhotosPreferences {
     pub library_folder_ids: Vec<Uuid>,
 }
 
-/// `GET /api/photos/preferences` — your library's folders.
+/// `GET /api/v1/photos/preferences` — your library's folders.
 #[utoipa::path(
     get,
-    path = "/api/photos/preferences",
+    path = "/api/v1/photos/preferences",
     tag = "photos",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your photo library's folders", body = PhotosPreferences))
 )]
 pub async fn get_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<PhotosPreferences>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok(Json(preferences_of(&state, user_id).await?))
 }
 
@@ -76,11 +76,11 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
     })
 }
 
-/// `PUT /api/photos/preferences` — choose the upload folder (one of your own)
+/// `PUT /api/v1/photos/preferences` — choose the upload folder (one of your own)
 /// and the other folders the library shows.
 #[utoipa::path(
     put,
-    path = "/api/photos/preferences",
+    path = "/api/v1/photos/preferences",
     tag = "photos",
     security(("BearerAuth" = [])),
     request_body = PhotosPreferences,
@@ -91,10 +91,10 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
 )]
 pub async fn put_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<PhotosPreferences>,
 ) -> AppResult<Json<PhotosPreferences>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if request.library_folder_ids.len() > MAX_LIBRARY_FOLDERS {
         return Err(AppError::bad_request("too many folders in the library"));
     }

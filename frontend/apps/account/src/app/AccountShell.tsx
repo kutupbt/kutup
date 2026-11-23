@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
+import { administers } from '@kutup/session/api-types'
 import { useRequiredSession } from '@kutup/session/store'
 import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
 import { useEnsureMailKeys } from '../features/keys/mailKeys'
@@ -68,7 +69,7 @@ export function AccountShell() {
           <SidebarNavLink to="/settings/devices" icon={<MonitorSmartphone />} label={t('nav.devicesSessions')} />
           <GroupMembershipNavLink />
           <SidebarNavLink to="/settings/maps" icon={<Map />} label={t('nav.maps')} />
-          {session.isAdmin ? (
+          {administers(session.role) ? (
             <>
               <SectionLabel>{t('nav.admin')}</SectionLabel>
               <SidebarNavLink to="/admin/users" icon={<Users />} label={t('nav.users')} />

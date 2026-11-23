@@ -29,6 +29,16 @@ pub struct HealthResponse {
     pub version: String,
     #[serde(rename = "tusVersions")]
     pub tus_versions: Vec<&'static str>,
+    /// The API versions served under `/api/v{n}/`.
+    #[serde(rename = "apiVersions")]
+    pub api_versions: Vec<u32>,
+    /// The lowest version per client type, for types that have one.
+    #[serde(rename = "minimumClients")]
+    pub minimum_clients: std::collections::BTreeMap<String, String>,
+    /// This database's instance id: another one than a client remembers
+    /// means the server was reset (docs/plans/api-surface.md §5).
+    #[serde(rename = "instanceId")]
+    pub instance_id: String,
 }
 
 /// Wraps API error messages — mirrors `handlers.ErrorResponse`.
@@ -43,7 +53,7 @@ pub struct MessageResponse {
     pub message: String,
 }
 
-/// Public server settings (`GET /api/auth/settings`) — how a client learns what
+/// Public server settings (`GET /api/v1/auth/settings`) — how a client learns what
 /// the server supports before showing UI for it.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +96,10 @@ pub struct AdminSettingsResponse {
     pub public_sharing: crate::public_sharing::PublicSharing,
     /// Whether a new account talks to other servers.
     pub federation_default: bool,
+    /// Whether turning federation on asks for the `federation` consent
+    /// (`server.federation_consent_required`, off unless set); a new account
+    /// then starts off.
+    pub federation_consent_required: bool,
     /// The storage quota new accounts get. Existing accounts keep theirs.
     pub default_storage_quota_bytes: i64,
     /// Retention for unread Chat mailbox ciphertext. Zero disables expiry.
@@ -117,7 +131,7 @@ pub struct AdminSettingsResponse {
     pub drive_version_retention_choices: Vec<i32>,
 }
 
-/// `GET /api/auth/recover/preflight`: what a recovery proof is derived with.
+/// `GET /api/v1/auth/recover/preflight`: what a recovery proof is derived with.
 /// The recovery envelope comes only with the grant, after the proof
 /// (`RecoverGrantResponse`), so nothing in its header (the master key's
 /// generation) tells a real account from an unknown name.
@@ -128,7 +142,7 @@ pub struct PreflightRecoverResponse {
     pub envelope_binding: String,
 }
 
-/// `POST /api/auth/refresh` — mirrors `handlers.RefreshResponse`.
+/// `POST /api/v1/auth/refresh` — mirrors `handlers.RefreshResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResponse {
@@ -139,10 +153,10 @@ pub struct RefreshResponse {
     pub refresh_token: Option<String>,
 }
 
-/// `GET /api/user/me` — mirrors `handlers.MeResponse`.
+/// `GET /api/v1/account` — mirrors `handlers.AccountResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct MeResponse {
+pub struct AccountResponse {
     pub id: String,
     /// The account's permanent id (= `id`), with `server` what names the
     /// account everywhere (docs/plans/account-ids.md).
@@ -153,15 +167,18 @@ pub struct MeResponse {
     /// What the account's envelopes carry now (docs/plans/account-identity.md).
     pub envelope_binding: String,
     pub username: String,
-    pub public_key: String,
-    /// The authenticator app is on.
-    pub totp_enabled: bool,
+    /// The account's Drive key (X-Wing), what shares to it are sealed to.
+    pub drive_xwing_public_key: String,
+    /// The authenticator app: `on`, `pending` (set up, its first code not
+    /// confirmed yet) or `off`.
+    pub two_factor: TwoFactorState,
     /// Security keys the account has (a compromised one included): two-step
-    /// sign-in is on while this or `totp_enabled` is.
+    /// sign-in is on while this is above 0 or `twoFactor` is `on`.
     pub security_keys: i64,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
-    pub is_admin: bool,
+    /// `member`, `admin` or `breakGlassAdmin`.
+    pub role: AccountRole,
     pub color: String,
     /// How long this account's file versions are kept (days).
     pub version_retention_days: i32,
@@ -194,7 +211,7 @@ pub struct OkResponse {
     pub ok: bool,
 }
 
-/// `POST /api/user/2fa/setup` — mirrors `handlers.TOTPSetupResponse`.
+/// `POST /api/v1/account/2fa/setup` — mirrors `handlers.TOTPSetupResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TotpSetupResponse {
@@ -214,7 +231,7 @@ pub struct TotpCodeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionRow {
     pub id: String,
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     pub name_envelope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_key_envelope: Option<String>,
@@ -224,7 +241,7 @@ pub struct CollectionRow {
     pub name_revision: i64,
     pub epoch_statement: String,
     pub epoch_statement_hash: String,
-    /// A shared folder's owner: their server, with `owner_user_id` their
+    /// A shared folder's owner: their server, with `owner_account_id` their
     /// account id (the share's envelope names them by both).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_server: Option<String>,
@@ -270,7 +287,7 @@ pub struct CollectionRow {
     pub updated_at: time::OffsetDateTime,
 }
 
-/// `POST /api/collections` body — mirrors `handlers.CreateCollectionRequest`.
+/// `POST /api/v1/drive/collections` body — mirrors `handlers.CreateCollectionRequest`.
 /// `default` so missing JSON fields decode to zero values (Go `c.BodyParser`).
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
@@ -290,13 +307,13 @@ pub struct CreateCollectionRequest {
     pub name_hash_generation: Option<u32>,
 }
 
-/// `POST /api/collections` result — mirrors `handlers.CreateCollectionResult`.
+/// `POST /api/v1/drive/collections` result — mirrors `handlers.CreateCollectionResult`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CreateCollectionResult {
     pub id: String,
 }
 
-/// `PUT /api/collections/{id}` body — mirrors `handlers.UpdateCollectionRequest`.
+/// `PUT /api/v1/drive/collections/{id}` body — mirrors `handlers.UpdateCollectionRequest`.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateCollectionRequest {
@@ -308,18 +325,18 @@ pub struct UpdateCollectionRequest {
     pub name_hash_generation: Option<u32>,
 }
 
-/// `PATCH /api/collections/{id}/color` body — mirrors `handlers.UpdateColorRequest`.
+/// `PATCH /api/v1/drive/collections/{id}/color` body — mirrors `handlers.UpdateColorRequest`.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(default)]
 pub struct UpdateColorRequest {
     pub color: Option<String>,
 }
 
-/// `POST /api/collections/{id}/share` body — mirrors `handlers.ShareCollectionRequest`.
+/// `POST /api/v1/drive/collections/{id}/share` body — mirrors `handlers.ShareCollectionRequest`.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ShareCollectionRequest {
-    pub recipient_user_id: String,
+    pub recipient_account_id: String,
     pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
@@ -332,7 +349,7 @@ pub struct ShareCollectionRequest {
 pub struct FileRow {
     pub id: String,
     pub collection_id: String,
-    pub uploader_user_id: String,
+    pub uploader_account_id: String,
     pub metadata_envelope: String,
     pub file_key_envelope: String,
     /// The folder epoch the file key is wrapped at; below the folder's own
@@ -414,12 +431,12 @@ pub struct UploadResult {
     pub id: String,
 }
 
-/// A trashed folder (a trash root) — `GET /api/trash`.
+/// A trashed folder (a trash root) — `GET /api/v1/drive/trash`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TrashFolderRow {
     pub id: String,
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     pub name_envelope: String,
     pub owner_key_envelope: String,
     pub key_epoch: i32,
@@ -428,7 +445,7 @@ pub struct TrashFolderRow {
     pub epoch_statement_hash: String,
     pub color: Option<String>,
     /// Where a restore puts it: its parent while that folder is live, else
-    /// the top level (null). Its name is hashed there (`409 name_taken`).
+    /// the top level (null). Its name is hashed there (`409 nameTaken`).
     pub parent_collection_id: Option<String>,
     /// Files trashed together with this folder (its whole subtree).
     pub items: i64,
@@ -436,7 +453,7 @@ pub struct TrashFolderRow {
     pub deleted_at: OffsetDateTime,
 }
 
-/// A trashed file (a trash root) — `GET /api/trash`. Carries the parent collection's
+/// A trashed file (a trash root) — `GET /api/v1/drive/trash`. Carries the parent collection's
 /// owner-wrapped key so the metadata chain decrypts even when the collection itself
 /// is not in the live listing.
 #[derive(Debug, Serialize, ToSchema)]
@@ -449,7 +466,7 @@ pub struct TrashFileRow {
     pub key_epoch: i32,
     pub key_generation: i32,
     pub metadata_revision: i64,
-    pub collection_owner_user_id: String,
+    pub collection_owner_account_id: String,
     pub collection_owner_key_envelope: String,
     pub collection_key_epoch: i32,
     pub collection_epoch_statement: String,
@@ -460,14 +477,14 @@ pub struct TrashFileRow {
     pub thumbnails: FileThumbnails,
 }
 
-/// `GET /api/trash` body — the caller's trash roots, newest first.
+/// `GET /api/v1/drive/trash` body — the caller's trash roots, newest first.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct TrashResponse {
     pub folders: Vec<TrashFolderRow>,
     pub files: Vec<TrashFileRow>,
 }
 
-/// `POST /api/share` body — mirrors `handlers.CreateShareRequest`.
+/// `POST /api/v1/drive/public-links` body — mirrors `handlers.CreateShareRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateShareRequest {
@@ -477,14 +494,14 @@ pub struct CreateShareRequest {
     pub expires_in_hours: Option<i32>,
 }
 
-/// `POST /api/share` result — mirrors `handlers.CreateShareResult`.
+/// `POST /api/v1/drive/public-links` result — mirrors `handlers.CreateShareResult`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CreateShareResult {
     pub id: String,
     pub token: String,
 }
 
-/// `GET /api/share/{token}` — mirrors `handlers.PublicShareResponse`.
+/// `GET /api/v1/drive/public-links/{token}` — mirrors `handlers.PublicShareResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicShareResponse {
@@ -493,15 +510,15 @@ pub struct PublicShareResponse {
     pub target_id: String,
     pub collection_key_envelope: String,
     pub collection_key_epoch: i32,
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
 }
 
-/// `POST /api/admin/users` body — mirrors `handlers.CreateAdminUserRequest`.
+/// `POST /api/v1/admin/accounts` body — mirrors `handlers.CreateAdminAccountRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateAdminUserRequest {
+pub struct CreateAdminAccountRequest {
     pub username: String,
     /// The temporary password, registered by the administrator's client.
     #[serde(flatten)]
@@ -510,25 +527,26 @@ pub struct CreateAdminUserRequest {
     pub storage_quota_bytes: i64,
 }
 
-/// `PUT /api/admin/users/{id}` body — mirrors `handlers.UpdateAdminUserRequest`.
+/// `PUT /api/v1/admin/accounts/{id}` body — mirrors `handlers.UpdateAdminAccountRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct UpdateAdminUserRequest {
+pub struct UpdateAdminAccountRequest {
     pub storage_quota_bytes: Option<i64>,
-    /// False suspends the account; true makes a suspended or closing account
-    /// active again (a closing one is kept).
-    pub is_active: Option<bool>,
-    /// Why it is suspended (with `isActive: false`): `admin` (the default),
+    /// `suspended` suspends the account; `active` makes a suspended or
+    /// closing account active again (a closing one is kept).
+    pub state: Option<String>,
+    /// Why it is suspended (with `state: suspended`): `admin` (the default),
     /// `operatorOrder` or `security`.
     pub suspended_reason: Option<String>,
     /// Whether it may share by public link: `on` or `off`.
     pub public_sharing: Option<String>,
     /// Whether it talks to other servers: `on` or `off`.
     pub federation: Option<String>,
-    pub is_admin: Option<bool>,
+    /// `member` or `admin`.
+    pub role: Option<AccountRole>,
 }
 
-/// `PUT /api/admin/settings` body — mirrors `handlers.UpdateAdminSettingsRequest`.
+/// `PUT /api/v1/admin/settings` body — mirrors `handlers.UpdateAdminSettingsRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminSettingsRequest {
@@ -537,6 +555,8 @@ pub struct UpdateAdminSettingsRequest {
     pub public_sharing: Option<crate::public_sharing::PublicSharing>,
     /// Whether a new account talks to other servers.
     pub federation_default: Option<bool>,
+    /// Whether turning federation on asks for the `federation` consent.
+    pub federation_consent_required: Option<bool>,
     pub default_storage_quota_bytes: Option<i64>,
     pub chat_mailbox_retention_days: Option<i64>,
     pub chat_media_delivery_retention_days: Option<i64>,
@@ -558,16 +578,38 @@ pub struct UpdateAdminSettingsRequest {
     pub drive_version_retention_choices: Option<Vec<i32>>,
 }
 
-/// `GET /api/admin/stats` — mirrors `handlers.StatsResponse`.
+/// `GET /api/v1/admin/stats` — mirrors `handlers.StatsResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsResponse {
-    pub total_users: i64,
-    pub active_users: i64,
+    pub total_accounts: i64,
+    pub active_accounts: i64,
     pub total_files: i64,
     #[serde(rename = "totalStorageUsedBytes")]
     pub total_storage_used: i64,
     pub total_collections: i64,
+}
+
+/// The authenticator app's state: its sealed secret (`on`), a secret set
+/// up but not confirmed by a first code (`pending`), or neither (`off`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TwoFactorState {
+    On,
+    Pending,
+    Off,
+}
+
+impl TwoFactorState {
+    pub const fn of(on: bool, pending: bool) -> Self {
+        if on {
+            Self::On
+        } else if pending {
+            Self::Pending
+        } else {
+            Self::Off
+        }
+    }
 }
 
 /// What an account may do on its server: `accounts.role`. An organization
@@ -594,6 +636,12 @@ impl AccountRole {
         }
     }
 
+    /// The stored role; the column's CHECK allows nothing else, and an
+    /// unknown one is taken as the least (`member`).
+    pub fn stored(value: &str) -> Self {
+        Self::parse(value).unwrap_or(Self::Member)
+    }
+
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "member" => Some(Self::Member),
@@ -618,13 +666,16 @@ mod tests {
         // Mirrors handlers/health.go: keys name, version, tusVersions (in order).
         let body = serde_json::to_string(&HealthResponse {
             name: "kutup",
-            version: "dev".to_string(),
+            version: "0.0.0-dev".to_string(),
             tus_versions: vec!["1.0.0"],
+            api_versions: vec![1],
+            minimum_clients: [("cli".to_string(), "0.0.14".to_string())].into(),
+            instance_id: "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
         })
         .unwrap();
         assert_eq!(
             body,
-            r#"{"name":"kutup","version":"dev","tusVersions":["1.0.0"]}"#
+            r#"{"name":"kutup","version":"0.0.0-dev","tusVersions":["1.0.0"],"apiVersions":[1],"minimumClients":{"cli":"0.0.14"},"instanceId":"AAAAAAAAAAAAAAAAAAAAAA"}"#
         );
     }
 
@@ -660,7 +711,7 @@ mod tests {
         // Go `,omitempty` pointers/bool are absent when nil/false.
         let row = CollectionRow {
             id: "c1".into(),
-            owner_user_id: "u1".into(),
+            owner_account_id: "u1".into(),
             name_envelope: "n".into(),
             owner_key_envelope: Some("k".into()),
             named_share_envelope: None,
@@ -704,12 +755,12 @@ mod tests {
             target_id: "c1".into(),
             collection_key_envelope: "envelope".into(),
             collection_key_epoch: 1,
-            owner_user_id: "u1".into(),
+            owner_account_id: "u1".into(),
             expires_at: None,
         };
         let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
         assert_eq!(v.get("collectionKeyEpoch").unwrap(), 1);
-        assert_eq!(v.get("ownerUserId").unwrap(), "u1");
+        assert_eq!(v.get("ownerAccountId").unwrap(), "u1");
         assert!(v.get("expiresAt").unwrap().is_null());
     }
 }

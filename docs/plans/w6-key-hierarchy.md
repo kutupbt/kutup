@@ -4,11 +4,11 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
 
 ## 1. Derived or stored, never both: the Drive X-Wing key
 
-- **Today:** the Drive X-Wing seed is derived from the master key (`identity.rs`, `AccountIdentityKeysV1::derive`) and also stored as account-envelope purpose 3 (`DriveHpkePrivateKey`, column `users.drive_private_key_envelope`).
+- **Today:** the Drive X-Wing seed is derived from the master key (`identity.rs`, `AccountIdentityKeysV1::derive`) and also stored as account-envelope purpose 3 (`DriveXwingPrivateKey`, column `users.drive_private_key_envelope`).
 - **Change:** it is only derived. Purpose 3 goes from the registry: the number stays reserved and is refused on parse.
 - **Server:** the column goes, along with the field in registration, sign-in, the identity-suite upgrade, admin reset and the account head.
 - **Clients:** web, CLI and tests derive the key from the master key after sign-in, as they already derive the authority.
-- **Identity suite 1** (before X-Wing) can't exist after the wipe. So its one-time upgrade goes too: `POST /api/account/identity-suite`, the CLI's step 5b, and the web's `identitySuite.ts` path. That code is the other writer of purpose 3. `identity_suite` stays a column, and the server accepts only 2 at registration.
+- **Identity suite 1** (before X-Wing) can't exist after the wipe. So its one-time upgrade goes too: `POST /api/v1/account/identity-suite`, the CLI's step 5b, and the web's `identitySuite.ts` path. That code is the other writer of purpose 3. `identity_suite` stays a column, and the server accepts only 2 at registration. **Done** (2026-11-19, `wipe/api-pass`): the last of it, the manifest's one-way rise from a suite-1 key (`legacy_suite1_for_upgrade` in chat-proto and chat-core, the server's `drive_keys_follow`, the 32-byte length in the federation lookup), is gone; `AccountIdentitySuiteId` has suite 2 only, and the manifest's `drive.xwingPublicKey` must be 1216 bytes.
 
 ## 2. The master-key generation
 

@@ -24,7 +24,7 @@ use crate::account_names::{self, Available};
 use crate::error::{AppError, AppResult};
 use crate::grants::{self, Purpose};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::security_events;
 use crate::AppState;
 
@@ -65,22 +65,22 @@ pub struct CheckView {
     reason: Option<&'static str>,
 }
 
-/// `GET /api/user/rename/check?name=` — whether the caller could rename to
+/// `GET /api/v1/account/rename/check?name=` — whether the caller could rename to
 /// `name` (any spelling of a name in use or held counts as taken).
 #[utoipa::path(
     get,
-    path = "/api/user/rename/check",
-    tag = "user",
+    path = "/api/v1/account/rename/check",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(CheckQuery),
     responses((status = 200, body = CheckView), (status = 429, description = "rateLimited"))
 )]
 pub async fn check(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<CheckQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if !crate::ratelimit::RENAME_CHECKS.allow(&user_id.to_string()) {
         return Err(AppError::too_many_requests("too many requests")
             .with_details(json!({ "code": "rateLimited" })));
@@ -149,7 +149,7 @@ pub struct RenameRequest {
     #[schema(value_type = Object)]
     rename: AccountRenameV1,
     /// The new address's first key and key list (as `POST
-    /// /api/mail/addresses/{id}/keys` takes them), so mail to it is never
+    /// /api/v1/mail/addresses/{id}/keys` takes them), so mail to it is never
     /// deferred. None only when taking back a held name whose address still
     /// has its keys.
     #[serde(default)]
@@ -180,11 +180,11 @@ fn rename_invalid(why: &str) -> AppError {
         .with_details(json!({ "code": "renameInvalid" }))
 }
 
-/// `POST /api/user/rename` — a new username (docs/plans/username-renames.md).
+/// `POST /api/v1/account/rename` — a new username (docs/plans/username-renames.md).
 #[utoipa::path(
     post,
-    path = "/api/user/rename",
-    tag = "user",
+    path = "/api/v1/account/rename",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = RenameRequest,
     responses(
@@ -197,10 +197,10 @@ fn rename_invalid(why: &str) -> AppError {
 )]
 pub async fn rename(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<RenameRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let server = state.config.chat_server_name.to_ascii_lowercase();
     let mut tx = state.pool.begin().await?;
     type Account = (String, String, String, bool, bool);
@@ -550,17 +550,17 @@ pub struct HeldName {
     free_at: Option<time::OffsetDateTime>,
 }
 
-/// `GET /api/user/names` — the caller's names: the current one and those it
+/// `GET /api/v1/account/names` — the caller's names: the current one and those it
 /// holds, with when each stops receiving and is freed.
 #[utoipa::path(
     get,
-    path = "/api/user/names",
-    tag = "user",
+    path = "/api/v1/account/names",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, body = [HeldName]))
 )]
-pub async fn names(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn names(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<HeldName> = sqlx::query_as(
         "SELECT name, state, receive_until, free_at FROM account_names
           WHERE account_id = $1 ORDER BY state = 'current' DESC, free_at",
@@ -578,12 +578,12 @@ pub struct DropName {
     grant: String,
 }
 
-/// `DELETE /api/user/names/{name}` — stop receiving at a held name now. The
+/// `DELETE /api/v1/account/names/{name}` — stop receiving at a held name now. The
 /// name stays held until its date.
 #[utoipa::path(
     delete,
-    path = "/api/user/names/{name}",
-    tag = "user",
+    path = "/api/v1/account/names/{name}",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A name the account holds")),
     request_body = DropName,
@@ -591,11 +591,11 @@ pub struct DropName {
 )]
 pub async fn drop_name(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(name): Path<String>,
     Json(req): Json<DropName>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
@@ -681,11 +681,11 @@ enum AdminAction {
 
 async fn admin_name(
     state: &AppState,
-    admin: &crate::middleware::AdminUser,
+    admin: &crate::middleware::AdminAccount,
     name: &str,
     action: AdminAction,
 ) -> AppResult<Response> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let mut tx = state.pool.begin().await?;
     let held: Option<(String, Option<Uuid>)> = sqlx::query_as(
         "SELECT name, account_id FROM account_names
@@ -745,7 +745,7 @@ async fn admin_name(
     tx.commit().await?;
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         audit_action,
         owner,
         json!({ "name": held_name }),
@@ -754,10 +754,10 @@ async fn admin_name(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/admin/names/{name}/close` — receiving at a held name ends now.
+/// `POST /api/v1/admin/names/{name}/close` — receiving at a held name ends now.
 #[utoipa::path(
     post,
-    path = "/api/admin/names/{name}/close",
+    path = "/api/v1/admin/names/{name}/close",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A held name")),
@@ -765,17 +765,17 @@ async fn admin_name(
 )]
 pub async fn admin_close(
     State(state): State<AppState>,
-    admin: crate::middleware::AdminUser,
+    admin: crate::middleware::AdminAccount,
     Path(name): Path<String>,
 ) -> AppResult<Response> {
     admin_name(&state, &admin, &name, AdminAction::Close).await
 }
 
-/// `POST /api/admin/names/{name}/free` — a held name is free now: anyone may
+/// `POST /api/v1/admin/names/{name}/free` — a held name is free now: anyone may
 /// take it (a new owner is another incarnation; pins of the old one warn).
 #[utoipa::path(
     post,
-    path = "/api/admin/names/{name}/free",
+    path = "/api/v1/admin/names/{name}/free",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A held name")),
@@ -783,7 +783,7 @@ pub async fn admin_close(
 )]
 pub async fn admin_free(
     State(state): State<AppState>,
-    admin: crate::middleware::AdminUser,
+    admin: crate::middleware::AdminAccount,
     Path(name): Path<String>,
 ) -> AppResult<Response> {
     admin_name(&state, &admin, &name, AdminAction::Free).await
@@ -796,20 +796,20 @@ pub struct ChainsQuery {
     incarnation_id: Option<String>,
 }
 
-/// `GET /api/users/renames/{address}` — every rename chain that names the
+/// `GET /api/v1/accounts/by-address/{address}/renames` — every rename chain that names the
 /// address (a reused name is in more than one), as `{ version: 1, chains }`,
 /// newest first. Clients verify each chain against their own pins.
 #[utoipa::path(
     get,
-    path = "/api/users/renames/{address}",
-    tag = "user",
+    path = "/api/v1/accounts/by-address/{address}/renames",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(("address" = String, Path, description = "username@server"), ChainsQuery),
     responses((status = 200, description = "The chains (an empty list when none names it)"))
 )]
 pub async fn chains(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(address): Path<String>,
     Query(query): Query<ChainsQuery>,
 ) -> AppResult<Response> {
@@ -821,7 +821,8 @@ pub async fn chains(
     // none is fresh (crate::remote_renames).
     if server != state.config.chat_server_name.to_ascii_lowercase() {
         let mut found =
-            crate::remote_renames::lookup(&state, trusted_uuid(&user.user_id)?, &address).await?;
+            crate::remote_renames::lookup(&state, trusted_uuid(&user.account_id)?, &address)
+                .await?;
         if let (Some(incarnation), Some(chains)) = (
             query.incarnation_id.as_deref(),
             found["chains"].as_array_mut(),

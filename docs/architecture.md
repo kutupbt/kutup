@@ -114,7 +114,7 @@ remains a ciphertext relay.
    - `masterKey` under the key-encryption key with purpose `PasswordMasterKey`;
    - `masterKey` under the recovery entropy with purpose `RecoveryMasterKey`;
    - the Drive private key under the master key with purpose
-     `DriveHpkePrivateKey`.
+     `DriveXwingPrivateKey`.
    Each single envelope carries and authenticates its closed suite ID, typed
    purpose, the account's key binding (docs/plans/account-identity.md), 24-byte nonce and exact ciphertext
    length. Separate nonce columns and implicit account-wrap formats do not
@@ -125,7 +125,7 @@ remains a ciphertext relay.
    The server bcrypts only that proof into `recovery_key_verifier`. The proof is
    password-equivalent for recovery authorization, but cannot decrypt
    `recoveryKeyEnvelope`; the raw recovery entropy never leaves the client.
-7. Client POSTs the encrypted bundle to `POST /api/auth/register`. The server
+7. Client POSTs the encrypted bundle to `POST /api/v1/auth/register`. The server
    stores all ciphertext, the complete public account-identity binding, and the
    recovery verifier. The mnemonic is shown to the user once and never stored
    anywhere. Every later account manifest must match the registered authority,
@@ -150,25 +150,25 @@ sequenceDiagram
     Note over B: export key → KEK → open masterKeyEnvelope<br/>→ master key (browser memory only)
 ```
 
-1. The client starts the exchange with `POST /api/auth/login/start`. The
+1. The client starts the exchange with `POST /api/v1/auth/login/start`. The
    server counts the attempt against the name (the lockout and ceiling)
    before any OPAQUE work, and answers from the account's record. A name that
    is no account gets a fake answer of the same shape, which can never be
    finished.
 2. The client runs its half (Argon2id in a Web Worker). A wrong password fails
    here, on the client. A right one gives KE3 and the export key.
-3. `POST /api/auth/login/finish` checks KE3. On success the server returns an
+3. `POST /api/v1/auth/login/finish` checks KE3. On success the server returns an
    **access token** (short-lived JWT) in the JSON body and sets the **refresh
    token** as an HTTP-only `refresh_token` cookie scoped to
-   `/api/auth/refresh`.
+   `/api/v1/auth/refresh`.
 4. The answer carries `masterKeyEnvelope`. The client opens it locally with
    the key-encryption key from the export key, with the expected key binding
    and purpose, and derives the account's keys (the authority and the Drive
    keys) from the master key: they are never stored
    (docs/plans/w6-key-hierarchy.md). The server never holds anything that
    opens the envelope. The master key lives only in client memory.
-5. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
-6. For accounts an administrator created (or `ADMIN_ACCOUNT`) that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle, registers its own password, and submits both to `POST /api/auth/complete-setup`.
+5. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/v1/auth/login/2fa` with a TOTP code before receiving the full JWT.
+6. For accounts an administrator created (or `ADMIN_ACCOUNT`) that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle, registers its own password, and submits both to `POST /api/v1/auth/complete-setup`.
 7. Re-authentication (the Pass PIN, a new password, an admin reset) is the
    same exchange with `purpose: "reauth"`, answered by a one-time grant
    instead of a session.
@@ -197,7 +197,7 @@ For each file upload:
    as a `FileMetadata` `DriveEnvelopeV1` under the file key. Its
    authenticated context binds the file UUID, the key generation and the
    metadata revision. The metadata commits with the content: inline for a
-   whole-buffer upload, by `POST /api/files/{id}/revisions/{revisionId}/commit`
+   whole-buffer upload, by `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`
    after a tus upload.
 5. Client seals the file key as a `FileKey` `DriveEnvelopeV1` under the
    collection key, bound to the file, the collection, the collection epoch
@@ -227,7 +227,7 @@ epoch-1 key, which every member reaches through the key chain and which
 no rotation changes; the account's current Drive root for the top level,
 whose generation each top-level folder records), and unique
 indexes plus a per-place advisory lock refuse a second item with the same
-hash (`409 name_taken`, naming what holds it). Each upload also hashes the
+hash (`409 nameTaken`, naming what holds it). Each upload also hashes the
 plaintext (SHA-256, read while it encrypts) and records a content hash
 under the same key, so a client about to upload a file with a taken name
 and the same size can tell whether it is the same file: then nothing is
@@ -287,18 +287,18 @@ Server A (sharer)                          Server B (recipient)
    via signed v2 discovery
 
 2. Signed Drive directory lookup
-   GET /api/fed/drive/users/bob
-                                           ← signed bob@b.example publicKey
+   GET /api/fed/v2/accounts/lookup?name=bob
+                                           ← signed bob@b.example account and keys
 
 3. Browser seals collection key to Bob
-   POST /api/collections/:id/federated-shares
+   POST /api/v1/drive/collections/:id/federated-shares
    (stores canonical b.example + capability hash)
 
 4. Return /invite#server=a.example&capability=...
    (fragment keeps capability out of HTTP requests/logs)
 
                                            5. Recipient opens invite link
-                                              POST /api/drive/federation/shares
+                                              POST /api/v1/drive/federation/folder-shares
                                               Server B fetches signed invite
                                               and checks intended username
 
@@ -523,7 +523,7 @@ Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backen
   quota; reserved bytes are open tus uploads, open Chat media uploads, and
   pending federated inbound Chat-media hand-overs. Each stored copy counts
   separately. `quota_reconcile_tick` rewrites the counter from the rows.
-  `GET /api/user/storage` returns the breakdown that the Account app's
+  `GET /api/v1/account/storage` returns the breakdown that the Account app's
   Settings → Storage page shows.
 
 ---
@@ -650,8 +650,8 @@ Each file has **one address**, whichever app it is opened from (`appFor` in `pac
 
 Drive's lists, search and New menu link a document straight to Office (`?from=drive`, so its back button returns to the folder); the Office home opens it in place. A file opened in the other app (an older `drive.<domain>/file/…` link, say) is replaced by its address in the right one, keeping `?from=`. The back button goes to the app named in `from` (only `drive` or `office` are honoured), or else to Office's home or the file's Drive folder. Only Office may frame the OnlyOffice sandbox (its `frame-ancestors`, and Office's `frame-src`; `frontend/docker/40-kutup-hosts.sh`).
 
-Public links follow the same rule. A link to one document is `office.<domain>/s/<token>#key=…`; a folder's link is `drive.<domain>/s/<token>#key=…`, whose documents open at `office.<domain>/s/<token>/<fileId>#key=…` (the key goes along in the fragment, never through a server) with a way back to the folder. Office shows the document as it is now and read-only, without an account (`packages/editors/src/public/`): OnlyOffice in its viewer with no session or live-editing socket, notes rendered with their pictures (`GET /api/share/:token/files/:fileId/assets/:assetId`), code read-only, whiteboards in Excalidraw's view mode, PDFs in the browser's viewer. (A one-file link to a file renamed into a document type later still opens at Drive, listing the file with an "Open" action to Office.) Every public page (Drive, Office, Photos) says who shared it (`ownerAccount`) and that nobody checked what is in it: the pages are on the server's own address, so a link must not pass off what someone put in it (a sign-in form, a payment request) as the server's.
+Public links follow the same rule. A link to one document is `office.<domain>/s/<token>#key=…`; a folder's link is `drive.<domain>/s/<token>#key=…`, whose documents open at `office.<domain>/s/<token>/<fileId>#key=…` (the key goes along in the fragment, never through a server) with a way back to the folder. Office shows the document as it is now and read-only, without an account (`packages/editors/src/public/`): OnlyOffice in its viewer with no session or live-editing socket, notes rendered with their pictures (`GET /api/v1/drive/public-links/:token/files/:fileId/assets/:assetId`), code read-only, whiteboards in Excalidraw's view mode, PDFs in the browser's viewer. (A one-file link to a file renamed into a document type later still opens at Drive, listing the file with an "Open" action to Office.) Every public page (Drive, Office, Photos) says who shared it (`ownerAccount`) and that nobody checked what is in it: the pages are on the server's own address, so a link must not pass off what someone put in it (a sign-in form, a payment request) as the server's.
 
-Anyone who opens a public link can report it (`POST /api/share/:token/report`, no account, rate-limited per address, nothing about the reporter kept). The server cannot see what a link shows, so the reporter may include the whole link, key in the fragment, for an administrator to open; the server accepts only one of its own public pages for that token, and erases the link once the report is resolved. Administrators work through reports in the account app (Admin → Reports): dismiss one, take the link down, or disable the account that made it. A link that is taken down, or whose owner's account is disabled, answers `410` with `code: "link_removed"` on every request, and its pages say it was removed; enabling the account again restores its links that were not taken down. Each action is in the admin activity log.
+Anyone who opens a public link can report it (`POST /api/v1/drive/public-links/:token/report`, no account, rate-limited per address, nothing about the reporter kept). The server cannot see what a link shows, so the reporter may include the whole link, key in the fragment, for an administrator to open; the server accepts only one of its own public pages for that token, and erases the link once the report is resolved. Administrators work through reports in the account app (Admin → Reports): dismiss one, take the link down, or disable the account that made it. A link that is taken down, or whose owner's account is disabled, answers `410` with `code: "linkRemoved"` on every request, and its pages say it was removed; enabling the account again restores its links that were not taken down. Each action is in the admin activity log.
 
 Sensitive material is held tab-locally (Redux + `sessionStorage`). To avoid forcing a fresh login when a new editor tab opens, an already-authenticated tab broadcasts its session payload over a same-origin `BroadcastChannel('kutup-session')`. The fresh tab requests the session on boot (500 ms timeout); on hit it dispatches `setAuth`, on miss it redirects to `/login?next=<path>`. Logout is also broadcast — every tab signs out together so a sibling tab can't re-hydrate a fresh tab after sign-out. See `frontend/src/lib/sessionSync.ts`.

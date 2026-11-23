@@ -753,7 +753,7 @@ fn role_name(role: i16) -> &'static str {
 /// link, and the asker's own role.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/roles",
+    path = "/api/v1/chat/call-links/roles",
     tag = "chat",
     operation_id = "getChatCallLinkRoles",
     request_body = HostCredentials,
@@ -812,7 +812,7 @@ pub struct SetCoHostRequest {
 /// Make a participant a co-host, or stop them being one. The owner only.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/co-hosts",
+    path = "/api/v1/chat/call-links/co-hosts",
     tag = "chat",
     operation_id = "setChatCallLinkCoHost",
     request_body = SetCoHostRequest,
@@ -901,7 +901,7 @@ async fn host_over(
 /// turned on, so they cannot come straight back in with the link.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/participants/remove",
+    path = "/api/v1/chat/call-links/participants/remove",
     tag = "chat",
     operation_id = "removeChatCallLinkParticipant",
     request_body = RemoveParticipantRequest,
@@ -982,7 +982,7 @@ pub struct MuteRequest {
 /// can turn it back on themselves: a host mutes, and never unmutes.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/participants/mute",
+    path = "/api/v1/chat/call-links/participants/mute",
     tag = "chat",
     operation_id = "muteChatCallLinkParticipant",
     request_body = MuteRequest,
@@ -1070,7 +1070,7 @@ pub struct ScreenShareRequest {
 /// they cannot start again), or allow it again.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/participants/screen",
+    path = "/api/v1/chat/call-links/participants/screen",
     tag = "chat",
     operation_id = "setChatCallLinkScreenShare",
     request_body = ScreenShareRequest,
@@ -1149,7 +1149,7 @@ pub struct LockRequest {
 /// reconnect, and the owner always comes in.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/lock",
+    path = "/api/v1/chat/call-links/lock",
     tag = "chat",
     operation_id = "lockChatCallLink",
     request_body = LockRequest,
@@ -1192,7 +1192,7 @@ pub(crate) async fn lock(
 /// for another time: a new sitting, which the tokens of this one do not open.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/end",
+    path = "/api/v1/chat/call-links/end",
     tag = "chat",
     operation_id = "endChatCallLinkMeeting",
     request_body = HostCredentials,

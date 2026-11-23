@@ -428,8 +428,11 @@ impl ChatTransport for MockServer {
         Ok(self.respond(username, devices, manifest, Some(current)))
     }
 
-    async fn fetch_device_session(&self) -> Result<String> {
-        Ok(DEVICE_SESSION.into())
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
+        Ok(kutup_chat_proto::DeviceSessionResponseV1 {
+            session: DEVICE_SESSION.into(),
+            next_device_id: 1,
+        })
     }
 
     async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV3>> {
@@ -780,54 +783,6 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
         block_on(stranger.sync_own_manifest(&authority, "2026-07-15T12:03:00Z")),
         Err(ChatError::Trust(_))
     ));
-}
-
-#[test]
-fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
-    use base64::Engine as _;
-    let mut rng = test_rng();
-    let server = Rc::new(MockServer::default());
-    let master = kutup_crypto::account_roots::IdentityRoot::from_bytes([12; 32]);
-    let authority = AccountAuthority::derive(&master).unwrap();
-    let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
-    let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-    let session = device_in(db.clone(), account, 1, &mut rng);
-    let local = session.manifest_device(DEVICE_SESSION.into());
-    // The account's manifest from before its upgrade: this very device, and
-    // the old X25519 Drive key (suite 1).
-    let mut before = sign(
-        &authority,
-        account,
-        1,
-        None,
-        session.account_identity_key(),
-        vec![local],
-        "2026-07-15T12:00:00Z",
-    );
-    before.drive.suite = kutup_chat_proto::AccountIdentitySuiteId::X25519Ed25519V1;
-    before.drive.hpke_public_key = base64::engine::general_purpose::STANDARD.encode([5u8; 32]);
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
-    before.signature = base64::engine::general_purpose::STANDARD.encode(
-        identity
-            .authority_signing_key()
-            .sign(&before.signing_bytes().unwrap()),
-    );
-    before.verify().unwrap();
-    *server.own_manifest.borrow_mut() = Some(before.clone());
-    server.manifest_history.borrow_mut().push(before.clone());
-
-    let mut engine = Engine::new(session, server);
-    let next = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:01:00Z")).unwrap();
-    assert_eq!(next.sequence, 2);
-    assert_eq!(
-        next.previous_hash.as_deref(),
-        Some(before.manifest_hash().unwrap().as_str())
-    );
-    assert_eq!(next.drive, authority.drive_keys());
-    assert_eq!(next.devices, before.devices);
-    // Then nothing more to publish.
-    let again = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:02:00Z")).unwrap();
-    assert_eq!(again.sequence, 2);
 }
 
 #[test]
@@ -1245,7 +1200,7 @@ fn a_forged_authority_over_a_real_identity_is_never_verified_by_a_scan() {
         incarnation_id: String::new(),
         authority_key_id: String::new(),
         self_authority_key: String::new(),
-        drive_hpke_public_key: String::new(),
+        drive_xwing_public_key: String::new(),
         drive_share_signing_public_key: String::new(),
         highest_sequence: 1,
         manifest_hash: String::new(),
@@ -1463,7 +1418,7 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
         incarnation_id: String::new(),
         authority_key_id: String::new(),
         self_authority_key: local_authority.public_key_base64(),
-        drive_hpke_public_key: String::new(),
+        drive_xwing_public_key: String::new(),
         drive_share_signing_public_key: String::new(),
         highest_sequence: 1,
         manifest_hash: String::new(),

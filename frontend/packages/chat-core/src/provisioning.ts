@@ -1,5 +1,6 @@
 import api from '@kutup/session/client'
 import { resolveApiBase } from '@kutup/session/apiBase'
+import { withClientParam } from '@kutup/session/clientVersion'
 import type { WasmLinkingDeviceHandle } from './types'
 
 /** The socket closed because its link code expired (the server's lifetime). */
@@ -33,7 +34,7 @@ export async function openProvisioning(
   const url = new URL(`${base.replace(/\/$/, '')}/chat/provisioning`, window.location.href)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.searchParams.set('ticket', ticket)
-  const socket = new WebSocket(url)
+  const socket = new WebSocket(withClientParam(url))
   let delivered = false
   let closedByUs = false
   socket.onmessage = (event: MessageEvent) => {

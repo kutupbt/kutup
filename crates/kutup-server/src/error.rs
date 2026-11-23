@@ -275,7 +275,10 @@ mod tests {
                 } else if path.extension().is_some_and(|e| e == "rs") {
                     let source = std::fs::read_to_string(&path).unwrap();
                     for code in json_codes(&source) {
-                        if !documented.contains(&code) {
+                        // One camelCase word, as every client matches it.
+                        if code.contains('_') {
+                            missing.push(format!("{code} is snake_case ({})", path.display()));
+                        } else if !documented.contains(&code) {
                             missing.push(format!("{code} ({})", path.display()));
                         }
                     }
@@ -290,14 +293,13 @@ mod tests {
 
     #[tokio::test]
     async fn client_error_carries_its_details() {
-        let error = AppError::conflict("name taken").with_details(
-            serde_json::json!({ "code": "name_taken", "holder": { "kind": "file" } }),
-        );
+        let error = AppError::conflict("name taken")
+            .with_details(serde_json::json!({ "code": "nameTaken", "holder": { "kind": "file" } }));
         let (status, body) = body_string(error).await;
         assert_eq!(status, StatusCode::CONFLICT);
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(body["error"], "name taken");
-        assert_eq!(body["code"], "name_taken");
+        assert_eq!(body["code"], "nameTaken");
         assert_eq!(body["holder"]["kind"], "file");
     }
 

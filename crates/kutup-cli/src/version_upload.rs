@@ -188,7 +188,7 @@ fn refusal(error: &anyhow::Error) -> Refusal {
         }
         // Another version than `basedOn`, metadata moved on, or the file's
         // key changed (the server's plain `conflict`).
-        Some("version_conflict" | "revision_conflict" | "conflict") => Refusal::Conflict,
+        Some("versionConflict" | "revisionConflict" | "conflict") => Refusal::Conflict,
         None => Refusal::OffsetMismatch,
         Some(_) => Refusal::Other,
     }
@@ -537,7 +537,7 @@ fn commit(
         Err(error) => match crate::revisions::conflict_code(&error) {
             // Every part has not arrived: a later run goes on with it.
             Some("notUploaded") => Err(error.context("new version not fully sent; run it again")),
-            Some("version_conflict" | "revision_conflict" | "conflict") => {
+            Some("versionConflict" | "revisionConflict" | "conflict") => {
                 let _ = tus.delete(&rec.upload_id);
                 forget()?;
                 Ok(Landed::Conflict(error))
@@ -711,10 +711,7 @@ mod tests {
                 ));
             }
             if self.conflict_at_commit.get() {
-                return Err(api(
-                    409,
-                    r#"{"error":"moved on","code":"version_conflict"}"#,
-                ));
+                return Err(api(409, r#"{"error":"moved on","code":"versionConflict"}"#));
             }
             let (_, bytes, meta) = uploads.remove(revision_id).unwrap();
             self.stored
@@ -733,7 +730,7 @@ mod tests {
             if self.conflict_at_open.get() {
                 return Err(api(
                     409,
-                    r#"{"error":"the file changed since","code":"version_conflict","current":"v7"}"#,
+                    r#"{"error":"the file changed since","code":"versionConflict","current":"v7"}"#,
                 ));
             }
             if let Some(open) = self.uploads.borrow().keys().next() {
@@ -1331,7 +1328,7 @@ mod tests {
         impl Commits for Conflicting<'_> {
             fn commit(&self, f: &str, r: &str, body: &CommitRevision) -> Result<()> {
                 if !self.1.replace(true) {
-                    return Err(api(409, r#"{"error":"moved","code":"revision_conflict"}"#));
+                    return Err(api(409, r#"{"error":"moved","code":"revisionConflict"}"#));
                 }
                 self.0.commit(f, r, body)
             }

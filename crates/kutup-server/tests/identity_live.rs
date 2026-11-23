@@ -15,7 +15,7 @@ use common::*;
 
 fn lookup(c: &Client, base: &str, token: &str, account: &str) -> Value {
     bearer(
-        c.get(format!("{base}/api/users/by-address/{account}")),
+        c.get(format!("{base}/api/v1/accounts/by-address/{account}")),
         token,
     )
     .send()
@@ -49,7 +49,7 @@ fn drive_key_bindings() {
         &alice.person,
         &key("accountAuthorityPublicKey"),
         found["driveKeyBindingEpoch"].as_u64().unwrap() as u32,
-        &base64_decode(found["driveHpkePublicKey"].as_str().unwrap())
+        &base64_decode(found["driveXwingPublicKey"].as_str().unwrap())
             .try_into()
             .unwrap(),
         &key("driveSigningPublicKey"),
@@ -59,7 +59,7 @@ fn drive_key_bindings() {
     assert!(lookup(&c, &base, &alice.token, &bob_account)["driveKeyBinding"].is_string());
 
     // Many people at once: the ones here, by exact address.
-    let found: Value = bearer(c.post(format!("{base}/api/users/drive-identities")), &alice.token)
+    let found: Value = bearer(c.post(format!("{base}/api/v1/drive/identities")), &alice.token)
         .json(&json!({ "accounts": [alice_account, bob_account, format!("nobody@{}", server_domain(&c, &base)), "x@elsewhere.example"] }))
         .send()
         .unwrap()
@@ -83,7 +83,7 @@ fn drive_key_bindings() {
     let too_many: Vec<String> = (0..101).map(|i| format!("u{i}@kutup.localhost")).collect();
     assert_eq!(
         bearer(
-            c.post(format!("{base}/api/users/drive-identities")),
+            c.post(format!("{base}/api/v1/drive/identities")),
             &alice.token
         )
         .json(&json!({ "accounts": too_many }))
@@ -100,7 +100,7 @@ fn drive_key_bindings() {
     .unwrap();
     let forged = drive_key_binding::sign(&mallory, &alice.person, 1).unwrap();
     let r = c
-        .post(format!("{base}/api/auth/register"))
+        .post(format!("{base}/api/v1/auth/register"))
         .json(&json!({ "username": "forged", "driveKeyBinding": b64(&forged) }))
         .send()
         .unwrap();
@@ -143,18 +143,21 @@ fn identity_pins_sync_by_revision() {
     // (docs/plans/account-records.md).
     let get = || {
         bearer(
-            c.get(format!("{base}/api/account/records/pins/pins")),
+            c.get(format!("{base}/api/v1/account/records/pins/pins")),
             &owner.token,
         )
         .send()
         .unwrap()
     };
     let put = |base_revision: i64, envelope: String| {
-        bearer(c.post(format!("{base}/api/account/records")), &owner.token)
-            .json(&json!({ "puts": [{ "scope": "pins", "id": "pins",
+        bearer(
+            c.post(format!("{base}/api/v1/account/records")),
+            &owner.token,
+        )
+        .json(&json!({ "puts": [{ "scope": "pins", "id": "pins",
                 "baseRevision": base_revision, "envelope": envelope }] }))
-            .send()
-            .unwrap()
+        .send()
+        .unwrap()
     };
     assert_eq!(get().status(), StatusCode::NOT_FOUND);
     let seal = |revision: u64| {
@@ -177,7 +180,7 @@ fn identity_pins_sync_by_revision() {
     let again = put(0, seal(T + 1));
     assert_eq!(again.status(), StatusCode::CONFLICT);
     let body: Value = again.json().unwrap();
-    assert_eq!(body["code"], "revision_conflict");
+    assert_eq!(body["code"], "revisionConflict");
     assert_eq!(body["conflicts"][0]["revision"], T);
     // Not newer than its base: refused.
     assert_eq!(put(T as i64, seal(T)).status(), StatusCode::BAD_REQUEST);
@@ -205,7 +208,7 @@ fn identity_pins_sync_by_revision() {
     let other = register(&c, &base);
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/account/records/pins/pins")),
+            c.get(format!("{base}/api/v1/account/records/pins/pins")),
             &other.token
         )
         .send()

@@ -3,7 +3,7 @@
 How an app keeps a copy of server state in the browser (or a native client)
 current without re-reading everything: one design for every app, in
 `crates/kutup-server/src/change_feed.rs`. Mail's body search is the first
-user (`GET /api/mail/search-index/changes`, docs/plans/mail-body-search.md);
+user (`GET /api/v1/mail/search-index/changes`, docs/plans/mail-body-search.md);
 Drive, Contacts and the other apps' caches move onto it as they gain local
 copies (docs/roadmap.md).
 

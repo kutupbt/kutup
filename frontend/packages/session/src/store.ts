@@ -9,11 +9,12 @@
 import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { useSyncExternalStore } from 'react'
 import type { AccountRoots } from '@kutup/crypto/accountRoots'
+import type { AccountRole, TwoFactorState } from './api-types'
 import type { DeviceKeys } from './keys'
 export interface Session {
   /** The server-side session (auth_sessions.id) this app origin holds. */
   sessionId: string
-  userId: string
+  accountId: string
   /** The account's Kutup address (`username@<domain>`): its identity, shown in menus. */
   address: string
   /**
@@ -22,10 +23,11 @@ export interface Session {
    */
   envelopeBinding: string
   username: string | null
-  isAdmin: boolean
+  role: AccountRole
   storageQuotaBytes: number
   storageUsedBytes: number
-  totpEnabled: boolean
+  /** The authenticator app. */
+  twoFactor: TwoFactorState
   /** Collab presence colour `#rrggbb`, or null for the deterministic default. */
   color: string | null
   publicKey: string

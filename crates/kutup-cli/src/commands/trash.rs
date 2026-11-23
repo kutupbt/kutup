@@ -89,7 +89,7 @@ fn folder_collection(f: &TrashFolder) -> crate::api::Collection {
     crate::api::Collection {
         name_hash: None,
         id: f.id.clone(),
-        owner_user_id: f.owner_user_id.clone(),
+        owner_account_id: f.owner_account_id.clone(),
         name_envelope: f.name_envelope.clone(),
         owner_key_envelope: Some(f.owner_key_envelope.clone()),
         named_share_envelope: None,
@@ -124,7 +124,7 @@ fn file_meta(
         let collection = crate::api::Collection {
             name_hash: None,
             id: f.collection_id.clone(),
-            owner_user_id: f.collection_owner_user_id.clone(),
+            owner_account_id: f.collection_owner_account_id.clone(),
             name_envelope: String::new(),
             owner_key_envelope: Some(f.collection_owner_key_envelope.clone()),
             named_share_envelope: None,
@@ -259,7 +259,7 @@ fn restore(profile: &str, json: bool, id: &str, name: Option<&str>) -> Result<()
                     .downcast_ref::<ApiError>()
                     .filter(|e| e.status == 409)
                     .and_then(|e| e.code.as_deref())
-                    .filter(|code| matches!(*code, "name_taken" | "nameNeeded"))
+                    .filter(|code| matches!(*code, "nameTaken" | "nameNeeded"))
                     .is_some();
                 if !needs_name {
                     // The server 409s a file whose parent folder is itself still trashed.

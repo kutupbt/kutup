@@ -18,7 +18,7 @@ that every limit is an administrators' setting, site-wide and per account.
   docs/plans/admin-rate-limits.md §4), set on the account's admin page.
 - **Admin UI.** The admin page copies each setting's min and max by hand
   (`ServerSettingsPage.tsx`), so the two lists can drift.
-- **Drive limits.** `GET /api/drive/limits` answers the site's values only.
+- **Drive limits.** `GET /api/v1/drive/limits` answers the site's values only.
 
 ## Proposal
 
@@ -26,8 +26,10 @@ that every limit is an administrators' setting, site-wide and per account.
 for.** `NumericSetting` gains three fields:
 - `section`, for the admin page;
 - `unit` (bytes, count or seconds), for showing the value;
-- `per_account`, following rate limits §4: only where the setting limits one
-  account.
+- `per_account`, following rate limits §4: where the setting limits one
+  account, or sets a policy for one (the user's standing rule: every limit
+  is editable site-wide and per user; `account.session_ttl_days` and
+  `account.known_client_days` take an account's own value too).
 
 **2. One table of per-account values.** `account_entitlements (account_id,
 key, value, source, updated_at)` holds both registries (docs/plans/w7-schema.md
@@ -54,7 +56,7 @@ for storage.
 - **Drive streaming.** `driveStreamMaxBytes`, `driveStreamCacheBlocks`,
   `driveStreamReadaheadBlocks`, `driveStreamMaxConcurrent` and
   `driveStreamBlobFallbackMaxBytes` apply to the account reading. They reach
-  its client through `/api/drive/limits`.
+  its client through `/api/v1/drive/limits`.
 - **Range answers.** `driveStreamResponseMaxBytes` stays site-only. It is a
   transport parameter of the block protocol (one sealed block per answer,
   which the relay clamps before signing), not a limit on an account's
@@ -66,22 +68,24 @@ for storage.
     `calendarPushSubscriptionsPerAccount`;
   - `chatLinkTokensPerAccount`, `chatMaxActiveDevices` and
     `chatProvisioningSocketsPerAccount`;
-  - `twoFactorRecoveryCodes`.
+  - `twoFactorRecoveryCodes`;
+  - `totpSkewSteps` (`account.totp_skew_steps`, W7 group 5d): how many
+    30-second steps either side of now an authenticator code is taken.
 
   Settings that limit a request, a page, a batch or the server stay
   site-only.
 
 **5. The admin API, fed by the registry:**
-- `GET /api/admin/settings/registry` lists every numeric setting with its
+- `GET /api/v1/admin/settings/registry` lists every numeric setting with its
   key, field, section, unit, default, bounds, `perAccount`, its value, and
   whether administrators set it. Server settings builds its numeric fields
   from this list, so there are no hand-copied bounds.
-- `GET /api/admin/users/{id}/limits` lists what the account gets: each
+- `GET /api/v1/admin/accounts/{id}/entitlements` lists what the account gets: each
   per-account setting and each per-account rate limit, with its value, the
   site's value, and whether the account has its own.
-- `PUT /api/admin/users/{id}/limits/{key}` takes `{ value | null }`, checks
+- `PUT /api/v1/admin/accounts/{id}/entitlements/{key}` takes `{ value | null }`, checks
   the bounds, and is audited as `account.setEntitlement` or `account.setRateLimit`. It
-  replaces `/api/admin/users/{id}/rate-limits` (pre-production, so a
+  replaces `/api/v1/admin/accounts/{id}/rate-limits` (pre-production, so a
   breaking change is fine).
 
 **6. The admin UI.** The account's admin page gets one "Limits" section: the
@@ -126,7 +130,7 @@ Each later slice moves a group of limits and adds them to the registry.
 - **Live:**
   - an account with a lowered upload limit is refused a larger upload,
     while another account isn't;
-  - `/api/drive/limits` shows the account's values;
+  - `/api/v1/drive/limits` shows the account's values;
   - a raised security-key limit lets that account add one more key;
   - a reset;
   - a value out of bounds, or a key that isn't per account: `400`;

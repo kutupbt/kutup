@@ -1,10 +1,10 @@
 //! Closing an account and keeping it (docs/plans/server-personal-data.md, A5).
 //!
-//! - `POST /api/user/close`: the owner, after a reauth (grant `close`), asks
+//! - `POST /api/v1/account/close`: the owner, after a reauth (grant `close`), asks
 //!   for the account to be deleted. It is `closing` for
 //!   `account.closing_days`; every sign-in ends.
 //! - A sign-in that passes every step of a closing account gets no session
-//!   but a grant (`keep`, no session); `POST /api/auth/keep` with it keeps
+//!   but a grant (`keep`, no session); `POST /api/v1/auth/keep` with it keeps
 //!   the account and answers as the sign-in would have.
 
 use axum::extract::State;
@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::account_closing::{self, ClosingBy};
 use crate::error::{AppError, AppResult};
 use crate::grants::{self, Purpose};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::security_events::{self, Kind};
 use crate::AppState;
 
@@ -44,10 +44,10 @@ impl Closed {
     }
 }
 
-/// `POST /api/user/close` — asks for this account to be deleted.
+/// `POST /api/v1/account/close` — asks for this account to be deleted.
 #[utoipa::path(
     post,
-    path = "/api/user/close",
+    path = "/api/v1/account/close",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = GrantRequest,
@@ -58,10 +58,10 @@ impl Closed {
 )]
 pub async fn close(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<GrantRequest>,
 ) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let (protected, last_admin): (bool, bool) = sqlx::query_as(
         "SELECT role = 'breakGlassAdmin',
                 role <> 'member' AND NOT EXISTS (SELECT 1 FROM accounts o
@@ -101,11 +101,11 @@ pub async fn close(
     Ok(Json(Closed::new(closes_at)).into_response())
 }
 
-/// `POST /api/auth/keep` — keeps a closing account, with the grant its
+/// `POST /api/v1/auth/keep` — keeps a closing account, with the grant its
 /// sign-in got; answers as that sign-in would have (a session).
 #[utoipa::path(
     post,
-    path = "/api/auth/keep",
+    path = "/api/v1/auth/keep",
     tag = "auth",
     request_body = GrantRequest,
     responses(
@@ -123,7 +123,7 @@ pub async fn keep(
     let Some((_, grant)) = grants::take(&mut *tx, &req.grant, &[Purpose::Keep]).await? else {
         return Err(grants::invalid());
     };
-    let account: Uuid = grant.user_id;
+    let account: Uuid = grant.account_id;
     if !account_closing::keep(&mut tx, account).await? {
         return Err(grants::invalid());
     }

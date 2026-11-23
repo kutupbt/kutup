@@ -236,8 +236,11 @@ impl ChatTransport for Mailbox {
         // What this server claims about the account's own devices.
         Ok(published(account))
     }
-    async fn fetch_device_session(&self) -> Result<String> {
-        Ok(DEVICE_SESSION.into())
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
+        Ok(kutup_chat_proto::DeviceSessionResponseV1 {
+            session: DEVICE_SESSION.into(),
+            next_device_id: 1,
+        })
     }
 
     async fn fetch_manifest(

@@ -116,7 +116,7 @@ export function InterruptedUploads({ setup, onCount }: { setup: ResumeSetup; onC
     setBusy(upload.fileId)
     try {
       // What the server holds of it goes too; one it already let go is fine.
-      await api.delete(`/uploads/${encodeURIComponent(upload.uploadUrl.split('/').filter(Boolean).at(-1) ?? '')}`, {
+      await api.delete(`/drive/uploads/${encodeURIComponent(upload.uploadUrl.split('/').filter(Boolean).at(-1) ?? '')}`, {
         headers: { 'Tus-Resumable': '1.0.0' },
       }).catch(() => undefined)
       await pendingUploads.remove(upload.fileId)

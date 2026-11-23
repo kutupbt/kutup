@@ -42,7 +42,7 @@ fn token_of(c: &Client, base: &str, a: &User) -> String {
 }
 
 fn me(c: &Client, base: &str, token: &str) -> Value {
-    bearer(c.get(format!("{base}/api/user/me")), token)
+    bearer(c.get(format!("{base}/api/v1/account")), token)
         .send()
         .unwrap()
         .json()
@@ -135,7 +135,7 @@ fn versions_v2_contract() {
     let ctx = |purpose, object: &str, parent: &str| {
         DriveEnvelopeContextV1::new(purpose, 1, 1, object, parent).unwrap()
     };
-    let created = bearer(c.post(format!("{base}/api/collections")), &token)
+    let created = bearer(c.post(format!("{base}/api/v1/drive/collections")), &token)
         .json(&json!({
             "id": collection_id,
             "ownerKeyEnvelope": common::owner_collection_key(&collection_key, &owner, &collection_id, 1),
@@ -164,7 +164,7 @@ fn versions_v2_contract() {
         br#"{"name":"a.txt","mimeType":"text/plain","size":16}"#,
         b"hello thumbnails",
     );
-    let uploaded = bearer(c.post(format!("{base}/api/files/upload")), &token)
+    let uploaded = bearer(c.post(format!("{base}/api/v1/drive/files")), &token)
         .multipart(form)
         .send()
         .unwrap();
@@ -176,17 +176,23 @@ fn versions_v2_contract() {
 
     let seal = |plain: &[u8]| common::Version::seal(&file_id, &file_key, 1, plain);
     let download = |token: &str| -> Vec<u8> {
-        bearer(c.get(format!("{base}/api/files/{file_id}/download")), token)
-            .send()
-            .unwrap()
-            .bytes()
-            .unwrap()
-            .to_vec()
+        bearer(
+            c.get(format!("{base}/api/v1/drive/files/{file_id}/download")),
+            token,
+        )
+        .send()
+        .unwrap()
+        .bytes()
+        .unwrap()
+        .to_vec()
     };
     let current_version = |token: &str| -> String {
-        let r = bearer(c.get(format!("{base}/api/files/{file_id}/download")), token)
-            .send()
-            .unwrap();
+        let r = bearer(
+            c.get(format!("{base}/api/v1/drive/files/{file_id}/download")),
+            token,
+        )
+        .send()
+        .unwrap();
         r.headers()["x-kutup-version"].to_str().unwrap().to_owned()
     };
     let original = download(&token);
@@ -229,7 +235,7 @@ fn versions_v2_contract() {
     // The version downloads as itself.
     let got = bearer(
         c.get(format!(
-            "{base}/api/files/{file_id}/versions/{}/download",
+            "{base}/api/v1/drive/files/{file_id}/versions/{}/download",
             v["id"].as_str().unwrap()
         )),
         &token,
@@ -255,7 +261,7 @@ fn versions_v2_contract() {
     let no_file = reqwest::blocking::multipart::Form::new().text("kind", "file");
     assert_eq!(
         bearer(
-            c.post(format!("{base}/api/files/{file_id}/versions")),
+            c.post(format!("{base}/api/v1/drive/files/{file_id}/versions")),
             &token
         )
         .multipart(no_file)
@@ -277,7 +283,7 @@ fn versions_v2_contract() {
     let v_id = v["id"].as_str().unwrap().to_owned();
     let count = || -> usize {
         bearer(
-            c.get(format!("{base}/api/files/{file_id}/versions")),
+            c.get(format!("{base}/api/v1/drive/files/{file_id}/versions")),
             &token,
         )
         .send()
@@ -300,7 +306,7 @@ fn versions_v2_contract() {
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
     let body: Value = r.json().unwrap();
-    assert_eq!(body["code"], "version_conflict");
+    assert_eq!(body["code"], "versionConflict");
     assert_eq!(body["current"], v_id.as_str());
     assert_eq!(count(), stored);
     assert_eq!(used(&c, &base, &token), before);
@@ -372,7 +378,7 @@ fn versions_v2_contract() {
     // The retention setting.
     assert_eq!(me(&c, &base, &token)["versionRetentionDays"], 30);
     let set = |days: i32| {
-        bearer(c.patch(format!("{base}/api/user/me")), &token)
+        bearer(c.patch(format!("{base}/api/v1/account")), &token)
             .json(&json!({ "versionRetentionDays": days }))
             .send()
             .unwrap()
@@ -398,7 +404,7 @@ fn owned_file(c: &Client, base: &str, owner: &User) -> (String, String, [u8; 32]
     let ctx = |purpose, object: &str, parent: &str| {
         DriveEnvelopeContextV1::new(purpose, 1, 1, object, parent).unwrap()
     };
-    let created = bearer(c.post(format!("{base}/api/collections")), &token)
+    let created = bearer(c.post(format!("{base}/api/v1/drive/collections")), &token)
         .json(&json!({
             "id": collection_id,
             "ownerKeyEnvelope": common::owner_collection_key(&collection_key, owner, &collection_id, 1),
@@ -427,7 +433,7 @@ fn owned_file(c: &Client, base: &str, owner: &User) -> (String, String, [u8; 32]
         br#"{"name":"Kasa.kdbx","mimeType":"application/x-keepass2","size":25}"#,
         plain,
     );
-    let uploaded = bearer(c.post(format!("{base}/api/files/upload")), &token)
+    let uploaded = bearer(c.post(format!("{base}/api/v1/drive/files")), &token)
         .multipart(form)
         .send()
         .unwrap();
@@ -454,7 +460,9 @@ fn the_original_upload_is_deleted_by_its_owner_once_replaced() {
     let (token, file_id, file_key, size) = owned_file(&c, &base, &owner);
     let delete = |token: &str| {
         bearer(
-            c.delete(format!("{base}/api/files/{file_id}/versions/original")),
+            c.delete(format!(
+                "{base}/api/v1/drive/files/{file_id}/versions/original"
+            )),
             token,
         )
         .send()
@@ -494,14 +502,14 @@ fn the_original_upload_is_deleted_by_its_owner_once_replaced() {
 
     // Gone from reads; the current content is the version.
     let original = bearer(
-        c.get(format!("{base}/api/files/{file_id}/original")),
+        c.get(format!("{base}/api/v1/drive/files/{file_id}/original")),
         &token,
     )
     .send()
     .unwrap();
     assert_eq!(original.status(), StatusCode::NOT_FOUND);
     let current = bearer(
-        c.get(format!("{base}/api/files/{file_id}/download")),
+        c.get(format!("{base}/api/v1/drive/files/{file_id}/download")),
         &token,
     )
     .send()

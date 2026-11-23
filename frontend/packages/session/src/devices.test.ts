@@ -44,7 +44,7 @@ vi.mock('./client', () => ({
 }))
 vi.mock('./store', () => ({
   getSession: () => ({
-    userId: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b',
+    accountId: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b',
     sessionId: 'session-1',
     roots: { identityRoot: toBase64(MASTER_KEY) },
   }),

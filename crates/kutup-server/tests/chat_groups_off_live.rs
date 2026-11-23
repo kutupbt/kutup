@@ -21,7 +21,7 @@ fn groups_are_off_unless_switched_on() {
     let base = base.trim_end_matches('/').to_string();
     let c = crate::common::client();
     let settings: Value = c
-        .get(format!("{base}/api/auth/settings"))
+        .get(format!("{base}/api/v1/auth/settings"))
         .send()
         .unwrap()
         .json()
@@ -43,16 +43,19 @@ fn groups_are_off_unless_switched_on() {
     };
     for path in [
         // The MLS routes are gone.
-        "/api/chat/mls/invitations",
-        "/api/chat/mls/invitation-feedback",
-        "/api/chat/mls/messages/1",
-        "/api/chat/mls/key-packages/1/count",
-        &format!("/api/chat/mls/domains/{}/policy", server_domain(&c, &base)),
+        "/api/v1/chat/mls/invitations",
+        "/api/v1/chat/mls/invitation-feedback",
+        "/api/v1/chat/mls/messages/1",
+        "/api/v1/chat/mls/key-packages/1/count",
+        &format!(
+            "/api/v1/chat/mls/domains/{}/policy",
+            server_domain(&c, &base)
+        ),
         // A peer's policy is not fetched either.
-        "/api/chat/mls/domains/peer.invalid/policy",
+        "/api/v1/chat/mls/domains/peer.invalid/policy",
         // Nor the pairwise groups' anonymous route.
         &format!(
-            "/api/chat/groups/gateway-key?server={}&fromSequence=0",
+            "/api/v1/chat/groups/gateway-key?server={}&fromSequence=0",
             server_domain(&c, &base)
         ),
     ] {
@@ -60,7 +63,7 @@ fn groups_are_off_unless_switched_on() {
     }
     let r = bearer(
         c.post(format!(
-            "{base}/api/chat/groups/relay/{}",
+            "{base}/api/v1/chat/groups/relay/{}",
             server_domain(&c, &base)
         )),
         &user.token,
@@ -71,30 +74,33 @@ fn groups_are_off_unless_switched_on() {
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "the groups relay");
     // Nor the account's group list (the records scope `chatGroups`): a
     // batch naming it is no such scope, before its envelope is looked at.
-    let r = bearer(c.post(format!("{base}/api/account/records")), &user.token)
-        .json(
-            &json!({ "puts": [{ "scope": "chatGroups", "id": "A".repeat(43),
+    let r = bearer(
+        c.post(format!("{base}/api/v1/account/records")),
+        &user.token,
+    )
+    .json(
+        &json!({ "puts": [{ "scope": "chatGroups", "id": "A".repeat(43),
             "baseRevision": 0, "envelope": "AAAA" }] }),
-        )
-        .send()
-        .unwrap();
+    )
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "the group list");
     // The federated side too: groups off answers before any signature check.
     let r = c
-        .post(format!("{base}/api/fed/chat/groups/gateway"))
+        .post(format!("{base}/api/fed/v2/chat/groups/gateway"))
         .body(vec![0u8; 64])
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "the groups gateway");
     let r = c
-        .get(format!("{base}/api/fed/chat/groups/gateway-key"))
+        .get(format!("{base}/api/fed/v2/chat/groups/gateway-key"))
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "the gateway key");
     // A well-formed group-call token request: refused for there being no
     // groups, not for its shape.
     let r = bearer(
-        c.post(format!("{base}/api/chat/group-calls/token")),
+        c.post(format!("{base}/api/v1/chat/group-calls/token")),
         &user.token,
     )
     .json(&json!({

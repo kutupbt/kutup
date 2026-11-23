@@ -39,7 +39,7 @@ use crate::federation_outbox::{self, Kind};
 use crate::AppState;
 
 /// Where a stream control message goes.
-pub const PATH: &str = "/api/fed/chat/stream-control";
+pub const PATH: &str = "/api/fed/v2/chat/stream-control";
 
 /// The largest stream control message taken.
 const MAX_BYTES: usize = 1024;
@@ -269,7 +269,7 @@ async fn apply(
     Ok(Applied::Accepted(answer))
 }
 
-/// `POST /api/fed/chat/stream-control` — a sequence of the origin's stream
+/// `POST /api/fed/v2/chat/stream-control` — a sequence of the origin's stream
 /// used up with nothing delivered (a withdrawal, or a skip-safe code).
 pub async fn receive(
     State(state): State<AppState>,

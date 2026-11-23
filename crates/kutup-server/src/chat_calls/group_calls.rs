@@ -34,11 +34,11 @@ use crate::chat_federation::{
 };
 use crate::error::{AppError, AppResult};
 use crate::federation::FederationRequestSpec;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
-const FEDERATION_PATH: &str = "/api/fed/chat/group-calls/token";
+const FEDERATION_PATH: &str = "/api/fed/v2/chat/group-calls/token";
 /// How long a token admits its holder to the room.
 const TOKEN_TTL_SECONDS: i64 = 6 * 60 * 60;
 
@@ -223,7 +223,7 @@ fn mint(
 
 #[utoipa::path(
     post,
-    path = "/api/chat/group-calls/token",
+    path = "/api/v1/chat/group-calls/token",
     tag = "chat",
     operation_id = "getChatGroupCallToken",
     request_body = GroupCallTokenRequest,
@@ -237,11 +237,11 @@ fn mint(
 )]
 pub(crate) async fn token(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Json(request): Json<GroupCallTokenRequest>,
 ) -> AppResult<Json<GroupCallTokenResponse>> {
     groups_on(&state)?;
-    if !ACCOUNT_TOKENS.allow(&auth.user_id) {
+    if !ACCOUNT_TOKENS.allow(&auth.account_id) {
         return Err(AppError::too_many_requests("too many group call requests"));
     }
     validate_hex32("roomId", &request.room_id)?;
@@ -268,7 +268,7 @@ pub(crate) async fn token(
     // quiet for it until the switch is on again (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&auth.user_id)?,
+        crate::handlers::trusted_uuid(&auth.account_id)?,
     )
     .await?;
     let body = serde_json::to_vec(&FederatedTokenRequest {

@@ -1,4 +1,4 @@
-//! `POST /api/chat/link-preview` — fetch one public web page or image for a
+//! `POST /api/v1/chat/link-preview` — fetch one public web page or image for a
 //! Chat link preview made by the sender.
 //!
 //! Browsers cannot read another site's page, so the sender's own homeserver
@@ -20,7 +20,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::public_fetch;
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
@@ -60,7 +60,7 @@ pub struct LinkPreviewFetchResponse {
 
 #[utoipa::path(
     post,
-    path = "/api/chat/link-preview",
+    path = "/api/v1/chat/link-preview",
     tag = "chat",
     operation_id = "fetchChatLinkPreview",
     request_body = LinkPreviewFetchRequest,
@@ -75,13 +75,13 @@ pub struct LinkPreviewFetchResponse {
 )]
 pub async fn fetch(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Json(request): Json<LinkPreviewFetchRequest>,
 ) -> AppResult<Json<LinkPreviewFetchResponse>> {
     if !state.config.chat_link_previews {
         return Err(AppError::not_found("link previews are off on this server"));
     }
-    if !LINK_PREVIEWS.allow(&auth.user_id) {
+    if !LINK_PREVIEWS.allow(&auth.account_id) {
         return Err(AppError::too_many_requests(
             "too many link previews; try again shortly",
         ));

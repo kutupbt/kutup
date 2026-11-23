@@ -39,7 +39,7 @@ export const marksKey = ['photos-marks'] as const
 const KINDS: readonly MarkKind[] = ['favourites', 'archived', 'hidden']
 
 function headOf(me: DriveIdentity) {
-  return accountHead({ userId: me.userId, masterKeys: me.masterKeys, roots: me.roots, envelopeBinding: me.binding })
+  return accountHead({ accountId: me.accountId, masterKeys: me.masterKeys, roots: me.roots, envelopeBinding: me.binding })
 }
 
 /** The marks in a verified copy of the scope, each record opened as the revision listed. */
@@ -76,7 +76,7 @@ export async function changeMarks(
   me: DriveIdentity,
   change: (marks: PhotosLibraryMarks) => PhotosLibraryMarks,
 ): Promise<void> {
-  const cacheKey = [...marksKey, me.userId]
+  const cacheKey = [...marksKey, me.accountId]
   const head = await headOf(me)
   // Redone on the newest copy when another device wrote first.
   const state = await head.recordsWrite('photosLibrary', async (copy) => {
@@ -117,7 +117,7 @@ export function useMarks(): Marks {
   const identity = useDriveIdentity()
   const me = identity.data
   const query = useQuery({
-    queryKey: [...marksKey, me?.userId],
+    queryKey: [...marksKey, me?.accountId],
     enabled: Boolean(me),
     queryFn: () => loadMarks(me!),
   })

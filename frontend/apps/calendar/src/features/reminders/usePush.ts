@@ -28,7 +28,7 @@ export function usePush(): void {
       zone: prefs.zone,
       lang: i18n.language,
       hour12: prefs.hour12,
-      account: session.userId,
+      account: session.accountId,
     }).catch(() => undefined)
-  }, [publicKey, prefs.zone, prefs.hour12, i18n.language, session.userId, t, version])
+  }, [publicKey, prefs.zone, prefs.hour12, i18n.language, session.accountId, t, version])
 }

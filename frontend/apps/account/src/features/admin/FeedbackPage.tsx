@@ -187,9 +187,9 @@ function FeedbackCard({
       <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
         <dt className="text-muted-foreground">{t('admin.feedback.from')}</dt>
         <dd className="min-w-0 truncate">
-          {item.userId ? (
-            <Link to={`/admin/users/${item.userId}`} className="font-medium hover:underline">
-              {item.userUsername}
+          {item.accountId ? (
+            <Link to={`/admin/users/${item.accountId}`} className="font-medium hover:underline">
+              {item.username}
             </Link>
           ) : (
             <span className="text-muted-foreground">{t('admin.feedback.deletedAccount')}</span>

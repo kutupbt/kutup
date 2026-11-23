@@ -325,7 +325,8 @@
       "signInRequired": "On this server, public links open only for people signed in to it. Sign in, then open the link again.",
       "badKey": "The link's key does not open this album. Ask for the whole link.",
       "notAlbum": "This link is not to an album.",
-      "other": "Something went wrong. Try again."
+      "other": "Something went wrong. Try again.",
+      "newerLink": "This link needs a newer Kutup. It was made by a newer version of Kutup than this server runs."
     }
   }
 }

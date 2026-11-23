@@ -46,7 +46,7 @@ pub const ACCOUNT_HEAD_WRITER_V1: &[u8] = b"kutup/account-head/writer/v1\0";
 
 /// `kutup-chat-proto/src/account_identity.rs`
 pub const ACCOUNT_IDENTITY_BINDING_V1: &[u8] = b"kutup/account-identity/binding/v1\0";
-/// `kutup-crypto/src/identity.rs` (`DRIVE_HPKE_INFO`)
+/// `kutup-crypto/src/identity.rs` (`DRIVE_XWING_INFO`)
 pub const ACCOUNT_IDENTITY_DRIVE_HPKE_XWING_V1: &[u8] =
     b"kutup/account-identity/drive-hpke-xwing/v1\0";
 /// `kutup-crypto/src/identity.rs` (`DRIVE_SIGNING_INFO`)

@@ -6,6 +6,7 @@ import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
 import { OpaqueWorkerClosed } from '@kutup/crypto/opaqueWorker'
 import { useSession } from '@kutup/session/store'
+import { takeServerResetNotice } from '@kutup/session/instance'
 import { sanitizeNext } from '@kutup/session/sessionSync'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -50,6 +51,9 @@ export function LoginPage() {
   // recovery code"): the server takes either in the same field.
   const [recovery, setRecovery] = useState(false)
   const [pending, setPending] = useState(false)
+  // This server was reset since this browser last saw it, and its local
+  // data was removed (docs/plans/api-surface.md §5): said once.
+  const [serverReset] = useState(takeServerResetNotice)
   const [error, setError] = useState<string | null>(
     // Sent back from a first sign-in whose setup token ran out.
     () => (params.get('setup') === 'expired' ? t('auth.errors.setupExpired') : null),
@@ -239,6 +243,7 @@ export function LoginPage() {
   return (
     <AuthLayout title={t('login.title')} description={t('login.description')}>
       <form className="space-y-4" onSubmit={(e) => void onCredentials(e)} noValidate>
+        {serverReset ? <Alert variant="info">{t('login.serverReset')}</Alert> : null}
         <Field label={t('auth.fields.username')} error={errors.name?.message} description={t('login.nameHint')} required>
           {(field) => (
             <Input {...field} {...register('name')} autoComplete="username" autoCapitalize="off" spellCheck={false} autoFocus />

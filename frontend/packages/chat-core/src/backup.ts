@@ -8,6 +8,7 @@ import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
 import { getCryptoWasm } from '@kutup/crypto/rustWasm'
 import { createHasher, toHex } from '@kutup/crypto/hash'
 import { resolveApiBase } from '@kutup/session/apiBase'
+import { clientFetch } from '@kutup/session/clientVersion'
 import {
   acknowledgeBackupEntry as acknowledge,
   commitBackupQueue as commitQueue,
@@ -374,7 +375,7 @@ const browserTransport: ChatBackupTransport = {
     return (await api.post<BackupMediaReceipt>('/chat/backup/media', form)).data
   },
   async downloadMediaRange(mediaId, accessToken, start, end, signal) {
-    const response = await fetch(
+    const response = await clientFetch(
       `${await resolveApiBase()}/chat/backup/media/${encodeURIComponent(mediaId)}`,
       { headers: { Authorization: `Bearer ${accessToken}`, Range: `bytes=${start}-${end}` }, signal, cache: 'no-store' },
     )

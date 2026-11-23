@@ -26,7 +26,7 @@ the rule yet (tracked in [`roadmap.md`](roadmap.md), "Settings model").
   font/size/direction) are per account because Proton Mail keeps them in the
   account and Mail follows Proton ([`plans/mail.md`](plans/mail.md)). That is
   the one deliberate exception to "ergonomics are per device".
-- **Theme and language** are per account (`/api/account/ui-preferences`) with
+- **Theme and language** are per account (`/api/v1/account/ui-preferences`) with
   a per-origin copy in localStorage only for the first paint; the account value
   wins on load and when a tab comes back into view.
 
@@ -92,8 +92,9 @@ is a follow-up, not a bug in a single app.
    account should list them so a person can see where a searchable copy of
    their mail is kept.
 
-There is no user-chosen session lifetime: sessions last a fixed 30 days and
-each can be revoked from the account's sessions page.
+There is no user-chosen session lifetime: sessions last the site's
+`account.session_ttl_days` unused (30 days at first) and each can be revoked
+from the account's sessions page.
 
 ## Site settings and their keys
 
@@ -118,7 +119,7 @@ operation. For example:
 Settings are read by key, so a stored row this server does not know (a newer
 server's, or a fork's under its own namespace) is kept and ignored. The admin
 API names the whole-number settings by `field` (`driveUploadMaxBytes`); the
-registry listing, `PUT /api/admin/users/{id}/limits/{key}` and the
+registry listing, `PUT /api/v1/admin/accounts/{id}/entitlements/{key}` and the
 mail-domain settings use the keys. The full list of keys is the registry
 (`crates/kutup-server/src/site_settings.rs`,
 `crates/kutup-server/src/ratelimit/registry.rs`,

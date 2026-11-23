@@ -261,14 +261,14 @@ pub(crate) fn validate_manifest(manifest: &AccountManifestV3) -> AppResult<()> {
     Ok(())
 }
 
-/// `POST /api/chat/keys/check` (device-authenticated; Signal's
+/// `POST /api/v1/chat/keys/check` (device-authenticated; Signal's
 /// `/v2/keys/check`): whether the server holds what the device believes it
 /// holds for it (the account identity, its signed prekey and its last-resort
 /// key). `204` when they agree, `409 keysDiffer` when they don't (the device
 /// then uploads its keys again).
 #[utoipa::path(
     post,
-    path = "/api/chat/keys/check",
+    path = "/api/v1/chat/keys/check",
     tag = "chat",
     operation_id = "checkChatKeys",
     request_body = ChatKeysCheckRequest,
@@ -281,12 +281,12 @@ pub(crate) fn validate_manifest(manifest: &AccountManifestV3) -> AppResult<()> {
 )]
 pub async fn check_keys(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
-    auth: crate::middleware::AuthUser,
+    auth: crate::middleware::AuthAccount,
     headers: HeaderMap,
     axum::Json(request): axum::Json<ChatKeysCheckRequest>,
 ) -> AppResult<axum::response::Response> {
     use axum::response::IntoResponse as _;
-    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     let device_id = authenticated_device(&state.pool, &headers, user_id).await?;
     let presented = hex::decode(&request.digest)
         .ok()
@@ -320,7 +320,7 @@ pub async fn check_keys(
     }
 }
 
-/// `PUT /api/chat/account-identity` (device-authenticated; Signal's
+/// `PUT /api/v1/chat/account-identity` (device-authenticated; Signal's
 /// `PhoneNumberIdentityKeyDistributionRequest`): a new account identity for
 /// every device the manifest keeps, in one transaction. The request names
 /// exactly the manifest's devices (`409` with the mismatch otherwise, and for
@@ -332,7 +332,7 @@ pub async fn check_keys(
 /// the account goes, and the devices upload new ones.
 #[utoipa::path(
     put,
-    path = "/api/chat/account-identity",
+    path = "/api/v1/chat/account-identity",
     tag = "chat",
     operation_id = "distributeChatAccountIdentity",
     request_body = AccountIdentityDistributionRequest,
@@ -347,15 +347,15 @@ pub async fn check_keys(
 )]
 pub async fn distribute_identity(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
-    auth: crate::middleware::AuthUser,
+    auth: crate::middleware::AuthAccount,
     headers: HeaderMap,
     axum::Json(request): axum::Json<AccountIdentityDistributionRequest>,
 ) -> AppResult<axum::response::Response> {
     use axum::response::IntoResponse as _;
     use axum::Json;
-    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     let sender = authenticated_device(&state.pool, &headers, user_id).await?;
-    if !crate::ratelimit::CHAT_IDENTITY_DISTRIBUTIONS.allow(&auth.user_id) {
+    if !crate::ratelimit::CHAT_IDENTITY_DISTRIBUTIONS.allow(&auth.account_id) {
         return Err(
             AppError::too_many_requests("too many identity distributions")
                 .with_details(serde_json::json!({ "code": "rateLimited" })),

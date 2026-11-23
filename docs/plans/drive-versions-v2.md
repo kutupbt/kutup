@@ -46,7 +46,7 @@ follow-up; see "Later".
 
 ### One request stores a version
 
-`POST /api/files/{id}/versions` (multipart) replaces the two-step
+`POST /api/v1/drive/files/{id}/versions` (multipart) replaces the two-step
 `snapshot-blob` + record:
 
 - `file`: the sealed version (typed Drive file blob, header validated as

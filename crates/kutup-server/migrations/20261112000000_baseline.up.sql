@@ -49,7 +49,7 @@ COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
 --
 
 CREATE DOMAIN public.client_type AS text
-	CONSTRAINT client_type_check CHECK ((VALUE = ANY (ARRAY['web-account'::text, 'web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text, 'cli'::text])));
+	CONSTRAINT client_type_check CHECK ((VALUE = ANY (ARRAY['web-account'::text, 'web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text, 'cli'::text, 'mail-bridge'::text])));
 
 
 --
@@ -310,6 +310,26 @@ CREATE FUNCTION public.mail_messages_mark_change() RETURNS trigger
 BEGIN
     NEW.change_xid := pg_current_xact_id()::text::bigint;
     RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: kutup_account_device_released(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.kutup_account_device_released() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- When a device id came free (docs/plans/one-device-list.md, "Device id
+    -- reuse"): the next device doesn't take it while a sender certificate of
+    -- its earlier holder may still be taken. Not for an account going away.
+    INSERT INTO account_device_releases (account_id, device_id)
+    SELECT OLD.account_id, OLD.device_id
+     WHERE EXISTS (SELECT 1 FROM accounts WHERE id = OLD.account_id)
+    ON CONFLICT (account_id, device_id) DO UPDATE SET released_at = now();
+    RETURN NULL;
 END
 $$;
 
@@ -655,7 +675,7 @@ CREATE TABLE public.auth_session_forks (
     payload bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT auth_session_forks_child_client_type_check CHECK (((child_client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text]))),
+    CONSTRAINT auth_session_forks_child_client_type_check CHECK (((child_client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text, 'mail-bridge'::text]))),
     CONSTRAINT auth_session_forks_payload_check CHECK (((octet_length(payload) >= 1) AND (octet_length(payload) <= 16384))),
     CONSTRAINT auth_session_forks_selector_hash_check CHECK ((octet_length(selector_hash) = 32))
 );
@@ -679,7 +699,7 @@ CREATE TABLE public.auth_sessions (
     expires_at timestamp with time zone NOT NULL,
     revoked_at timestamp with time zone,
     client_sealed bytea,
-    CONSTRAINT auth_sessions_check CHECK (((parent_session_id IS NULL) OR ((client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text])))),
+    CONSTRAINT auth_sessions_check CHECK (((parent_session_id IS NULL) OR ((client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text, 'mail-bridge'::text])))),
     CONSTRAINT auth_sessions_client_sealed_check CHECK (((client_sealed IS NULL) OR ((octet_length(client_sealed) >= 47) AND (octet_length(client_sealed) <= 512)))),
     CONSTRAINT auth_sessions_local_key_check CHECK ((octet_length(local_key) = 32)),
     CONSTRAINT auth_sessions_previous_refresh_token_hash_check CHECK ((octet_length(previous_refresh_token_hash) = 32)),
@@ -1872,7 +1892,7 @@ CREATE TABLE public.consents (
     at timestamp with time zone DEFAULT now() NOT NULL,
     channel text NOT NULL,
     CONSTRAINT consents_channel_check CHECK ((channel = ANY (ARRAY['settings'::text, 'signup'::text, 'admin'::text]))),
-    CONSTRAINT consents_purpose_check CHECK ((purpose = ANY (ARRAY['federationAbroad'::text, 'marketing'::text])))
+    CONSTRAINT consents_purpose_check CHECK ((purpose = ANY (ARRAY['federation'::text, 'marketing'::text])))
 );
 
 
@@ -1941,6 +1961,18 @@ CREATE TABLE public.account_device_tickets (
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT account_device_tickets_token_hash_check CHECK ((length(token_hash) = 64))
+);
+
+
+--
+-- Name: account_device_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.account_device_releases (
+    account_id uuid NOT NULL,
+    device_id integer NOT NULL,
+    released_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT account_device_releases_device_id_check CHECK (((device_id >= 1) AND (device_id <= 127)))
 );
 
 
@@ -3821,6 +3853,19 @@ CREATE TABLE public.server_generated_keys (
 
 
 --
+-- Name: server_instance; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.server_instance (
+    singleton boolean DEFAULT true NOT NULL,
+    id bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT server_instance_id_check CHECK ((octet_length(id) = 16)),
+    CONSTRAINT server_instance_singleton_check CHECK (singleton)
+);
+
+
+--
 -- Name: site_settings; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3989,7 +4034,7 @@ CREATE TABLE public.account_ui_preferences (
     theme text,
     language text,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT account_ui_preferences_language_check CHECK ((language = ANY (ARRAY['en'::text, 'tr'::text]))),
+    CONSTRAINT account_ui_preferences_language_check CHECK ((language ~ '^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$'::text)),
     CONSTRAINT account_ui_preferences_theme_check CHECK ((theme = ANY (ARRAY['light'::text, 'dark'::text, 'system'::text])))
 );
 
@@ -4026,6 +4071,7 @@ CREATE TABLE public.accounts (
     security_keys_require_uv boolean DEFAULT false NOT NULL,
     totp_secret_sealed bytea,
     totp_pending_secret_sealed bytea,
+    totp_last_step bigint,
     data_key_lost_at timestamp with time zone,
     state text DEFAULT 'active'::text NOT NULL,
     suspended_reason public.suspended_reason,
@@ -4042,6 +4088,7 @@ CREATE TABLE public.accounts (
     deletion_attempts integer DEFAULT 0 NOT NULL,
     deletion_next_try_at timestamp with time zone,
     master_key_generation integer NOT NULL,
+    next_device_id smallint DEFAULT 1 NOT NULL,
     CONSTRAINT accounts_closing CHECK ((((state = 'closing'::text) = (closing_by IS NOT NULL)) AND ((state = 'closing'::text) = (closes_at IS NOT NULL)))),
     CONSTRAINT accounts_closing_by_check CHECK ((closing_by = ANY (ARRAY['user'::text, 'admin'::text, 'restore'::text]))),
     CONSTRAINT accounts_color_format CHECK (((color IS NULL) OR (color ~ '^#[0-9a-fA-F]{6}$'::text))),
@@ -4053,6 +4100,7 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_legal_hold CHECK ((((legal_hold_reference IS NULL) = (legal_hold_at IS NULL)) AND ((legal_hold_reference IS NOT NULL) OR (legal_hold_by_account_id IS NULL)))),
     CONSTRAINT accounts_legal_hold_reference_check CHECK (((char_length(legal_hold_reference) >= 1) AND (char_length(legal_hold_reference) <= 200))),
     CONSTRAINT accounts_master_key_generation_check CHECK ((master_key_generation > 0)),
+    CONSTRAINT accounts_next_device_id_check CHECK (((next_device_id >= 1) AND (next_device_id <= 127))),
     CONSTRAINT accounts_opaque_check CHECK ((((opaque_record IS NULL) = (opaque_suite IS NULL)) AND ((opaque_record IS NULL) = (opaque_server_key_id IS NULL)))),
     CONSTRAINT accounts_opaque_record_check CHECK (((octet_length(opaque_record) >= 1) AND (octet_length(opaque_record) <= 1024))),
     CONSTRAINT accounts_opaque_server_key_id_check CHECK ((opaque_server_key_id > 0)),
@@ -4064,6 +4112,7 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_suspended_reason CHECK (((state = 'suspended'::text) = (suspended_reason IS NOT NULL))),
     CONSTRAINT accounts_totp_secret_sealed_check CHECK (((totp_secret_sealed IS NULL) OR ((octet_length(totp_secret_sealed) >= 47) AND (octet_length(totp_secret_sealed) <= 200)))),
     CONSTRAINT accounts_totp_pending_secret_sealed_check CHECK (((totp_pending_secret_sealed IS NULL) OR ((octet_length(totp_pending_secret_sealed) >= 47) AND (octet_length(totp_pending_secret_sealed) <= 200)))),
+    CONSTRAINT accounts_totp_last_step CHECK (((totp_last_step IS NULL) OR ((totp_last_step >= 0) AND (totp_secret_sealed IS NOT NULL)))),
     CONSTRAINT accounts_username_format CHECK ((username ~ '^[a-z0-9_-]{3,32}$'::text)),
     CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days > 0)),
     CONSTRAINT accounts_account_authority_key_id_bytes CHECK ((octet_length(account_authority_key_id) = 32)),
@@ -4988,6 +5037,14 @@ ALTER TABLE ONLY public.contacts
 
 ALTER TABLE ONLY public.account_device_tickets
     ADD CONSTRAINT account_device_tickets_pkey PRIMARY KEY (token_hash);
+
+
+--
+-- Name: account_device_releases account_device_releases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_device_releases
+    ADD CONSTRAINT account_device_releases_pkey PRIMARY KEY (account_id, device_id);
 
 
 --
@@ -5964,6 +6021,14 @@ ALTER TABLE ONLY public.chat_sealed_sender_certificates
 
 ALTER TABLE ONLY public.server_generated_keys
     ADD CONSTRAINT server_generated_keys_pkey PRIMARY KEY (purpose);
+
+
+--
+-- Name: server_instance server_instance_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.server_instance
+    ADD CONSTRAINT server_instance_pkey PRIMARY KEY (singleton);
 
 
 --
@@ -7368,6 +7433,13 @@ CREATE TRIGGER mail_message_labels_changed AFTER INSERT OR DELETE ON public.mail
 
 
 --
+-- Name: account_devices account_devices_released; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER account_devices_released AFTER DELETE ON public.account_devices FOR EACH ROW EXECUTE FUNCTION public.kutup_account_device_released();
+
+
+--
 -- Name: mail_messages mail_messages_deleted; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -8051,6 +8123,14 @@ ALTER TABLE ONLY public.chat_link_tokens
 
 
 --
+-- Name: chat_link_tokens chat_link_tokens_issued_by_device_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chat_link_tokens
+    ADD CONSTRAINT chat_link_tokens_issued_by_device_fkey FOREIGN KEY (account_id, issued_by_device) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
+
+
+--
 -- Name: chat_mailbox chat_mailbox_recipient_account_id_recipient_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8288,6 +8368,14 @@ ALTER TABLE ONLY public.contacts
 
 ALTER TABLE ONLY public.account_device_tickets
     ADD CONSTRAINT account_device_tickets_account_id_device_id_fkey FOREIGN KEY (account_id, device_id) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
+
+
+--
+-- Name: account_device_releases account_device_releases_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_device_releases
+    ADD CONSTRAINT account_device_releases_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --

@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::account_heads::{self, HeadOnly, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::{revisions, AppState};
 
 /// Contacts one import may carry, all or nothing.
@@ -255,20 +255,20 @@ pub struct ContactPage {
     pub total: i64,
 }
 
-/// `GET /api/contacts?offset=&limit=` — the caller's contacts, by name.
+/// `GET /api/v1/contacts?offset=&limit=` — the caller's contacts, by name.
 #[utoipa::path(
     get,
-    path = "/api/contacts",
+    path = "/api/v1/contacts",
     tag = "contacts",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "A page of contacts", body = ContactPage))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<ListQuery>,
 ) -> AppResult<Json<ContactPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(MAX_PAGE).clamp(1, MAX_PAGE);
     let offset = query.offset.unwrap_or(0).max(0);
     let rows: Vec<Row> = sqlx::query_as(&format!(
@@ -289,26 +289,26 @@ pub async fn list(
     }))
 }
 
-/// `POST /api/contacts` — adds a contact.
+/// `POST /api/v1/contacts` — adds a contact.
 #[utoipa::path(
     post,
-    path = "/api/contacts",
+    path = "/api/v1/contacts",
     tag = "contacts",
     security(("BearerAuth" = [])),
     request_body = ContactCreate,
     responses(
         (status = 201, description = "Added", body = ContactRow),
         (status = 400, description = "Not a valid, account-signed contact"),
-        (status = 409, description = "A contact with this UID exists, or head_conflict / head_required"),
+        (status = 409, description = "A contact with this UID exists, or headConflict / headRequired"),
         (status = 413, description = "Storage full"),
     )
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<ContactCreate>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let head = NextHead::parse(input.head.as_deref())?;
     let (binding, authority) = binding_of(&state, user_id).await?;
     let checked = check(
@@ -357,12 +357,12 @@ pub struct ContactUpdate {
     pub head: Option<String>,
 }
 
-/// `PUT /api/contacts/{id}` — replaces a contact (same UID) if nobody changed
-/// it since `baseRevision`; `409` with `code: "revision_conflict"` and the
+/// `PUT /api/v1/contacts/{id}` — replaces a contact (same UID) if nobody changed
+/// it since `baseRevision`; `409` with `code: "revisionConflict"` and the
 /// current revision otherwise.
 #[utoipa::path(
     put,
-    path = "/api/contacts/{id}",
+    path = "/api/v1/contacts/{id}",
     tag = "contacts",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Contact id")),
@@ -374,11 +374,11 @@ pub struct ContactUpdate {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(input): Json<ContactUpdate>,
 ) -> AppResult<Json<ContactRow>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let head = NextHead::parse(input.head.as_deref())?;
     let (binding, authority) = binding_of(&state, user_id).await?;
@@ -468,10 +468,10 @@ async fn delete_ids(
     Ok(freed as u64)
 }
 
-/// `DELETE /api/contacts/{id}`.
+/// `DELETE /api/v1/contacts/{id}`.
 #[utoipa::path(
     delete,
-    path = "/api/contacts/{id}",
+    path = "/api/v1/contacts/{id}",
     tag = "contacts",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Contact id")),
@@ -480,11 +480,11 @@ async fn delete_ids(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Option<Json<HeadOnly>>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let head = body.and_then(|Json(body)| body.head);
     delete_ids(
@@ -507,10 +507,10 @@ pub struct DeleteContacts {
     pub head: Option<String>,
 }
 
-/// `POST /api/contacts/delete` — deletes several contacts.
+/// `POST /api/v1/contacts/delete` — deletes several contacts.
 #[utoipa::path(
     post,
-    path = "/api/contacts/delete",
+    path = "/api/v1/contacts/delete",
     tag = "contacts",
     security(("BearerAuth" = [])),
     request_body = DeleteContacts,
@@ -518,10 +518,10 @@ pub struct DeleteContacts {
 )]
 pub async fn delete_many(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<DeleteContacts>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if input.ids.len() > MAX_IMPORT {
         return Err(AppError::bad_request("too many contacts at once"));
     }
@@ -556,10 +556,10 @@ pub struct ImportResult {
     pub imported: usize,
 }
 
-/// `POST /api/contacts/import` — adds up to 500 contacts, all or nothing.
+/// `POST /api/v1/contacts/import` — adds up to 500 contacts, all or nothing.
 #[utoipa::path(
     post,
-    path = "/api/contacts/import",
+    path = "/api/v1/contacts/import",
     tag = "contacts",
     security(("BearerAuth" = [])),
     request_body = ImportContacts,
@@ -570,10 +570,10 @@ pub struct ImportResult {
 )]
 pub async fn import(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<ImportContacts>,
 ) -> AppResult<Json<ImportResult>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if input.contacts.is_empty() || input.contacts.len() > MAX_IMPORT {
         return Err(AppError::bad_request("import 1 to 500 contacts at once"));
     }
@@ -615,22 +615,22 @@ pub struct ContactEmailRow {
     pub label: Option<String>,
 }
 
-/// `GET /api/contacts/emails?q=&limit=` — addresses whose address or name
+/// `GET /api/v1/contacts/emails?q=&limit=` — addresses whose address or name
 /// starts with `q` (any word of the name), recently used first; for the
 /// recipient, share and invitee pickers.
 #[utoipa::path(
     get,
-    path = "/api/contacts/emails",
+    path = "/api/v1/contacts/emails",
     tag = "contacts",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Matching addresses", body = [ContactEmailRow]))
 )]
 pub async fn emails(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<EmailQuery>,
 ) -> AppResult<Json<Vec<ContactEmailRow>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(20).clamp(1, 200);
     let q = query.q.unwrap_or_default().trim().to_lowercase();
     let pattern = format!(

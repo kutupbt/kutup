@@ -88,7 +88,7 @@ from one IP at the same moment already show; the batch doesn't add to it.
 - The payload is encrypted once. Each device gets a small header.
 - **Federation (a deviation, by necessity).** Signal has one server. We send one
   multi-recipient message per destination server. Each goes over the existing
-  sealed path: the client's own server forwards it to `/api/fed/chat/sealed/...`
+  sealed path: the client's own server forwards it to `/api/fed/v2/chat/sealed/...`
   without learning the sender, and the destination splits it into its users'
   mailboxes.
 - **Parsing.** The server parses the format with libsignal's own
@@ -401,7 +401,7 @@ revision (`SignalService.proto:947-951`).
   carries the id, `kutup/chat-group/state-key/v2\0` ‖ group id, with a
   vector in `chat-group-state-key-v2.json`). Signal derives
   `GroupSecretParams` the same way
-  (`zkgroup/src/api/groups/group_params.rs:67-86`). Our derivation is HKDF in
+  (`zkgroup/src/api/v1/groups/group_params.rs:67-86`). Our derivation is HKDF in
   `kutup-crypto`, as every Kutup format is.
   - **The id binds the home** (decided 2026-10-19, after the #268 review). A
     member who keeps the master key after removal (it isn't rotated, as in
@@ -1150,7 +1150,7 @@ exists. Once pairwise groups pass their gates, one change removes MLS:
   MLS manifest field and capability.
 - **Server:**
   - `chat_mls.rs` and the MLS files of `chat_mls/`;
-  - `/api/chat/mls/*`, `/api/fed/chat/mls/*` and the MLS ordering policy feature;
+  - `/api/v1/chat/mls/*`, `/api/fed/v2/chat/mls/*` and the MLS ordering policy feature;
   - `CHAT_MLS_ORDERING_POLICY` and `CHAT_MLS_CONTROL_SIGNING_KEY`;
   - the `rotate_mls_ordering_policy` command;
   - the fuzz target `mls_control_parsers`.
@@ -1249,7 +1249,7 @@ own fallback path (§1).
   transaction per destination.
   - **As built.** A group message's legs and a new sender key's
     distributions each go as one batch per destination server
-    (`POST /api/chat/anonymous/messages/batch`), cut at 64 recipients and
+    (`POST /api/v1/chat/anonymous/messages/batch`), cut at 64 recipients and
     4 MiB. Per leg:
     - `delivered` (stored at the recipient's server) finishes it;
     - `unavailable` and `peerUnsupported` end it as a refused direct send
@@ -1612,7 +1612,7 @@ endorsements, one request per destination server, and remote delivery that
 is synchronous with the pairwise path as its durable fallback. Reviewed by
 the third session (client side) and the main session.
 
-**1. The request.** `POST /api/chat/anonymous/messages/multi?server=<destination>`,
+**1. The request.** `POST /api/v1/chat/anonymous/messages/multi?server=<destination>`,
 anonymous (no bearer, no cookie), as today's sealed routes. Recipients on the
 sender's own server are the same request with `server=<own>`, delivered
 locally. Body `SealedMultiSubmissionV1`, canonical JSON:
@@ -1647,7 +1647,7 @@ token instead.*
 **2. Capabilities.** A new table, because today's `chat_delivery_capabilities`
 holds one profile-derived capability per account: `chat_group_capabilities
 (user_id, capability_hash bytea(32), created_at)`, no group id.
-- `PUT /api/chat/group-capabilities { "add": [hash], "remove": [hash] }`
+- `PUT /api/v1/chat/group-capabilities { "add": [hash], "remove": [hash] }`
   (bearer, the owner) adds and removes in one transaction, so a removal's swap
   is atomic; `POST …/set { "hashes": [...] }` sets exactly these (a device
   restoring from its group list).
@@ -1695,7 +1695,7 @@ durable sealed federation path doesn't fit a multi-recipient body (its 1 MiB
 transaction cap, one sequence per destination that a stuck row would block,
 per-recipient settlement). So:
 - the origin forwards the request at once to the destination's
-  `POST /api/fed/chat/sealed/multi` (signed federation, its own endpoint and
+  `POST /api/fed/v2/chat/sealed/multi` (signed federation, its own endpoint and
   size cap from §1), waits up to the usual timeout, and relays the answer as
   it is (`200` with `refused`/`rateLimited`, `409`, `410`);
 - a slow or unreachable destination is `503 peerUnavailable`: nothing is
@@ -1761,8 +1761,8 @@ when the peer is down, the destination refusing a foreign account.
 Estimate as §10 (8–10 days), the budgets and the storage change being most of it.
 
 **Built (second session, 2026-10-21):** group capabilities
-(`/api/chat/group-capabilities`), the multi-recipient route on the origin and
-the destination (`/api/fed/chat/sealed/multi`, synchronous, `503
+(`/api/v1/chat/group-capabilities`), the multi-recipient route on the origin and
+the destination (`/api/fed/v2/chat/sealed/multi`, synchronous, `503
 peerUnavailable` otherwise), shared-payload storage collected by reference,
 drain assembly with pages capped by bytes, and the budgets of §4 (the sealed
 batch route counts the address once per request and by bytes too). Every
@@ -1921,7 +1921,7 @@ participants. All administrators' settings.
 
 **9. Ringing.** Below 16 members a start rings, as Signal's
 `maxGroupCallRingSize`; the starter's own server's setting decides
-(`chat.groupCallRingMax` in `/api/auth/settings`).
+(`chat.groupCallRingMax` in `/api/v1/auth/settings`).
 
 **10. What each server learns.**
 - The home and its SFU: per participant an opaque identity it maps to a

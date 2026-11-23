@@ -4,15 +4,15 @@
 //! byte zero on any blip; tus gives bounded memory (S3 multipart) + resume (offset
 //! bookkeeping) + a commit of the encrypted metadata once the content is up. Flow:
 //!
-//!   OPTIONS /api/uploads        — discovery (anonymous)
-//!   POST    /api/uploads        — create session, allocate the S3 multipart
-//!   PATCH   /api/uploads/{id}    — append one part, bump the offset; the final PATCH
+//!   OPTIONS /api/v1/drive/uploads        — discovery (anonymous)
+//!   POST    /api/v1/drive/uploads        — create session, allocate the S3 multipart
+//!   PATCH   /api/v1/drive/uploads/{id}    — append one part, bump the offset; the final PATCH
 //!                                  completes the multipart, checks the stored object
 //!                                  and leaves an uploaded revision (the row kept, its
 //!                                  reservation held), made current by
 //!                                  `revision_commit::commit`
-//!   HEAD    /api/uploads/{id}    — resume: returns the current Upload-Offset
-//!   DELETE  /api/uploads/{id}    — cancel: abort the multipart, free reserved quota
+//!   HEAD    /api/v1/drive/uploads/{id}    — resume: returns the current Upload-Offset
+//!   DELETE  /api/v1/drive/uploads/{id}    — cancel: abort the multipart, free reserved quota
 //!
 //! Quota is soft-reserved: available bytes for a new upload are
 //! `quota - storage_used_bytes - SUM(uploads.total_bytes - received_bytes)`,
@@ -37,7 +37,7 @@ use crate::drive_blob::BlockBlob;
 use crate::drive_writes::Room;
 use crate::error::{AppError, AppResult};
 use crate::handlers::files::{canonical_uuid, validate_envelope};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::storage::{CompletedPart, MultipartUpload};
 use crate::AppState;
 
@@ -128,7 +128,7 @@ pub(crate) fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
 }
 
 // ---------------------------------------------------------------------------
-// OPTIONS /api/uploads — discovery
+// OPTIONS /api/v1/drive/uploads — discovery
 // ---------------------------------------------------------------------------
 
 /// Advertises the supported protocol version + extensions. No auth — the spec treats this
@@ -148,7 +148,7 @@ pub async fn options() -> Response {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/uploads — Create
+// POST /api/v1/drive/uploads — Create
 // ---------------------------------------------------------------------------
 
 /// Opens a new tus upload session — mirrors `Create`. Requires `Upload-Length` and an
@@ -157,22 +157,26 @@ pub async fn options() -> Response {
 /// `{"fileId": …}` body (tus-js-client surfaces it to the browser path).
 #[utoipa::path(
     post,
-    path = "/api/uploads",
-    tag = "tus",
+    path = "/api/v1/drive/uploads",
+    tag = "drive",
     operation_id = "tusCreate",
     security(("BearerAuth" = [])),
     params(
         ("Tus-Resumable" = String, Header, description = "Must be 1.0.0"),
         ("Upload-Length" = i64, Header, description = "Total upload size in bytes"),
-        ("Upload-Metadata" = String, Header, description = "Comma-separated `key <base64>` pairs. A new file: fileId, collectionId, fileKeyEnvelope, nameHash and revisionId. A new version of a file: versionOf, revisionId, and optional contentHash and basedOn. The upload lands as an uploaded revision, current only once committed (`POST /api/files/{id}/revisions/{revisionId}/commit`)")
+        ("Upload-Metadata" = String, Header, description = "Comma-separated `key <base64>` pairs. A new file: fileId, collectionId, fileKeyEnvelope, nameHash and revisionId. A new version of a file: versionOf, revisionId, and optional contentHash and basedOn. The upload lands as an uploaded revision, current only once committed (`POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`)")
     ),
     responses((status = 201, description = "Session created; `Location` + `Upload-Offset: 0` headers and a `{\"fileId\": …}` body"))
 )]
-pub async fn create(State(state): State<AppState>, user: AuthUser, headers: HeaderMap) -> Response {
+pub async fn create(
+    State(state): State<AppState>,
+    user: AuthAccount,
+    headers: HeaderMap,
+) -> Response {
     if let Some(resp) = require_tus_resumable(&headers) {
         return resp;
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -274,10 +278,10 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
             return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
         }
     };
-    let Some((owner_user_id, key_epoch)) = collection else {
+    let Some((owner_account_id, key_epoch)) = collection else {
         return tus_text(StatusCode::FORBIDDEN, "forbidden");
     };
-    let is_owner = owner_user_id == user_id;
+    let is_owner = owner_account_id == user_id;
 
     if !is_owner {
         let can_upload: Option<bool> = match sqlx::query_scalar(
@@ -415,7 +419,7 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         StatusCode::CREATED,
         [
             ("Tus-Resumable", TUS_VERSION.to_string()),
-            ("Location", format!("/api/uploads/{upload_id}")),
+            ("Location", format!("/api/v1/drive/uploads/{upload_id}")),
             ("Upload-Offset", "0".to_string()),
             ("Content-Type", "application/json".to_string()),
         ],
@@ -425,15 +429,15 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 }
 
 // ---------------------------------------------------------------------------
-// HEAD /api/uploads/{id} — resume
+// HEAD /api/v1/drive/uploads/{id} — resume
 // ---------------------------------------------------------------------------
 
 /// Returns the current `Upload-Offset` so the client can resume — mirrors `Head`. 404 if
 /// the upload doesn't exist / isn't owned by the caller.
 #[utoipa::path(
     head,
-    path = "/api/uploads/{id}",
-    tag = "tus",
+    path = "/api/v1/drive/uploads/{id}",
+    tag = "drive",
     operation_id = "tusHead",
     security(("BearerAuth" = [])),
     params(
@@ -444,14 +448,14 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 )]
 pub async fn head(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(resp) = require_tus_resumable(&headers) {
         return resp;
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -491,7 +495,7 @@ pub async fn head(
 }
 
 // ---------------------------------------------------------------------------
-// PATCH /api/uploads/{id} — extend
+// PATCH /api/v1/drive/uploads/{id} — extend
 // ---------------------------------------------------------------------------
 
 /// Appends bytes — mirrors `Patch`. Each PATCH becomes one S3 multipart part; parts before
@@ -500,8 +504,8 @@ pub async fn head(
 /// it returns `X-Kutup-File-Id`.
 #[utoipa::path(
     patch,
-    path = "/api/uploads/{id}",
-    tag = "tus",
+    path = "/api/v1/drive/uploads/{id}",
+    tag = "drive",
     operation_id = "tusPatch",
     security(("BearerAuth" = [])),
     params(
@@ -521,7 +525,7 @@ pub async fn head(
 )]
 pub async fn patch(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -535,7 +539,7 @@ pub async fn patch(
             "Content-Type must be application/offset+octet-stream",
         );
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -631,7 +635,7 @@ pub async fn patch(
     };
     let storage_path = crate::file_content::revision_path(file_id, revision_id);
     // Every byte is here and checked: what is left is the commit
-    // (`POST /api/files/{id}/revisions/{revisionId}/commit`).
+    // (`POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`).
     if uploaded {
         return (
             StatusCode::CONFLICT,
@@ -768,7 +772,7 @@ pub async fn patch(
             &state,
             tx,
             super::tus_versions::Landing {
-                user_id,
+                account_id: user_id,
                 upload_id,
                 file_id,
                 collection_id: coll_id,
@@ -1087,7 +1091,7 @@ pub(super) async fn mark_uploaded(
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /api/uploads/{id} — cancel
+// DELETE /api/v1/drive/uploads/{id} — cancel
 // ---------------------------------------------------------------------------
 
 /// Cancels an in-flight upload — mirrors `Delete`. Removes the DB row (freeing
@@ -1099,8 +1103,8 @@ pub(super) async fn mark_uploaded(
 /// not owned by the caller.
 #[utoipa::path(
     delete,
-    path = "/api/uploads/{id}",
-    tag = "tus",
+    path = "/api/v1/drive/uploads/{id}",
+    tag = "drive",
     operation_id = "tusDelete",
     security(("BearerAuth" = [])),
     params(
@@ -1111,14 +1115,14 @@ pub(super) async fn mark_uploaded(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(resp) = require_tus_resumable(&headers) {
         return resp;
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };

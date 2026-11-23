@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{
     CollectionRow, CreateCollectionRequest, CreateCollectionResult, MessageResponse,
     ShareCollectionRequest, UpdateCollectionRequest, UpdateColorRequest,
@@ -26,8 +26,7 @@ use crate::AppState;
 #[derive(sqlx::FromRow)]
 struct SharedCollectionDbRow {
     id: Uuid,
-    #[sqlx(rename = "owner_account_id")]
-    owner_user_id: Uuid,
+    owner_account_id: Uuid,
     name_envelope: String,
     key_epoch: i32,
     name_revision: i64,
@@ -84,21 +83,21 @@ fn decode_public_key(value: &str) -> AppResult<Vec<u8>> {
     Ok(bytes)
 }
 
-/// `GET /api/collections` — mirrors `ListCollections`. Owned collections, then those
+/// `GET /api/v1/drive/collections` — mirrors `ListCollections`. Owned collections, then those
 /// shared with the user (with the recipient-specific key + permissions + computed usage).
 #[utoipa::path(
     get,
-    path = "/api/collections",
-    tag = "collections",
+    path = "/api/v1/drive/collections",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Owned + shared collections", body = Vec<CollectionRow>))
 )]
 pub async fn list_collections(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    // Albums are the Photos app's (GET /api/albums), never Drive folders.
+    let user_id = trusted_uuid(&user.account_id)?;
+    // Albums are the Photos app's (GET /api/v1/photos/albums), never Drive folders.
     Ok(Json(collection_rows(&state, user_id, "folder").await?).into_response())
 }
 
@@ -166,7 +165,7 @@ pub(crate) async fn collection_rows(
                 name_hash_generation,
             )| CollectionRow {
                 id: id.to_string(),
-                owner_user_id: owner.to_string(),
+                owner_account_id: owner.to_string(),
                 name_envelope: name,
                 owner_key_envelope: Some(owner_key),
                 named_share_envelope: None,
@@ -245,7 +244,7 @@ pub(crate) async fn collection_rows(
             .ok_or_else(|| AppError::conflict("share owner identity is unavailable"))?;
         out.push(CollectionRow {
             id: row.id.to_string(),
-            owner_user_id: row.owner_user_id.to_string(),
+            owner_account_id: row.owner_account_id.to_string(),
             name_envelope: row.name_envelope,
             owner_key_envelope: None,
             named_share_envelope: Some(row.named_share_envelope),
@@ -275,21 +274,21 @@ pub(crate) async fn collection_rows(
     Ok(out)
 }
 
-/// `POST /api/collections` — mirrors `CreateCollection`.
+/// `POST /api/v1/drive/collections` — mirrors `CreateCollection`.
 #[utoipa::path(
     post,
-    path = "/api/collections",
-    tag = "collections",
+    path = "/api/v1/drive/collections",
+    tag = "drive",
     security(("BearerAuth" = [])),
     request_body = CreateCollectionRequest,
     responses((status = 201, description = "Collection created", body = CreateCollectionResult))
 )]
 pub async fn create_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<CreateCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     create_owned_collection(&state, user_id, req, "folder").await
 }
 
@@ -424,21 +423,21 @@ pub(crate) async fn create_owned_collection(
         .into_response())
 }
 
-/// `GET /api/collections/{id}` — mirrors `GetCollection`.
+/// `GET /api/v1/drive/collections/{id}` — mirrors `GetCollection`.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "One collection (owned or shared view)", body = CollectionRow))
 )]
 pub async fn get_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
     type Row = (
@@ -497,7 +496,7 @@ pub async fn get_collection(
             name_hash,
             name_hash_generation,
             id: cid.to_string(),
-            owner_user_id: owner.to_string(),
+            owner_account_id: owner.to_string(),
             name_envelope: name,
             owner_key_envelope: Some(owner_key),
             named_share_envelope: None,
@@ -566,7 +565,7 @@ pub async fn get_collection(
         name_hash: row.name_hash.clone(),
         name_hash_generation: None,
         id: coll_id.to_string(),
-        owner_user_id: row.owner_user_id.to_string(),
+        owner_account_id: row.owner_account_id.to_string(),
         name_envelope: row.name_envelope,
         owner_key_envelope: None,
         named_share_envelope: Some(row.named_share_envelope),
@@ -592,11 +591,11 @@ pub async fn get_collection(
     .into_response())
 }
 
-/// `PUT /api/collections/{id}` — mirrors `UpdateCollection` (rename).
+/// `PUT /api/v1/drive/collections/{id}` — mirrors `UpdateCollection` (rename).
 #[utoipa::path(
     put,
-    path = "/api/collections/{id}",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = UpdateCollectionRequest,
@@ -604,11 +603,11 @@ pub async fn get_collection(
 )]
 pub async fn update_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
     let mut tx = state.pool.begin().await?;
@@ -682,11 +681,11 @@ pub async fn update_collection(
     }
 }
 
-/// `PATCH /api/collections/{id}/color` — mirrors `UpdateCollectionColor`.
+/// `PATCH /api/v1/drive/collections/{id}/color` — mirrors `UpdateCollectionColor`.
 #[utoipa::path(
     patch,
-    path = "/api/collections/{id}/color",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/color",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = UpdateColorRequest,
@@ -694,11 +693,11 @@ pub async fn update_collection(
 )]
 pub async fn update_collection_color(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateColorRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
     // `#rrggbb`, stored lowercase; null or "" clears it. Every client (web,
     // CLI) writes the same form, so a colour set in one shows in the other.
@@ -722,24 +721,24 @@ pub async fn update_collection_color(
     }
 }
 
-/// `DELETE /api/collections/{id}` — soft-deletes the folder *and its whole subtree*
+/// `DELETE /api/v1/drive/collections/{id}` — soft-deletes the folder *and its whole subtree*
 /// (sub-folders + files) into the trash. The folder is the single trash entry
 /// (`trash_root_id = its id`); restore/purge operate on the entry and everything
 /// tagged with it. Items already in the trash keep their own entry + deletion time.
 #[utoipa::path(
     delete,
-    path = "/api/collections/{id}",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 204, description = "Folder + subtree moved to trash"))
 )]
 pub async fn delete_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
     let mut tx = state.pool.begin().await?;
@@ -747,7 +746,7 @@ pub async fn delete_collection(
     let subtree: Vec<Uuid> = sqlx::query_scalar(
         r#"WITH RECURSIVE subtree AS (
              SELECT id FROM drive_collections
-             -- An album is deleted with DELETE /api/albums/{id}, not trashed.
+             -- An album is deleted with DELETE /api/v1/photos/albums/{id}, not trashed.
              WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL AND kind = 'folder'
              UNION ALL
              SELECT c.id FROM drive_collections c
@@ -783,11 +782,11 @@ pub async fn delete_collection(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/collections/{id}/share` — mirrors `ShareCollection` (local share/upsert).
+/// `POST /api/v1/drive/collections/{id}/share` — mirrors `ShareCollection` (local share/upsert).
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/share",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/share",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = ShareCollectionRequest,
@@ -795,14 +794,14 @@ pub async fn delete_collection(
 )]
 pub async fn share_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<ShareCollectionRequest>,
 ) -> AppResult<Response> {
-    let sharer_id = trusted_uuid(&user.user_id)?;
+    let sharer_id = trusted_uuid(&user.account_id)?;
     // Invalid collection id ⇒ ownership check fails ⇒ 403 (matches Go).
     let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
-    let recipient_id = Uuid::parse_str(&req.recipient_user_id)
+    let recipient_id = Uuid::parse_str(&req.recipient_account_id)
         .map_err(|_| AppError::bad_request("invalid request"))?;
 
     let collection: Option<(Uuid, i32)> = sqlx::query_as(

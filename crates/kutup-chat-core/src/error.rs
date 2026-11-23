@@ -63,6 +63,20 @@ pub enum ChatError {
     /// A 409 named a device the served bundles didn't include (server inconsistency).
     #[error("no bundle for device {0}")]
     MissingBundle(u32),
+    /// The server no longer accepts this client's version (`clientTooOld`,
+    /// docs/plans/api-surface.md §1.5): the app must be updated. Holds the
+    /// minimum the server named.
+    #[error("this app is too old for the server; update it (needs {0})")]
+    ClientTooOld(String),
+    /// The server is older than this client supports
+    /// (`apiVersionUnsupported`). Holds the versions it serves.
+    #[error("the server runs an older Kutup than this app supports ({0})")]
+    ServerTooOld(String),
+    /// The server answered with another instance id than it had: it was
+    /// reset, and what this device keeps for it is to be dropped
+    /// (docs/plans/api-surface.md §5).
+    #[error("the server was reset; sign in again")]
+    ServerReset,
 }
 
 impl From<libsignal_protocol::SignalProtocolError> for ChatError {
@@ -116,6 +130,22 @@ impl From<base64::DecodeError> for ChatError {
 }
 
 impl ChatError {
+    /// The server refused this client's version, or the client the
+    /// server's, or the server was reset: retrying changes nothing, so the
+    /// network loops stop until the app is updated or signs in again.
+    pub fn stops_network(&self) -> bool {
+        matches!(
+            self,
+            Self::ClientTooOld(_) | Self::ServerTooOld(_) | Self::ServerReset
+        )
+    }
+
+    /// A failure to reach the server, or a server answer that says nothing
+    /// about the thing asked for: try again later, never conclude from it.
+    pub fn is_unreachable(&self) -> bool {
+        matches!(self, Self::Transport(_)) || self.stops_network()
+    }
+
     pub(crate) fn inbound_failure_kind(&self) -> crate::InboundFailureKind {
         use crate::InboundFailureKind as Kind;
         match self {
@@ -135,7 +165,10 @@ impl ChatError {
             | Self::ContactListUnconfirmed(_)
             | Self::SendNotConverged(_)
             | Self::MissingBundle(_)
-            | Self::LinkRequired => Kind::Unknown,
+            | Self::LinkRequired
+            | Self::ClientTooOld(_)
+            | Self::ServerTooOld(_)
+            | Self::ServerReset => Kind::Unknown,
         }
     }
 }

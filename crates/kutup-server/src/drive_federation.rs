@@ -36,7 +36,7 @@ use crate::federation::{
 };
 use crate::handlers::files::{canonical_uuid, validate_envelope};
 use crate::handlers::{random_token, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 pub(crate) const JSON_CONTENT_TYPE: &str = "application/json";
@@ -57,7 +57,7 @@ const MAX_MULTIPART_FIELD_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 /// An account and its keys, as every identity lookup answers it, here or on
-/// its server (`/api/users/by-address`, `/api/users/by-id`, and the signed
+/// its server (`/api/v1/accounts/by-address`, `/api/v1/accounts/by-id`, and the signed
 /// federated lookups): one shape, so clients never tell local from remote.
 pub struct AccountLookupResponse {
     /// The name the account goes by now on `server`, server-asserted: a
@@ -68,7 +68,7 @@ pub struct AccountLookupResponse {
     pub account_id: String,
     /// `username@server`: the label shown.
     pub account: String,
-    pub drive_hpke_public_key: String,
+    pub drive_xwing_public_key: String,
     pub account_incarnation_id: String,
     pub drive_signing_public_key: String,
     pub account_authority_public_key: String,
@@ -116,7 +116,7 @@ pub struct DriveInviteResponse {
     pub name_revision: i64,
     pub epoch_statement: String,
     pub epoch_statement_hash: String,
-    pub owner_user_id: Uuid,
+    pub owner_account_id: Uuid,
     pub owner_account: String,
     pub owner_incarnation_id: String,
     pub owner_signing_public_key: String,
@@ -153,8 +153,7 @@ pub struct IncomingDriveShare {
     pub name_revision: i64,
     pub epoch_statement: String,
     pub epoch_statement_hash: String,
-    #[sqlx(rename = "owner_account_id")]
-    pub owner_user_id: Uuid,
+    pub owner_account_id: Uuid,
     pub owner_account: String,
     pub owner_incarnation_id: String,
     pub owner_signing_public_key: String,
@@ -180,8 +179,7 @@ pub struct IncomingShareListQuery {
 pub struct FederatedDriveFile {
     pub id: Uuid,
     pub collection_id: Uuid,
-    #[sqlx(rename = "uploader_account_id")]
-    pub uploader_user_id: Uuid,
+    pub uploader_account_id: Uuid,
     pub metadata_envelope: String,
     pub file_key_envelope: String,
     pub key_epoch: i32,
@@ -212,8 +210,7 @@ pub struct FederatedDriveUploadResponse {
 pub(crate) struct OutgoingShare {
     id: Uuid,
     pub(crate) collection_id: Uuid,
-    #[sqlx(rename = "sharer_account_id")]
-    sharer_user_id: Uuid,
+    sharer_account_id: Uuid,
     recipient_account_id: Uuid,
     can_upload: bool,
     can_delete: bool,
@@ -301,7 +298,7 @@ pub(crate) fn remote_keys_consistent(remote: &AccountLookupResponse) -> bool {
         return false;
     };
     let authority: [u8; 32] = authority.try_into().expect("32 bytes, checked");
-    canonical_drive_hpke_key(&remote.drive_hpke_public_key, remote.identity_suite).is_ok()
+    canonical_drive_xwing_key(&remote.drive_xwing_public_key, remote.identity_suite).is_ok()
         && canonical_public_key(&remote.drive_signing_public_key).is_ok()
         && remote.account_incarnation_id
             == kutup_crypto::identity::incarnation_id_from_authority_public(&authority)
@@ -343,14 +340,13 @@ pub(crate) async fn note_recipient(
     Ok(())
 }
 
-/// A Drive HPKE public key of identity `suite`: X-Wing's 1216 bytes in suite
-/// 2, an X25519 key in suite 1 (until its account upgrades).
-pub(crate) fn canonical_drive_hpke_key(value: &str, suite: i16) -> AppResult<Vec<u8>> {
-    let len = match suite {
-        2 => kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN,
-        1 => kutup_chat_proto::legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN,
-        _ => return Err(AppError::bad_request("unknown account identity suite")),
-    };
+/// A Drive X-Wing public key (1216 bytes) of identity suite 2, the only
+/// suite (suite 1's X25519 keys are gone).
+pub(crate) fn canonical_drive_xwing_key(value: &str, suite: i16) -> AppResult<Vec<u8>> {
+    if suite != kutup_crypto::identity::IDENTITY_SUITE as i16 {
+        return Err(AppError::bad_request("unknown account identity suite"));
+    }
+    let len = kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN;
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| AppError::bad_request("invalid Drive identity key"))?;
@@ -381,7 +377,7 @@ fn validate_name_envelope(invite: &DriveInviteResponse) -> AppResult<()> {
         u64::try_from(invite.name_revision)
             .map_err(|_| AppError::bad_request("invalid Drive revision"))?,
         &invite.collection_id.to_string(),
-        &invite.owner_user_id.to_string(),
+        &invite.owner_account_id.to_string(),
     )
     .map_err(|_| AppError::bad_request("invalid Drive name envelope"))?;
     if STANDARD.encode(&bytes) != invite.name_envelope
@@ -467,7 +463,7 @@ fn stable_mutation_request_id(operation: &str, scope: &[&[u8]]) -> String {
 
 /// Local authenticated lookup of a remote Drive account through the pinned,
 /// signed federation transport.
-/// Another server's account by its name there (`GET /api/users/by-address`,
+/// Another server's account by its name there (`GET /api/v1/accounts/by-address`,
 /// the one place a name becomes an account: docs/plans/account-ids.md),
 /// asked of that server through federation. Each fetch counts against the
 /// caller's limit for that server.
@@ -490,17 +486,20 @@ pub(crate) async fn remote_user_by_name(
     }
     let federation = configured_stack(state)?;
     let response = federation
-        .send(
-            server,
-            drive_spec(
+        .send(server, {
+            // The one lookup by name, in the account namespace
+            // (docs/plans/api-surface.md §3).
+            let mut spec = drive_spec(
                 Method::GET,
-                format!("/api/fed/drive/users/{username}"),
+                crate::remote_renames::LOOKUP_PATH.into(),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 None,
                 MAX_DIRECTORY_RESPONSE_BYTES,
-            )?,
-        )
+            )?;
+            spec.query = Some(format!("name={username}"));
+            spec
+        })
         .await
         .map_err(gateway_error)?;
     // A held name there: where the account went (crate::remote_renames).
@@ -540,8 +539,8 @@ pub(crate) async fn remote_user_by_name(
 /// inside a URL fragment. The plaintext capability is never stored locally.
 #[utoipa::path(
     post,
-    path = "/api/collections/{collectionId}/federated-shares",
-    tag = "drive federation",
+    path = "/api/v1/drive/collections/{collectionId}/federated-shares",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("collectionId" = String, Path, description = "Owned collection id")),
     request_body = CreateFederatedShareRequest,
@@ -549,7 +548,7 @@ pub(crate) async fn remote_user_by_name(
 )]
 pub async fn create_federated_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(collection_id): Path<String>,
     Json(request): Json<CreateFederatedShareRequest>,
 ) -> AppResult<Response> {
@@ -557,7 +556,7 @@ pub async fn create_federated_share(
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let federation = configured_stack(&state)?;
@@ -577,7 +576,7 @@ pub async fn create_federated_share(
         .await
         .map_err(gateway_error)?;
 
-    let owner = trusted_uuid(&user.user_id)?;
+    let owner = trusted_uuid(&user.account_id)?;
     let collection_id =
         Uuid::parse_str(&collection_id).map_err(|_| AppError::forbidden("forbidden"))?;
     let collection: Option<(Uuid, i32, String)> = sqlx::query_as(
@@ -625,7 +624,7 @@ pub async fn create_federated_share(
         .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
     note_recipient(
         &state,
-        &user.user_id,
+        &user.account_id,
         &recipient,
         &named_share.recipient_incarnation_id,
     )
@@ -671,131 +670,99 @@ pub async fn create_federated_share(
         .into_response())
 }
 
-/// Signed server-to-server Drive account lookup.
-#[utoipa::path(
-    get,
-    path = "/api/fed/drive/users/{username}",
-    tag = "drive federation",
-    params(("username" = String, Path)),
-    responses((status = 200, description = "Signed local Drive account", body = AccountLookupResponse))
-)]
-pub async fn get_user(
-    State(state): State<AppState>,
-    Path(username): Path<String>,
-    headers: HeaderMap,
-) -> AppResult<Response> {
-    let federation = configured_stack(&state)?;
-    let path = format!("/api/fed/drive/users/{username}");
-    let authenticated = federation
-        .authenticate_inbound(
-            &headers,
-            "GET",
-            &path,
-            None,
-            &[],
-            FederationFeature::DriveV1,
+/// This server's account under `username` (any spelling), as a signed
+/// peer's lookup by name answers it (`GET /api/fed/v2/accounts/lookup`,
+/// crate::remote_renames::lookup): its id and the keys a share needs. A held
+/// or moved name answers its rename (`409 renamed`), an unknown one `404`.
+pub(crate) async fn local_account_by_name(
+    state: &AppState,
+    federation: &FederationStack,
+    username: &str,
+) -> AppResult<AccountLookupResponse> {
+    let username = canonical_username(username)?;
+    // Any spelling finds the account; the answer names it as stored.
+    type Row = (
+        Uuid,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        i16,
+        i32,
+    );
+    let identity: Option<Row> = sqlx::query_as(
+        "SELECT id, username, COALESCE(kutup_b64(drive_xwing_public_key), ''), COALESCE(encode(account_incarnation_id, 'hex'), ''),
+                COALESCE(kutup_b64(drive_signing_public_key), ''), COALESCE(kutup_b64(account_authority_public_key), ''),
+                COALESCE(kutup_b64(drive_key_binding), ''), identity_suite, drive_key_binding_epoch
+         FROM accounts WHERE id = kutup_current_account($1) AND state = 'active'
+          AND kutup_account_federates(id)",
+    )
+    .bind(username)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((
+        id,
+        stored,
+        hpke_key,
+        incarnation_id,
+        signing_key,
+        authority_key,
+        binding,
+        suite,
+        epoch,
+    )) = identity
+    else {
+        return Err(crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            username,
+            AppError::not_found("account not found"),
         )
-        .await?;
-    let result: AppResult<Response> = async {
-        let username = match canonical_username(&username) {
-            Ok(username) => username,
-            Err(error) => return signed_app_error(federation, &authenticated, error),
-        };
-        // Any spelling finds the account; the answer names it as stored.
-        type Row = (
-            Uuid,
-            String,
-            String,
-            String,
-            String,
-            String,
-            Option<String>,
-            i16,
-            i32,
-        );
-        let identity: Option<Row> = sqlx::query_as(
-            "SELECT id, username, COALESCE(kutup_b64(drive_xwing_public_key), ''), COALESCE(encode(account_incarnation_id, 'hex'), ''),
-                    COALESCE(kutup_b64(drive_signing_public_key), ''), COALESCE(kutup_b64(account_authority_public_key), ''),
-                    COALESCE(kutup_b64(drive_key_binding), ''), identity_suite, drive_key_binding_epoch
-             FROM accounts WHERE id = kutup_current_account($1) AND state = 'active'
-              AND kutup_account_federates(id)",
-        )
-        .bind(username)
-        .fetch_optional(&state.pool)
-        .await?;
-        let Some((
-            id,
-            stored,
-            hpke_key,
-            incarnation_id,
-            signing_key,
-            authority_key,
-            binding,
-            suite,
-            epoch,
-        )) = identity
-        else {
-            let error = crate::account_names::renamed_or(
-                &state.pool,
-                &state.config.chat_server_name,
-                username,
-                AppError::not_found("Drive user not found"),
-            )
-            .await;
-            return signed_app_error(federation, &authenticated, error);
-        };
-        signed_json(
-            federation,
-            &authenticated,
-            StatusCode::OK,
-            &AccountLookupResponse {
-                account: format!("{}@{}", stored, federation.server_name()),
-                username: stored,
-                server: federation.server_name().to_owned(),
-                account_id: id.to_string(),
-                drive_hpke_public_key: hpke_key,
-                account_incarnation_id: incarnation_id,
-                drive_signing_public_key: signing_key,
-                account_authority_public_key: authority_key,
-                drive_key_binding: binding,
-                identity_suite: suite,
-                drive_key_binding_epoch: epoch,
-            },
-        )
-    }
-    .await;
-    match result {
-        Ok(response) => Ok(response),
-        Err(error) => signed_app_error(federation, &authenticated, error),
-    }
+        .await);
+    };
+    Ok(AccountLookupResponse {
+        account: format!("{}@{}", stored, federation.server_name()),
+        username: stored,
+        server: federation.server_name().to_owned(),
+        account_id: id.to_string(),
+        drive_xwing_public_key: hpke_key,
+        account_incarnation_id: incarnation_id,
+        drive_signing_public_key: signing_key,
+        account_authority_public_key: authority_key,
+        drive_key_binding: binding,
+        identity_suite: suite,
+        drive_key_binding_epoch: epoch,
+    })
 }
 
 /// Accept an invite on the recipient server after fetching its metadata over
 /// the pinned remote identity and confirming the intended local username.
 #[utoipa::path(
     post,
-    path = "/api/drive/federation/shares",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     request_body = AcceptFederatedShareRequest,
     responses((status = 201, description = "Incoming federated share accepted", body = IncomingDriveShare))
 )]
 pub async fn accept_incoming_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<AcceptFederatedShareRequest>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let federation = configured_stack(&state)?;
     let server = canonical_domain(&request.server)?;
     validate_capability(&request.capability)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let local_incarnation: String = sqlx::query_scalar(
         "SELECT COALESCE(encode(account_incarnation_id, 'hex'), '') FROM accounts WHERE id = $1 AND state = 'active'",
     )
@@ -817,7 +784,7 @@ pub async fn accept_incoming_share(
     let owner_account = crate::remote_renames::note_account(
         &state.pool,
         server,
-        invite.owner_user_id,
+        invite.owner_account_id,
         &invite.owner_incarnation_id,
         &invite.owner_account,
     )
@@ -862,7 +829,7 @@ pub async fn accept_incoming_share(
     .bind(invite.name_revision)
     .bind(&invite.epoch_statement)
     .bind(&invite.epoch_statement_hash)
-    .bind(invite.owner_user_id)
+    .bind(invite.owner_account_id)
     .bind(&invite.owner_incarnation_id)
     .bind(&invite.owner_signing_public_key)
     .bind(&invite.owner_authority_public_key)
@@ -884,7 +851,7 @@ pub async fn accept_incoming_share(
             name_revision: invite.name_revision,
             epoch_statement: invite.epoch_statement,
             epoch_statement_hash: invite.epoch_statement_hash,
-            owner_user_id: invite.owner_user_id,
+            owner_account_id: invite.owner_account_id,
             owner_account,
             owner_incarnation_id: invite.owner_incarnation_id,
             owner_signing_public_key: invite.owner_signing_public_key,
@@ -914,7 +881,7 @@ async fn fetch_verified_invite(
             server,
             drive_spec(
                 Method::GET,
-                "/api/fed/drive/invite".into(),
+                "/api/fed/v2/drive/folder-shares/invite".into(),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(capability),
@@ -955,7 +922,7 @@ async fn fetch_verified_invite(
             &invite.collection_id.to_string(),
             u32::try_from(invite.key_epoch)
                 .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid Drive epoch"))?,
-            &crate::account_ids::from_peer(server, &invite.owner_user_id.to_string())?,
+            &crate::account_ids::from_peer(server, &invite.owner_account_id.to_string())?,
             &invite.owner_incarnation_id,
             &canonical_public_key(&invite.owner_signing_public_key)?,
             &crate::account_ids::local(federation.server_name(), local_user_id)?,
@@ -974,7 +941,7 @@ async fn fetch_verified_invite(
         .and_then(|_| {
             epoch_statement.verify_current_binding(
                 &invite.collection_id.to_string(),
-                &invite.owner_user_id.to_string(),
+                &invite.owner_account_id.to_string(),
                 u32::try_from(invite.key_epoch).unwrap_or(0),
             )
         })
@@ -993,7 +960,7 @@ async fn fetch_verified_invite(
     Ok(invite)
 }
 
-/// `POST /api/drive/federation/shares/{shareId}/refresh` — bring a share's
+/// `POST /api/v1/drive/federation/folder-shares/{shareId}/refresh` — bring a share's
 /// stored copy up to the owner's current folder key after a rotation
 /// (docs/plans/drive-share-revocation.md). The new epoch is accepted only
 /// from the same owner and folder, never older, and only if its signed
@@ -1001,26 +968,26 @@ async fn fetch_verified_invite(
 /// answers `403`/`404` from the owner's server.
 #[utoipa::path(
     post,
-    path = "/api/drive/federation/shares/{shareId}/refresh",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/refresh",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 200, description = "The share, current", body = IncomingDriveShare))
 )]
 pub async fn refresh_incoming_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let federation = configured_stack(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let share_uuid =
         Uuid::parse_str(&share_id).map_err(|_| AppError::not_found("share not found"))?;
     type Stored = (String, String, Uuid, i32, String, Uuid, String);
@@ -1052,7 +1019,7 @@ pub async fn refresh_incoming_share(
     )
     .await?;
     if invite.collection_id != collection_id
-        || invite.owner_user_id != owner_id
+        || invite.owner_account_id != owner_id
         || invite.owner_authority_public_key != authority
     {
         return Err(AppError::conflict(
@@ -1074,7 +1041,7 @@ pub async fn refresh_incoming_share(
                 &server,
                 drive_spec(
                     Method::GET,
-                    "/api/fed/drive/epochs".into(),
+                    "/api/fed/v2/drive/folder-shares/epochs".into(),
                     JSON_CONTENT_TYPE.into(),
                     Vec::new(),
                     Some(&capability),
@@ -1174,26 +1141,26 @@ pub async fn refresh_incoming_share(
     Ok(Json(refreshed).into_response())
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/epochs` — the remote folder's
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/epochs` — the remote folder's
 /// key history, relayed from its owner's server.
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/epochs",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/epochs",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 200, description = "Key history, oldest first", body = Vec<crate::handlers::folder_access::EpochLink>))
 )]
 pub async fn proxy_list_epochs(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -1202,7 +1169,7 @@ pub async fn proxy_list_epochs(
             &share.remote_domain,
             drive_spec(
                 Method::GET,
-                "/api/fed/drive/epochs".into(),
+                "/api/fed/v2/drive/folder-shares/epochs".into(),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(&share.remote_capability),
@@ -1221,18 +1188,18 @@ pub async fn proxy_list_epochs(
 
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(IncomingShareListQuery),
     responses((status = 200, description = "Incoming federated shares", body = Vec<IncomingDriveShare>))
 )]
 pub async fn list_incoming_shares(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<IncomingShareListQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let kind = match query.kind.as_deref() {
         None | Some("folder") => "folder",
         Some("album") => "album",
@@ -1264,18 +1231,18 @@ pub async fn list_incoming_shares(
 
 #[utoipa::path(
     delete,
-    path = "/api/drive/federation/shares/{shareId}",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 204, description = "Incoming share removed"))
 )]
 pub async fn remove_incoming_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let share_id = Uuid::parse_str(&share_id).map_err(|_| AppError::not_found("not found"))?;
     let result = sqlx::query(
         "DELETE FROM drive_federated_incoming_shares WHERE id = $1 AND account_id = $2",
@@ -1292,10 +1259,10 @@ pub async fn remove_incoming_share(
 
 pub(crate) async fn incoming_share(
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     share_id: &str,
 ) -> AppResult<IncomingShareSecret> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let share_id = Uuid::parse_str(share_id).map_err(|_| AppError::not_found("share not found"))?;
     sqlx::query_as(
         "SELECT owner_server, remote_capability
@@ -1310,22 +1277,22 @@ pub(crate) async fn incoming_share(
 
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/files",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 200, description = "Verified remote file list", body = Vec<FederatedDriveFile>))
 )]
 pub async fn proxy_list_files(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -1334,7 +1301,7 @@ pub async fn proxy_list_files(
             &share.remote_domain,
             drive_spec(
                 Method::GET,
-                "/api/fed/drive/files".into(),
+                "/api/fed/v2/drive/folder-shares/files".into(),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(&share.remote_capability),
@@ -1353,8 +1320,8 @@ pub async fn proxy_list_files(
 
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/files/{fileId}/content",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/content",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path), ("fileId" = String, Path)),
     responses(
@@ -1365,7 +1332,7 @@ pub async fn proxy_list_files(
 )]
 pub async fn proxy_download(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((share_id, file_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
@@ -1373,7 +1340,7 @@ pub async fn proxy_download(
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -1382,7 +1349,7 @@ pub async fn proxy_download(
         &state,
         &headers,
         &share.remote_domain,
-        format!("/api/fed/drive/files/{file_id}/content"),
+        format!("/api/fed/v2/drive/folder-shares/files/{file_id}/content"),
         &share.remote_capability,
     )
     .await
@@ -1390,8 +1357,8 @@ pub async fn proxy_download(
 
 #[utoipa::path(
     post,
-    path = "/api/drive/federation/shares/{shareId}/files",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     request_body(content = Vec<u8>, content_type = "multipart/form-data"),
@@ -1399,7 +1366,7 @@ pub async fn proxy_download(
 )]
 pub async fn proxy_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
     headers: HeaderMap,
     body: axum::body::Body,
@@ -1408,7 +1375,7 @@ pub async fn proxy_upload(
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -1426,14 +1393,14 @@ pub async fn proxy_upload(
     let request_id = stable_mutation_request_id(
         "upload",
         &[
-            user.user_id.as_bytes(),
+            user.account_id.as_bytes(),
             share_id.as_bytes(),
             spooled.content_digest.as_bytes(),
         ],
     );
     let mut spec = drive_spec(
         Method::POST,
-        "/api/fed/drive/files".into(),
+        "/api/fed/v2/drive/folder-shares/files".into(),
         content_type,
         Vec::new(),
         Some(&share.remote_capability),
@@ -1494,29 +1461,29 @@ fn is_http_token_byte(byte: u8) -> bool {
 
 #[utoipa::path(
     delete,
-    path = "/api/drive/federation/shares/{shareId}/files/{fileId}",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path), ("fileId" = String, Path)),
     responses((status = 204, description = "Remote encrypted file deleted"))
 )]
 pub async fn proxy_delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((share_id, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
     let mut spec = drive_spec(
         Method::DELETE,
-        format!("/api/fed/drive/files/{file_id}"),
+        format!("/api/fed/v2/drive/folder-shares/files/{file_id}"),
         JSON_CONTENT_TYPE.into(),
         Vec::new(),
         Some(&share.remote_capability),
@@ -1525,7 +1492,7 @@ pub async fn proxy_delete(
     spec.request_id = stable_mutation_request_id(
         "delete",
         &[
-            user.user_id.as_bytes(),
+            user.account_id.as_bytes(),
             share_id.as_bytes(),
             file_id.as_bytes(),
         ],
@@ -1544,8 +1511,8 @@ pub async fn proxy_delete(
 
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/invite",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/folder-shares/invite",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized invite", body = DriveInviteResponse))
 )]
 pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
@@ -1554,7 +1521,7 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
         .authenticate_inbound(
             &headers,
             "GET",
-            "/api/fed/drive/invite",
+            "/api/fed/v2/drive/folder-shares/invite",
             None,
             &[],
             FederationFeature::DriveV1,
@@ -1602,7 +1569,7 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
             name_revision,
             epoch_statement,
             epoch_statement_hash,
-            owner_user_id,
+            owner_account_id,
             named_share_envelope,
             owner_username,
             owner_incarnation_id,
@@ -1631,7 +1598,7 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
                 name_revision,
                 epoch_statement,
                 epoch_statement_hash,
-                owner_user_id,
+                owner_account_id,
                 owner_account: format!("{}@{}", owner_username, federation.server_name()),
                 owner_incarnation_id,
                 owner_signing_public_key,
@@ -1652,8 +1619,8 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
 
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/files",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/folder-shares/files",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized file list", body = Vec<FederatedDriveFile>))
 )]
 pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
@@ -1662,7 +1629,7 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Ap
         .authenticate_inbound(
             &headers,
             "GET",
-            "/api/fed/drive/files",
+            "/api/fed/v2/drive/folder-shares/files",
             None,
             &[],
             FederationFeature::DriveV1,
@@ -1697,12 +1664,12 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Ap
     }
 }
 
-/// `GET /api/fed/drive/epochs` — the shared folder's key history, for the
+/// `GET /api/fed/v2/drive/folder-shares/epochs` — the shared folder's key history, for the
 /// recipient's server and clients (docs/plans/drive-share-revocation.md).
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/epochs",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/folder-shares/epochs",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized key history", body = Vec<crate::handlers::folder_access::EpochLink>))
 )]
 pub async fn list_epochs(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
@@ -1711,7 +1678,7 @@ pub async fn list_epochs(State(state): State<AppState>, headers: HeaderMap) -> A
         .authenticate_inbound(
             &headers,
             "GET",
-            "/api/fed/drive/epochs",
+            "/api/fed/v2/drive/folder-shares/epochs",
             None,
             &[],
             FederationFeature::DriveV1,
@@ -1735,8 +1702,8 @@ pub async fn list_epochs(State(state): State<AppState>, headers: HeaderMap) -> A
 
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/files/{fileId}/content",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/folder-shares/files/{fileId}/content",
+    tag = "drive.federation",
     params(
         ("fileId" = String, Path),
         ("range" = Option<String>, Query, description = "One range: `a-b`, `a-` or `-k`"),
@@ -1755,7 +1722,7 @@ pub async fn download_file(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let path = format!("/api/fed/drive/files/{file_id}/content");
+    let path = format!("/api/fed/v2/drive/folder-shares/files/{file_id}/content");
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -1874,8 +1841,8 @@ pub async fn download_file(
 
 #[utoipa::path(
     post,
-    path = "/api/fed/drive/files",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/folder-shares/files",
+    tag = "drive.federation",
     request_body(content = Vec<u8>, content_type = "multipart/form-data"),
     responses((status = 201, description = "Idempotent encrypted upload", body = FederatedDriveUploadResponse))
 )]
@@ -1891,7 +1858,7 @@ pub async fn upload_file(
         .authenticate_inbound_streamed(
             &headers,
             "POST",
-            "/api/fed/drive/files",
+            "/api/fed/v2/drive/folder-shares/files",
             None,
             FederationFeature::DriveV1,
         )
@@ -1988,7 +1955,7 @@ pub async fn upload_file(
         // The folder owner pays for what peers add: their quota (and open
         // uploads) first, then the share's own limit, measured from its files.
         let owner_room =
-            crate::drive_writes::lock_headroom(&mut tx, share.sharer_user_id, None).await?;
+            crate::drive_writes::lock_headroom(&mut tx, share.sharer_account_id, None).await?;
         if parsed.size > owner_room {
             tx.rollback().await?;
             return signed_app_error(
@@ -2063,7 +2030,7 @@ pub async fn upload_file(
             )
             .bind(file_id)
             .bind(share.collection_id)
-            .bind(share.sharer_user_id)
+            .bind(share.sharer_account_id)
             .bind(&parsed.metadata_envelope)
             .bind(&parsed.file_key_envelope)
             .bind(share.key_epoch)
@@ -2080,7 +2047,7 @@ pub async fn upload_file(
             .map_err(crate::drive_names::map_unique_violation)?;
             crate::storage_pool::charge(
                 &mut *tx,
-                crate::storage_pool::Payer::Account(share.sharer_user_id),
+                crate::storage_pool::Payer::Account(share.sharer_account_id),
                 parsed.size,
             )
             .await?;
@@ -2119,8 +2086,8 @@ pub async fn upload_file(
 
 #[utoipa::path(
     delete,
-    path = "/api/fed/drive/files/{fileId}",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/folder-shares/files/{fileId}",
+    tag = "drive.federation",
     params(("fileId" = String, Path)),
     responses((status = 204, description = "Idempotent encrypted file deletion"))
 )]
@@ -2130,7 +2097,7 @@ pub async fn delete_file(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let path = format!("/api/fed/drive/files/{file_id}");
+    let path = format!("/api/fed/v2/drive/folder-shares/files/{file_id}");
     let authenticated = federation
         .authenticate_inbound(
             &headers,

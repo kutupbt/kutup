@@ -27,7 +27,7 @@ import {
 
 const context = {
   collectionId: '22222222-2222-4222-8222-222222222222',
-  ownerUserId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  ownerAccountId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   epoch: 3,
 }
 
@@ -63,7 +63,7 @@ describe('public-link collection-key envelope', () => {
     })).rejects.toThrow()
     await expect(openPublicLinkCollectionKeyV1(envelope, linkKey, {
       ...context,
-      ownerUserId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      ownerAccountId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     })).rejects.toThrow()
     await expect(openPublicLinkCollectionKeyV1(envelope, linkKey, {
       ...context,
@@ -75,8 +75,8 @@ describe('public-link collection-key envelope', () => {
 describe('owner copies under the Drive root (vectors shared with Rust)', () => {
   const v = vectors.driveOwnerKeys
   const roots = { driveRoot: v.driveRoot as DriveRoot, driveGeneration: v.driveRootGeneration }
-  const folder = { collectionId: v.collectionId, ownerUserId: v.ownerUserId, epoch: v.collectionEpoch }
-  const link = { linkId: v.linkId, ownerUserId: v.ownerUserId }
+  const folder = { collectionId: v.collectionId, ownerAccountId: v.ownerAccountId, epoch: v.collectionEpoch }
+  const link = { linkId: v.linkId, ownerAccountId: v.ownerAccountId }
 
   it('opens the checked-in owner copies and round-trips new ones', async () => {
     expect(await openOwnerCollectionKey(v.collectionKeyEnvelope, roots, folder)).toEqual(fromBase64(v.collectionKey))

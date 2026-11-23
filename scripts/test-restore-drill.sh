@@ -67,7 +67,8 @@ for expected in \
   "ghcr.io/kutupbt/*:0123456789ab" \
   "scripts/backup-postgres.sh --list" \
   "scripts/backup-postgres.sh --restore kutup-\\<newest\\>.dump.age $tmp/backup.key" \
-  "s3 sync --only-show-errors --delete s3://kutup-files s3://kutup-drill-files" \
+  "deleted blobs wait 7776000 s in the drill" \
+  "rclone/rclone:1.68.2 sync --config /dev/null --log-level NOTICE drill:kutup-files drill:kutup-drill-files" \
   "echo BACKGROUND_JOBS=... >> $tmp/state/kutup-restore-drill/l2/drill.env" \
   "echo OUTBOUND_DELIVERY=... >> $tmp/state/kutup-restore-drill/l2/drill.env" \
   "Stalwart: STALWART_RECOVERY_MODE=1, its queue held" \

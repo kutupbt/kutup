@@ -346,10 +346,11 @@ pub enum SettingSection {
     Backups,
     Mail,
     AccountRecords,
+    Sessions,
 }
 
 /// A whole-number setting administrators set: its key, its field in
-/// `/api/admin/settings`, its first value, its range, what it counts, and
+/// `/api/v1/admin/settings`, its first value, its range, what it counts, and
 /// whether one account may have its own value (docs/plans/settings-
 /// registry.md: only a setting that limits one account).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -608,7 +609,7 @@ pub async fn seed_chat_group_max_members(pool: &PgPool, initial: usize) -> Resul
     Ok(())
 }
 
-/// Every multi-recipient setting, as `/api/admin/settings` lists them.
+/// Every multi-recipient setting, as `/api/v1/admin/settings` lists them.
 pub const CHAT_MULTI_SETTINGS: [NumericSetting; 12] = [
     CHAT_GROUP_MAX_MEMBERS,
     CHAT_MULTI_MAX_MESSAGE_BYTES,
@@ -770,7 +771,7 @@ pub const CALENDAR_RECOMPUTE_BATCH: NumericSetting = NumericSetting {
     unit: SettingUnit::Count,
     per_account: false,
 };
-/// Alarms one page of `/api/calendar/alarms` answers.
+/// Alarms one page of `/api/v1/calendar/alarms` answers.
 pub const CALENDAR_ALARMS_PAGE: NumericSetting = NumericSetting {
     key: "calendar.alarms_page",
     field: "calendarAlarmsPage",
@@ -959,6 +960,18 @@ pub const TWO_FACTOR_RECOVERY_CODES: NumericSetting = NumericSetting {
     unit: SettingUnit::Count,
     per_account: true,
 };
+/// The authenticator app's codes taken either side of now, in 30-second
+/// steps (RFC 6238 §5.2's allowed drift): 1 takes the previous and the next
+/// step's code too. Each code still signs in once (`accounts.totp_last_step`).
+pub const TOTP_SKEW_STEPS: NumericSetting = NumericSetting {
+    key: "account.totp_skew_steps",
+    field: "totpSkewSteps",
+    default: 1,
+    min: 0,
+    max: 2,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
 /// Security keys one account may add (docs/plans/security-keys.md, D3;
 /// Proton allows 4): room for a backup key per device.
 pub const SECURITY_KEYS_PER_ACCOUNT: NumericSetting = NumericSetting {
@@ -1084,7 +1097,18 @@ pub const MAIL_OUTBOX_KEEP_SECONDS: NumericSetting = NumericSetting {
     unit: SettingUnit::Seconds,
     per_account: false,
 };
-pub const PRIVACY_SETTINGS: [NumericSetting; 9] = [
+/// How long a Chat send record (the send id that makes a retried send land
+/// once) is kept, in days; 0 keeps them.
+pub const CHAT_SEND_RETENTION_DAYS: NumericSetting = NumericSetting {
+    key: "chat.send_retention_days",
+    field: "chatSendRetentionDays",
+    default: 30,
+    min: 0,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+pub const PRIVACY_SETTINGS: [NumericSetting; 10] = [
     KEY_BACKUP_KEEP_DAYS,
     SECURITY_EVENT_RETENTION_DAYS,
     SECURITY_EVENTS_KEPT_PER_KIND,
@@ -1094,10 +1118,38 @@ pub const PRIVACY_SETTINGS: [NumericSetting; 9] = [
     ACCOUNT_CLOSING_DAYS,
     DESTRUCTION_EVENT_RETENTION_DAYS,
     MAIL_OUTBOX_KEEP_SECONDS,
+    CHAT_SEND_RETENTION_DAYS,
 ];
 
-pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [
+/// How long a sign-in lasts without being used, in days: each refresh of
+/// its token moves its end this far ahead (the web apps' refresh cookie
+/// lasts as long). A change applies to each session at its next refresh.
+pub const SESSION_TTL_DAYS: NumericSetting = NumericSetting {
+    key: "account.session_ttl_days",
+    field: "sessionTtlDays",
+    default: 30,
+    min: 1,
+    max: 365,
+    unit: SettingUnit::Days,
+    per_account: true,
+};
+/// How long a browser or program an account signed in from stays known to
+/// it without signing in again, in days (`crate::auth_check`: a known client
+/// isn't held to the account's unknown-client sign-in limits).
+pub const KNOWN_CLIENT_DAYS: NumericSetting = NumericSetting {
+    key: "account.known_client_days",
+    field: "knownClientDays",
+    default: 90,
+    min: 1,
+    max: 400,
+    unit: SettingUnit::Days,
+    per_account: true,
+};
+pub const SESSION_SETTINGS: [NumericSetting; 2] = [SESSION_TTL_DAYS, KNOWN_CLIENT_DAYS];
+
+pub const TWO_FACTOR_SETTINGS: [NumericSetting; 4] = [
     TWO_FACTOR_RECOVERY_CODES,
+    TOTP_SKEW_STEPS,
     SECURITY_KEYS_PER_ACCOUNT,
     WEBAUTHN_CEREMONY_SECONDS,
 ];
@@ -1552,13 +1604,13 @@ pub const BACKUP_SETTINGS: [NumericSetting; 5] = [
     HEALTH_PROBE_TIMEOUT_SECONDS,
 ];
 
-/// Every whole-number setting `/api/admin/settings` lists by field.
+/// Every whole-number setting `/api/v1/admin/settings` lists by field.
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
     registry().map(|(_, setting)| setting)
 }
 
 /// Every whole-number setting with its Server settings section: the
-/// registry `GET /api/admin/settings/registry` lists.
+/// registry `GET /api/v1/admin/settings/registry` lists.
 pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetting)> {
     let section = |section: SettingSection, settings: &'static [NumericSetting]| {
         settings.iter().map(move |setting| (section, setting))
@@ -1580,6 +1632,7 @@ pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetti
             SettingSection::AccountRecords,
             &ACCOUNT_RECORDS_SETTINGS,
         ))
+        .chain(section(SettingSection::Sessions, &SESSION_SETTINGS))
 }
 
 /// The multi-recipient limits now.

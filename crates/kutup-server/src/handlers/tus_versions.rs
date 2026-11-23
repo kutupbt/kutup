@@ -90,7 +90,7 @@ async fn check(
     Ok((collection_id, generation))
 }
 
-/// `POST /api/uploads` with `versionOf`: opens a version upload. `201` as a
+/// `POST /api/v1/drive/uploads` with `versionOf`: opens a version upload. `201` as a
 /// new file's; `409` with code `versionUploading` while another upload of a
 /// new version of this file is open, with `idleSeconds` since its last part
 /// (one idle a while was left by a crash, one active is still running), and
@@ -243,7 +243,7 @@ async fn open(
         StatusCode::CREATED,
         [
             ("Tus-Resumable", TUS_VERSION.to_string()),
-            ("Location", format!("/api/uploads/{upload_id}")),
+            ("Location", format!("/api/v1/drive/uploads/{upload_id}")),
             ("Upload-Offset", "0".to_string()),
             ("Content-Type", "application/json".to_string()),
         ],
@@ -254,7 +254,7 @@ async fn open(
 
 /// A version upload's last part arrived: its row as `patch` read it.
 pub(super) struct Landing {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub upload_id: Uuid,
     pub file_id: Uuid,
     /// The folder the file was in when the upload started (its content hash
@@ -298,7 +298,7 @@ pub(super) async fn finish(
     let checked = check(
         state,
         &mut tx,
-        landing.user_id,
+        landing.account_id,
         landing.file_id,
         Some(landing.key_generation),
         None,
@@ -383,7 +383,7 @@ pub(super) async fn commit(
     let (collection_now, _) = check(
         state,
         tx,
-        landing.user_id,
+        landing.account_id,
         landing.file_id,
         Some(landing.key_generation),
         landing
@@ -459,7 +459,7 @@ async fn record(
     )
     .bind(landing.revision_id)
     .bind(landing.file_id)
-    .bind(landing.user_id)
+    .bind(landing.account_id)
     .bind(landing.total_bytes)
     .bind(landing.key_generation)
     .bind(parent)
@@ -471,7 +471,7 @@ async fn record(
     .await?;
     crate::storage_pool::charge(
         &mut **tx,
-        crate::storage_pool::Payer::Account(landing.user_id),
+        crate::storage_pool::Payer::Account(landing.account_id),
         landing.total_bytes,
     )
     .await?;

@@ -33,7 +33,7 @@ use super::tus::{
     header_str, parse_upload_metadata, require_tus_resumable, tus_text, MIN_PART_SIZE, TUS_VERSION,
 };
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::storage::{CompletedPart, MultipartUpload};
 use crate::AppState;
 
@@ -244,13 +244,13 @@ async fn hash_stored_object(
 #[tracing::instrument(name = "chat_media.create_upload", skip_all)]
 pub async fn create_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     headers: HeaderMap,
 ) -> Response {
     if let Some(response) = require_tus_resumable(&headers) {
         return response;
     }
-    let user_id = match trusted_uuid(&user.user_id) {
+    let user_id = match trusted_uuid(&user.account_id) {
         Ok(value) => value,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -367,7 +367,10 @@ pub async fn create_upload(
         StatusCode::CREATED,
         [
             ("Tus-Resumable", TUS_VERSION.to_string()),
-            ("Location", format!("/api/chat/media/uploads/{upload_id}")),
+            (
+                "Location",
+                format!("/api/v1/chat/media/uploads/{upload_id}"),
+            ),
             ("Upload-Offset", "0".into()),
             ("Content-Type", "application/json".into()),
         ],
@@ -378,14 +381,15 @@ pub async fn create_upload(
 
 pub async fn head_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(response) = require_tus_resumable(&headers) {
         return response;
     }
-    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
+    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.account_id))
+    else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
     let row: Option<(i64, i64)> = match sqlx::query_as(
@@ -420,7 +424,7 @@ pub async fn head_upload(
 #[tracing::instrument(name = "chat_media.patch_upload", skip_all)]
 pub async fn patch_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -431,7 +435,8 @@ pub async fn patch_upload(
     if header_str(&headers, "Content-Type") != "application/offset+octet-stream" {
         return tus_text(StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalid Content-Type");
     }
-    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
+    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.account_id))
+    else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
     let client_offset = match header_str(&headers, "Upload-Offset").parse::<i64>() {
@@ -669,14 +674,15 @@ pub async fn patch_upload(
 
 pub async fn delete_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(response) = require_tus_resumable(&headers) {
         return response;
     }
-    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
+    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.account_id))
+    else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
     let row: Option<(String, String)> = match sqlx::query_as(
@@ -723,10 +729,10 @@ pub async fn delete_upload(
 #[tracing::instrument(name = "chat_media.deliver_local", skip_all)]
 pub async fn deliver_local(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(offer): Json<ChatMediaDeliveryOfferV1>,
 ) -> AppResult<Json<ChatMediaOfferResponseV1>> {
-    let origin_user_id = trusted_uuid(&user.user_id)?;
+    let origin_user_id = trusted_uuid(&user.account_id)?;
     let local_domain = state.config.chat_server_name.as_str();
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     offer
@@ -949,11 +955,11 @@ pub async fn deliver_local(
 #[tracing::instrument(name = "chat_media.download", skip_all)]
 pub async fn download_object(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let row: Option<(String, i64)> = sqlx::query_as(
@@ -998,10 +1004,10 @@ pub async fn download_object(
 /// per-recipient reference lifecycle and this endpoint fails closed.
 pub async fn discard_origin_object(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let mut tx = state.pool.begin().await?;
@@ -1063,10 +1069,10 @@ pub async fn discard_origin_object(
 /// the object and never reveals a sender or plaintext media metadata.
 pub async fn reference_info(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
 ) -> AppResult<Json<ChatMediaReferenceInfo>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let row: Option<(Uuid, i64, String)> = sqlx::query_as(
@@ -1095,10 +1101,10 @@ pub async fn reference_info(
 #[tracing::instrument(name = "chat_media.clear_reference", skip_all)]
 pub async fn clear_reference(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let mut tx = state.pool.begin().await?;
@@ -1175,9 +1181,9 @@ pub async fn clear_reference(
 
 pub async fn storage_summary(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<ChatMediaStorageSummary>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let (quota, used): (i64, i64) =
         crate::storage_pool::quota_and_used(&state.pool, user_id).await?;
     let drive: i64 = sqlx::query_scalar(

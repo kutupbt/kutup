@@ -33,7 +33,7 @@ struct Vectors {
     /// The owner's key binding, which the sealed list binds.
     binding: String,
     authority_public_key: String,
-    drive_hpke_public_key: String,
+    drive_xwing_public_key: String,
     drive_signing_public_key: String,
     drive_key_binding: String,
     revision: u64,
@@ -824,7 +824,7 @@ fn write_vectors() {
         account: account.into(),
         binding: BINDING.into(),
         authority_public_key: STANDARD.encode(identity.authority_public_key()),
-        drive_hpke_public_key: STANDARD.encode(identity.drive_hpke_public_key()),
+        drive_xwing_public_key: STANDARD.encode(identity.drive_xwing_public_key()),
         drive_signing_public_key: STANDARD.encode(identity.drive_signing_public_key()),
         drive_key_binding: STANDARD.encode(binding),
         revision: 7,
@@ -854,8 +854,8 @@ fn checked_in_vectors_hold() {
         v.authority_public_key
     );
     assert_eq!(
-        STANDARD.encode(identity.drive_hpke_public_key()),
-        v.drive_hpke_public_key
+        STANDARD.encode(identity.drive_xwing_public_key()),
+        v.drive_xwing_public_key
     );
     assert_eq!(
         STANDARD.encode(identity.drive_signing_public_key()),
@@ -871,7 +871,7 @@ fn checked_in_vectors_hold() {
         &key32(&v.authority_public_key),
         1,
         &STANDARD
-            .decode(&v.drive_hpke_public_key)
+            .decode(&v.drive_xwing_public_key)
             .unwrap()
             .try_into()
             .unwrap(),

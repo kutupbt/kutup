@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::rate_limits::{entry, RateLimitUnit};
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::ratelimit::{self, Section, Spec};
 use crate::site_settings::{self, NumericSetting, SettingSection, SettingUnit, ValueSource};
 use crate::AppState;
@@ -26,7 +26,7 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct RegistryEntry {
     pub key: &'static str,
-    /// Its field in `/api/admin/settings`.
+    /// Its field in `/api/v1/admin/settings`.
     pub field: &'static str,
     pub section: SettingSection,
     pub unit: SettingUnit,
@@ -47,19 +47,19 @@ pub struct RegistryResponse {
     pub settings: Vec<RegistryEntry>,
 }
 
-/// `GET /api/admin/settings/registry` — every whole-number setting with its
+/// `GET /api/v1/admin/settings/registry` — every whole-number setting with its
 /// section, unit, first value, range and value now: what Server settings
 /// builds its fields from.
 #[utoipa::path(
     get,
-    path = "/api/admin/settings/registry",
+    path = "/api/v1/admin/settings/registry",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Every whole-number setting", body = RegistryResponse))
 )]
 pub async fn registry(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<RegistryResponse>> {
     let stored: HashMap<String, String> =
         sqlx::query_as::<_, (String, String)>("SELECT key, value FROM site_settings")
@@ -204,11 +204,11 @@ async fn account_name(state: &AppState, id: Uuid) -> AppResult<Option<String>> {
         .ok_or_else(|| AppError::not_found("user not found"))
 }
 
-/// `GET /api/admin/users/{id}/limits` — the settings and rate limits that
+/// `GET /api/v1/admin/accounts/{id}/entitlements` — the settings and rate limits that
 /// limit one account, as they stand for this one.
 #[utoipa::path(
     get,
-    path = "/api/admin/users/{id}/limits",
+    path = "/api/v1/admin/accounts/{id}/entitlements",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path, description = "The account")),
@@ -219,7 +219,7 @@ async fn account_name(state: &AppState, id: Uuid) -> AppResult<Option<String>> {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<AccountLimitsResponse>> {
     account_name(&state, id).await?;
@@ -284,7 +284,7 @@ pub enum AccountLimitEntry {
     RateLimit(AccountRateLimitEntry),
 }
 
-/// `PUT /api/admin/users/{id}/limits/{key}` — gives the account its own
+/// `PUT /api/v1/admin/accounts/{id}/entitlements/{key}` — gives the account its own
 /// value of a setting or rate limit that limits one account (`key`: a
 /// setting's or a rate limit's key), or (`null`) takes it back. A value
 /// outside the range is refused, never clamped. Lowering it below what the
@@ -292,7 +292,7 @@ pub enum AccountLimitEntry {
 /// or `account.setRateLimit`.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}/limits/{key}",
+    path = "/api/v1/admin/accounts/{id}/entitlements/{key}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(
@@ -308,7 +308,7 @@ pub enum AccountLimitEntry {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path((id, key)): Path<(Uuid, String)>,
     Json(request): Json<UpdateLimitRequest>,
 ) -> AppResult<Json<AccountLimitEntry>> {
@@ -346,7 +346,7 @@ pub async fn update(
     let site = ratelimit::reload(&state.pool).await?;
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         action,
         Some(id),
         // Named as the pages name them: a rate limit by its own key (as

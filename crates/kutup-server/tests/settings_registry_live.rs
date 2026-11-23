@@ -1,6 +1,6 @@
 //! The settings registry and an account's own limits
 //! (docs/plans/settings-registry.md) against a live server: one account's
-//! Drive upload limit holds it and no one else, `/api/drive/limits` answers
+//! Drive upload limit holds it and no one else, `/api/v1/drive/limits` answers
 //! each account its own, values out of range or settings that don't limit
 //! one account are refused, a reset returns to the site's, and every change
 //! is audited.
@@ -26,7 +26,7 @@ impl Admin {
     fn put(&self, account: &str, key: &str, value: Value) -> (StatusCode, Value) {
         let r = bearer(
             self.c.put(format!(
-                "{}/api/admin/users/{account}/limits/{key}",
+                "{}/api/v1/admin/accounts/{account}/entitlements/{key}",
                 self.base
             )),
             &self.token,
@@ -48,7 +48,7 @@ impl Admin {
 }
 
 fn drive_limits(c: &Client, base: &str, token: &str) -> Value {
-    bearer(c.get(format!("{base}/api/drive/limits")), token)
+    bearer(c.get(format!("{base}/api/v1/drive/limits")), token)
         .send()
         .unwrap()
         .json()
@@ -87,7 +87,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
         .to_owned();
 
     // The registry lists which settings take an account's own value.
-    let registry = admin.get("/api/admin/settings/registry");
+    let registry = admin.get("/api/v1/admin/settings/registry");
     let per_account = |key: &str| {
         registry["settings"]
             .as_array()
@@ -103,7 +103,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
     // Only administrators set an account's own value.
     let r = bearer(
         c.put(format!(
-            "{base}/api/admin/users/{small_id}/limits/drive.upload_max_bytes"
+            "{base}/api/v1/admin/accounts/{small_id}/entitlements/drive.upload_max_bytes"
         )),
         &small.token,
     )
@@ -134,7 +134,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
     );
 
     // Listed on the account's page with where it comes from.
-    let listed = admin.get(&format!("/api/admin/users/{small_id}/limits"));
+    let listed = admin.get(&format!("/api/v1/admin/accounts/{small_id}/entitlements"));
     let upload = listed["settings"]
         .as_array()
         .unwrap()
@@ -186,7 +186,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
     let (status, _) = admin.put(&small_id, "chat.max_active_devices", json!(1));
     assert_eq!(status, StatusCode::OK);
     let public = |token: Option<&str>| {
-        let request = c.get(format!("{base}/api/auth/settings"));
+        let request = c.get(format!("{base}/api/v1/auth/settings"));
         let r = match token {
             Some(token) => bearer(request, token),
             None => request,
@@ -215,11 +215,11 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
     );
 
     // Audited.
-    let activity = admin.get("/api/admin/activity?limit=20");
+    let activity = admin.get("/api/v1/admin/activity?limit=20");
     assert!(
         activity["entries"].as_array().unwrap().iter().any(|e| {
             e["action"] == "account.setEntitlement"
-                && e["targetUserId"] == small_id
+                && e["targetAccountId"] == small_id
                 && e["payload"]["key"] == "drive.upload_max_bytes"
         }),
         "{activity}"
@@ -266,7 +266,7 @@ fn a_lowered_limit_removes_nothing() {
     };
     let subscribe = |token: &str| {
         bearer(
-            c.put(format!("{base}/api/calendar/push-subscription")),
+            c.put(format!("{base}/api/v1/calendar/push-subscription")),
             token,
         )
         .json(&json!({

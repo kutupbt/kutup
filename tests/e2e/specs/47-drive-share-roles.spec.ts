@@ -55,7 +55,7 @@ test('the owner changes what someone may do with a file without sharing it again
   await expect(bobEditor).toHaveAttribute('contenteditable', 'false', { timeout: 60_000 })
 
   // Made an editor from the row: one share request, nobody removed.
-  const shared = a.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
+  const shared = a.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/v1\/drive\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
   await chooseRole(a, 'Can edit')
   expect((await shared).status()).toBe(204)
   await expect(a.getByText(/can now edit it/).first()).toBeVisible({ timeout: 30_000 })
@@ -101,7 +101,7 @@ test('a folder manager changes what someone may do in a folder without sharing i
   await itemAction(a, folder, 'Share')
   dialog = a.getByRole('dialog')
   await expect(roleMenu(a)).toHaveText('Can view', { timeout: 30_000 })
-  const shared = a.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/collections\/[^/]+\/share$/.test(new URL(r.url()).pathname))
+  const shared = a.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/v1\/drive\/collections\/[^/]+\/share$/.test(new URL(r.url()).pathname))
   await chooseRole(a, 'Can add and edit')
   expect((await shared).status()).toBe(201)
   await expect(roleMenu(a)).toHaveText('Can add and edit', { timeout: 30_000 })
@@ -152,7 +152,7 @@ test('a file an editor passes on says who shared it and whose it is', async ({ b
   await expect(roleMenu(a)).toHaveText('Can view', { timeout: 30_000 })
   await chooseRole(a, 'Can edit')
   await expect(roleMenu(a)).toHaveText('Can edit', { timeout: 30_000 })
-  const allowed = a.waitForResponse((r) => ['PUT', 'POST', 'PATCH'].includes(r.request().method()) && /\/api\/files\/[^/]+\/sharing$/.test(new URL(r.url()).pathname))
+  const allowed = a.waitForResponse((r) => ['PUT', 'POST', 'PATCH'].includes(r.request().method()) && /\/api\/v1\/drive\/files\/[^/]+\/sharing$/.test(new URL(r.url()).pathname))
   // Checked once the server has it.
   await dialog.getByLabel('Editors can share').click()
   expect((await allowed).ok()).toBe(true)
@@ -168,7 +168,7 @@ test('a file an editor passes on says who shared it and whose it is', async ({ b
   await b.getByRole('button', { name: 'Share', exact: true }).click()
   const bobDialog = b.getByRole('dialog')
   await bobDialog.getByLabel('Kutup address').fill(carol.address)
-  const passedOn = b.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
+  const passedOn = b.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/v1\/drive\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
   await bobDialog.getByRole('button', { name: 'Share', exact: true }).click()
   expect((await passedOn).status()).toBe(204)
 

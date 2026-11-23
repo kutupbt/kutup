@@ -122,7 +122,7 @@ The old object is deleted after the new row commits. The existing
 
 Endpoints:
 
-- `PUT /api/files/{fileId}/thumbnails/{variant}?source={versionId|original}`
+- `PUT /api/v1/drive/files/{fileId}/thumbnails/{variant}?source={versionId|original}`
   — raw body (the envelope),
   size-checked against the variant cap before reading further; the server
   validates the envelope header (`drive_envelope::validate`: purpose 7, file
@@ -131,10 +131,10 @@ Endpoints:
   (`can_access_file`) — anyone who can change the content can change its
   picture. Quota: a transaction like `file_assets`, charging the uploader and
   releasing the previous object's bytes.
-- `GET /api/files/{fileId}/thumbnails/{variant}` — the envelope, `404` when
+- `GET /api/v1/drive/files/{fileId}/thumbnails/{variant}` — the envelope, `404` when
   there is none. `Cache-Control: private, max-age=31536000, immutable`, with
   the URL carrying `?v={updatedAt}`: the browser cache holds ciphertext only.
-- `DELETE /api/files/{fileId}/thumbnails` — both variants; used when a file's
+- `DELETE /api/v1/drive/files/{fileId}/thumbnails` — both variants; used when a file's
   content changes into something that has no preview.
 - File listings (`/collections/{id}/files`, search's per-folder lists) gain
   `thumbnails: { sm?: string, lg?: string }` — the `updatedAt` of each that

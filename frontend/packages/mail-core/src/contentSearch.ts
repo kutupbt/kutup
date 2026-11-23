@@ -7,6 +7,7 @@ import { getSession, subscribe as subscribeSession, useRequiredSession } from '@
 import { openMessageText, useMailAccount, type ListView, type MailAccount, type MailMessage, type Page, type PlaceKey } from './api'
 import { contentPage } from './contentFilter'
 import { createMailSearch, mailSearchMatcher, mailSearchStoreName, type DocRef, type IndexDoc, type MailSearchIndex, type SealedRecord, type SearchHit } from './searchWasm'
+import { storageReady } from '@kutup/crypto/storageGate'
 
 // Body search in the browser (docs/plans/mail-body-search.md), as Proton's
 // "Search message content": turned on by the reader, it downloads and opens
@@ -136,7 +137,8 @@ class SealedStore {
   private constructor(private readonly db: IDBDatabase) {}
 
   /** `onClosed`: another tab deletes the database, so this one lets go. */
-  static open(name: string, onClosed: () => void): Promise<SealedStore> {
+  static async open(name: string, onClosed: () => void): Promise<SealedStore> {
+    await storageReady()
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(name, 1)
       request.onupgradeneeded = () => request.result.createObjectStore('records')
@@ -253,7 +255,7 @@ export class ContentSearch {
 
   /** Named by an HMAC under a key from the object-id root: bound to no name, kept across a rotation. */
   static async open(masterKeys: MasterKeys, objectIdKey: ObjectIdKey, binding: string, account: MailAccount): Promise<ContentSearch> {
-    const dbName = `kutup-mail-search:${await mailSearchStoreName(objectIdKey)}`
+    const dbName = `kutup.mail.search:${await mailSearchStoreName(objectIdKey)}`
     const search = new ContentSearch(masterKeys, binding, account, dbName, await mailSearchMatcher())
     await search.exclusive(() => Promise.resolve())
     return search
@@ -843,11 +845,11 @@ export function useContentSearch(): ContentSearch | null {
     if (!account.data || typeof indexedDB === 'undefined') return
     let live = true
     const data = account.data
-    let promise = opened.get(session.userId)
+    let promise = opened.get(session.accountId)
     if (!promise) {
       promise = ContentSearch.open(session.masterKeys, session.roots.objectIdKey, session.envelopeBinding, data)
-      opened.set(session.userId, promise)
-      promise.catch(() => opened.delete(session.userId))
+      opened.set(session.accountId, promise)
+      promise.catch(() => opened.delete(session.accountId))
     }
     promise
       .then((s) => {
@@ -858,7 +860,7 @@ export function useContentSearch(): ContentSearch | null {
     return () => {
       live = false
     }
-  }, [account.data, session.userId, session.masterKeys, session.roots.objectIdKey, session.envelopeBinding])
+  }, [account.data, session.accountId, session.masterKeys, session.roots.objectIdKey, session.envelopeBinding])
   return search
 }
 

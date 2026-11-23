@@ -2,7 +2,7 @@
 //! slice 3, "The commit, as Proton's"). A block-format upload lands as an
 //! *uploaded revision*: stored, checked and counted in quota, but not
 //! current, since the metadata commits to the manifest's digest, known only
-//! after the last block. `POST /api/files/{id}/revisions/{revisionId}/commit`
+//! after the last block. `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`
 //! brings the sealed metadata and, in one transaction, makes the revision
 //! current: a new file appears in its folder, or a new version becomes the
 //! file's content with the content it replaced kept in its history.
@@ -26,7 +26,7 @@ use super::tus_versions::Landing;
 use crate::drive_blob::{revision_conflict, BlockBlob};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -65,8 +65,7 @@ pub struct CommitRevisionResponse {
 #[derive(sqlx::FromRow)]
 struct Uploaded {
     id: Uuid,
-    #[sqlx(rename = "account_id")]
-    user_id: Uuid,
+    account_id: Uuid,
     kind: String,
     collection_id: Uuid,
     total_bytes: i64,
@@ -80,11 +79,11 @@ struct Uploaded {
     uploaded: bool,
 }
 
-/// `POST /api/files/{id}/revisions/{revisionId}/commit`
+/// `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/revisions/{revisionId}/commit",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/revisions/{revisionId}/commit",
+    tag = "drive",
     operation_id = "commitFileRevision",
     security(("BearerAuth" = [])),
     params(
@@ -97,17 +96,17 @@ struct Uploaded {
         (status = 400, description = "An envelope not sealed for this file, key generation and metadata revision, a `revisionContentEnvelope` not sealed for this file, revision and key generation, an invalid `nameHash`, or a `nameHash` with a version"),
         (status = 403, description = "The caller may no longer write the file or into its folder"),
         (status = 404, description = "No uploaded revision of this file by the caller"),
-        (status = 409, description = "`code: revision_conflict`: `metadataRevision` is not the current + 1 (1 for a new file). `code: alreadyCommitted`: the revision is already current or in the history. `code: notUploaded`: the upload is still in progress. `code: version_conflict`: the file no longer holds the version the upload was based on. `code: name_taken`: the name was taken meanwhile (commit again with another name and its `nameHash`). `code: objectMissing`: the revision's object is not in storage (upload again). A key change or a folder gone: the commit cannot apply (cancel the upload)"),
+        (status = 409, description = "`code: revisionConflict`: `metadataRevision` is not the current + 1 (1 for a new file). `code: alreadyCommitted`: the revision is already current or in the history. `code: notUploaded`: the upload is still in progress. `code: versionConflict`: the file no longer holds the version the upload was based on. `code: nameTaken`: the name was taken meanwhile (commit again with another name and its `nameHash`). `code: objectMissing`: the revision's object is not in storage (upload again). A key change or a folder gone: the commit cannot apply (cancel the upload)"),
         (status = 413, description = "The quota was lowered below what the revision needs")
     )
 )]
 pub async fn commit(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((id, revision)): Path<(String, String)>,
     Json(request): Json<CommitRevisionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let revision_id = Uuid::parse_str(&revision).map_err(|_| AppError::not_found("not found"))?;
     if request.metadata_envelope.is_empty() || request.metadata_revision < 1 {
@@ -132,7 +131,7 @@ pub async fn commit(
     .fetch_optional(&mut *tx)
     .await?;
     // Only its uploader commits it.
-    let Some(mut row) = row.filter(|row| row.user_id == user_id) else {
+    let Some(mut row) = row.filter(|row| row.account_id == user_id) else {
         drop(tx);
         return Err(already_committed(&state, user_id, file_id, revision_id).await?);
     };
@@ -188,7 +187,7 @@ pub async fn commit(
         }
         "version" => {
             let landing = Landing {
-                user_id,
+                account_id: user_id,
                 upload_id: row.id,
                 file_id,
                 collection_id: row.collection_id,

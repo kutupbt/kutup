@@ -3,6 +3,7 @@ import type { CallLinkCrypto, CallLinkInfo, CallLinkKeys } from '@kutup/chat-cor
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import { toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
+import { clientFetch } from '@kutup/session/clientVersion'
 import { getSession } from '@kutup/session/store'
 import { forgetHostToken, rememberHostToken } from './hostTokens'
 import { randomBytes } from '@kutup/crypto/random'
@@ -85,7 +86,7 @@ async function owned(callLinkRoot: CallLinkRoot, stored: StoredLink): Promise<Ow
     return null
   }
   const { hostToken } = wasm.callLinkHostToken(callLinkRoot, stored.nonce)
-  const account = getSession()?.userId
+  const account = getSession()?.accountId
   if (account) rememberHostToken(account, stored.roomId, hostToken)
   return {
     roomId: stored.roomId,
@@ -100,7 +101,7 @@ async function owned(callLinkRoot: CallLinkRoot, stored: StoredLink): Promise<Ow
 
 /** Make a meeting and register it with this server. */
 function forgetOwnHostToken(roomId: string): void {
-  const account = getSession()?.userId
+  const account = getSession()?.accountId
   if (account) forgetHostToken(account, roomId)
 }
 
@@ -213,7 +214,7 @@ export interface MeetingSeat {
   seat: string
 }
 
-const seatKey = (roomId: string) => `kutup-meeting-seat:${roomId}`
+const seatKey = (roomId: string) => `kutup.chat.meetingSeat:${roomId}`
 
 export function meetingSeat(roomId: string): MeetingSeat {
   try {
@@ -257,7 +258,7 @@ async function asHolder<T>(
 ): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`/api/chat/call-links/${path}`, {
+    response = await clientFetch(`/api/v1/chat/call-links/${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(vouchFor ? { Authorization: `Bearer ${vouchFor}` } : {}) },
       credentials: 'omit',
@@ -338,7 +339,7 @@ export function knockMeeting(link: OpenCallLink, seat: MeetingSeat, label: strin
  */
 export function leaveKnock(link: OpenCallLink, knock: Knock): void {
   try {
-    void fetch('/api/chat/call-links/knock/leave', {
+    void clientFetch('/api/v1/chat/call-links/knock/leave', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'omit',

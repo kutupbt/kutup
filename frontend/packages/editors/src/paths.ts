@@ -95,7 +95,7 @@ export function openFile(navigate: NavigateFunction, folder: Pick<Folder, 'id' |
 
 /**
  * A public link's folder page, in Drive. `hash` is the link's fragment
- * (`#key=…`): the key goes along, never through a server.
+ * (`#v1.…`): the key goes along, never through a server.
  */
 export function publicFolderUrl(token: string, hash: string): string {
   return appUrl('drive', `/s/${encodeURIComponent(token)}${hash}`)

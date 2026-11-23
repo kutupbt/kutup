@@ -272,8 +272,8 @@ function UsesDialog({ code, onClose }: { code: RegistrationCode; onClose: () => 
         {uses.data ? (
           <ul className="divide-y divide-border">
             {uses.data.map((use) => (
-              <li key={use.userId} className="flex items-center justify-between py-2 text-sm">
-                <a className="font-medium text-primary hover:underline" href={`/admin/users/${use.userId}`}>
+              <li key={use.accountId} className="flex items-center justify-between py-2 text-sm">
+                <a className="font-medium text-primary hover:underline" href={`/admin/users/${use.accountId}`}>
                   {use.username}
                 </a>
                 <span className="text-muted-foreground">{formatInstant(use.usedAt, i18n.language)}</span>

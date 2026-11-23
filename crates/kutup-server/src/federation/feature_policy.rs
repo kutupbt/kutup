@@ -21,7 +21,7 @@ use super::identity::insert_system_audit;
 use super::{AuthenticatedFederationRequest, FederationRequestSpec, FederationStack};
 use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 use kutup_federation_proto::FederationFeature;
 use reqwest::Method;
@@ -375,7 +375,7 @@ async fn fetch_remote_envelope(
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
-                path: format!("/api/fed/policies/{feature}"),
+                path: format!("/api/fed/v2/policies/{feature}"),
                 query: sequence.map(|value| format!("sequence={value}")),
                 content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
@@ -398,7 +398,7 @@ async fn fetch_remote_envelope(
 
 pub(crate) async fn get_local_feature_policy(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    _auth: AuthAccount,
     Path(feature): Path<String>,
     Query(query): Query<PolicySequenceQuery>,
 ) -> AppResult<Response> {
@@ -420,7 +420,7 @@ pub(crate) async fn get_federated_feature_policy(
 ) -> AppResult<Response> {
     let federation = configured(&state)?;
     let feature_type = parse_feature(&feature)?;
-    let path = format!("/api/fed/policies/{feature}");
+    let path = format!("/api/fed/v2/policies/{feature}");
     let raw_query = query.sequence.map(|value| format!("sequence={value}"));
     let authenticated: AuthenticatedFederationRequest = federation
         .authenticate_inbound(

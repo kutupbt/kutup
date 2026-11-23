@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The answer to sharing with an account still on identity suite 1 (an
@@ -65,7 +65,7 @@ pub struct DriveIdentity {
     /// The address asked for, server-asserted: a lookup handle only.
     account: String,
     account_authority_public_key: String,
-    drive_hpke_public_key: String,
+    drive_xwing_public_key: String,
     drive_signing_public_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     drive_key_binding: Option<String>,
@@ -77,14 +77,14 @@ pub struct DriveIdentity {
     drive_key_binding_epoch: i32,
 }
 
-/// `POST /api/users/drive-identities` — the Drive identities of accounts on
+/// `POST /api/v1/drive/identities` — the Drive identities of accounts on
 /// this server, by exact address, many at once: a page that shows who shared
 /// what checks every person with one request (docs/plans/drive-identity-pins.md).
 /// Unknown or disabled accounts are left out. Rate-limited with the user
 /// lookups, each request counting once.
 #[utoipa::path(
     post,
-    path = "/api/users/drive-identities",
+    path = "/api/v1/drive/identities",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = DriveIdentitiesRequest,
@@ -92,7 +92,7 @@ pub struct DriveIdentity {
 )]
 pub async fn drive_identities(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Json(req): Json<DriveIdentitiesRequest>,
 ) -> AppResult<Response> {
     if req.accounts.len() > MAX_IDENTITIES_PER_LOOKUP {
@@ -135,7 +135,7 @@ pub async fn drive_identities(
                 account_id: id.to_string(),
                 account: format!("{username}{suffix}"),
                 account_authority_public_key: authority,
-                drive_hpke_public_key: hpke,
+                drive_xwing_public_key: hpke,
                 drive_signing_public_key: signing,
                 drive_key_binding: binding,
                 identity_suite: suite,

@@ -22,13 +22,13 @@ vi.mock('@kutup/session/client', () => ({
       if (path === '/mail/addresses') {
         return Promise.resolve({ data: [{ id: 'a', address: 'ada@kutup.test', state: 'active', keys: [{}], keyList: { data: 'd', signature: 's' } }] })
       }
-      if (path === '/user/me') return Promise.resolve({ data: { server: 'kutup.test', accountId: 'me' } })
+      if (path === '/account') return Promise.resolve({ data: { server: 'kutup.test', accountId: 'me' } })
       return Promise.resolve({ data: null })
     },
   },
 }))
 vi.mock('@kutup/session/store', () => ({
-  useRequiredSession: () => ({ sessionId: 's', address: 'ada@kutup.test', userId: 'me', masterKey: new Uint8Array(32), roots: { identityGeneration: 1, identityRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', driveGeneration: 1, driveRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', pseudonymRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', callLinkRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', objectIdKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' } }),
+  useRequiredSession: () => ({ sessionId: 's', address: 'ada@kutup.test', accountId: 'me', masterKey: new Uint8Array(32), roots: { identityGeneration: 1, identityRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', driveGeneration: 1, driveRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', pseudonymRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', callLinkRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', objectIdKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' } }),
 }))
 vi.mock('@kutup/crypto/accountRename', () => ({
   addressFolder: () => Promise.resolve((address: string) => address.toLowerCase()),

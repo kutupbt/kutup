@@ -193,8 +193,8 @@ export function FolderPage() {
 
   const mayChangeFile = useCallback(
     (container: Folder, file: DriveFile) =>
-      container.canManage || (container.canDelete && file.uploaderUserId === session.userId),
-    [session.userId],
+      container.canManage || (container.canDelete && file.uploaderAccountId === session.accountId),
+    [session.accountId],
   )
 
   const open = useCallback(

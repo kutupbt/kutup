@@ -40,7 +40,7 @@ fn the_roots_come_with_the_session_and_only_to_their_account() {
     assert_eq!(roots.call_link.as_bytes(), user.roots.call_link.as_bytes());
 
     // Another account's session gets its own, never these; no session, none.
-    let theirs: Value = bearer(c.get(format!("{base}/api/account/roots")), &other.token)
+    let theirs: Value = bearer(c.get(format!("{base}/api/v1/account/roots")), &other.token)
         .send()
         .unwrap()
         .json()
@@ -52,7 +52,7 @@ fn the_roots_come_with_the_session_and_only_to_their_account() {
         );
     }
     assert_eq!(
-        c.get(format!("{base}/api/account/roots"))
+        c.get(format!("{base}/api/v1/account/roots"))
             .send()
             .unwrap()
             .status(),
@@ -122,7 +122,10 @@ fn a_reset_replaces_the_roots() {
     );
     setup["grant"] = json!(grant);
     let r = bearer(
-        c.post(format!("{base}/api/admin/users/{}/wipe", user.id)),
+        c.post(format!(
+            "{base}/api/v1/admin/accounts/{}/reset-keys",
+            user.id
+        )),
         &admin_token,
     )
     .json(&setup)
@@ -137,7 +140,7 @@ fn a_reset_replaces_the_roots() {
     let roots = fetch_roots(&c, &base, &again.token, &again.master_key, &again.binding);
     assert_eq!(roots.identity.as_bytes(), again.roots.identity.as_bytes());
     assert_ne!(roots.identity.as_bytes(), user.roots.identity.as_bytes());
-    let records: Value = bearer(c.get(format!("{base}/api/account/roots")), &again.token)
+    let records: Value = bearer(c.get(format!("{base}/api/v1/account/roots")), &again.token)
         .send()
         .unwrap()
         .json()

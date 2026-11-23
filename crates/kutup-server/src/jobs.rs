@@ -29,7 +29,6 @@ const RATE_COUNTER_SWEEP_INTERVAL: Duration = Duration::from_secs(15 * 60);
 pub struct ChatMaintenancePolicy {
     pub mailbox_retention_days: i64,
     pub media_delivery_retention_days: i64,
-    pub send_retention_days: i64,
     pub device_expiry_days: i64,
 }
 
@@ -208,18 +207,27 @@ pub async fn chat_maintenance_once(
             Err(error) => tracing::warn!("chat maintenance: mailbox retention failed: {error}"),
         }
     }
-    if policy.send_retention_days > 0 {
-        match sqlx::query(
+    // Send records, after `chat.send_retention_days` (read on every pass; 0
+    // keeps them).
+    match crate::site_settings::CHAT_SEND_RETENTION_DAYS
+        .load(pool)
+        .await
+    {
+        Ok(0) => {}
+        Ok(send_retention_days) => match sqlx::query(
             "DELETE FROM chat_sends
              WHERE created_at < now() - ($1 * interval '1 day')
                AND NOT kutup_account_held(sender_account_id)",
         )
-        .bind(policy.send_retention_days)
+        .bind(send_retention_days)
         .execute(pool)
         .await
         {
             Ok(done) => result.send_rows = done.rows_affected(),
             Err(error) => tracing::warn!("chat maintenance: send retention failed: {error}"),
+        },
+        Err(error) => {
+            tracing::warn!("chat maintenance: reading the send retention failed: {error}")
         }
     }
     // Every kind's settled deliveries and answers given, after

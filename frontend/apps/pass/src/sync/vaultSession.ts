@@ -93,7 +93,7 @@ export class VaultSession {
     private readonly handle: VaultHandle,
     readonly folder: Folder,
     private file: DriveFile,
-    private readonly userId: string,
+    private readonly accountId: string,
     readonly canEdit: boolean,
     private baseVersion: string,
     private base: Uint8Array,
@@ -109,8 +109,8 @@ export class VaultSession {
    * device kept and had not saved; only the kept copy when Drive cannot be
    * reached. A wrong key throws {@link VaultError}.
    */
-  static async open(folder: Folder, file: DriveFile, key: VaultKeyInput, userId: string, canEdit: boolean): Promise<VaultSession> {
-    const kept = await outbox.get(userId, file.id)
+  static async open(folder: Folder, file: DriveFile, key: VaultKeyInput, accountId: string, canEdit: boolean): Promise<VaultSession> {
+    const kept = await outbox.get(accountId, file.id)
     let current: { contents: Uint8Array; version: string } | null = null
     try {
       current = await readCurrentVault(file)
@@ -121,7 +121,7 @@ export class VaultSession {
       // Offline: the kept copy, edits and all.
       const record = kept!
       const handle = await VaultHandle.open(record.pending ?? record.base, key)
-      const session = new VaultSession(handle, folder, file, userId, canEdit, record.baseVersion, record.base, await handle.view(), true)
+      const session = new VaultSession(handle, folder, file, accountId, canEdit, record.baseVersion, record.base, await handle.view(), true)
       session.dirty = Boolean(record.pending)
       session.set({ status: record.pending ? 'offline' : 'saved' })
       if (record.pending) session.scheduleRetry()
@@ -129,15 +129,15 @@ export class VaultSession {
     }
     if (kept?.pending) {
       const handle = await VaultHandle.open(kept.pending, key)
-      const session = new VaultSession(handle, folder, file, userId, canEdit, kept.baseVersion, kept.base, await handle.view(), false)
+      const session = new VaultSession(handle, folder, file, accountId, canEdit, kept.baseVersion, kept.base, await handle.view(), false)
       session.dirty = true
       if (current.version !== kept.baseVersion) await session.mergeTheirs(current.contents, current.version)
       session.scheduleSave(0)
       return session
     }
     const handle = await VaultHandle.open(current.contents, key)
-    await outbox.put(userId, { fileId: file.id, baseVersion: current.version, base: current.contents, pending: null, savedAt: Date.now() })
-    return new VaultSession(handle, folder, file, userId, canEdit, current.version, current.contents, await handle.view(), false)
+    await outbox.put(accountId, { fileId: file.id, baseVersion: current.version, base: current.contents, pending: null, savedAt: Date.now() })
+    return new VaultSession(handle, folder, file, accountId, canEdit, current.version, current.contents, await handle.view(), false)
   }
 
   get fileId(): string {
@@ -247,7 +247,7 @@ export class VaultSession {
       // Drive holds it: the outbox's base follows, so a later offline edit
       // merges against the vault under its new key.
       await outbox
-        .put(this.userId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: null, savedAt: Date.now() })
+        .put(this.accountId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: null, savedAt: Date.now() })
         .catch(() => undefined)
       this.set({ view: await this.handle.view() })
       return changed
@@ -312,7 +312,7 @@ export class VaultSession {
       this.dirty = false
       this.set({ status: 'saving' })
       const contents = await this.handle.save()
-      await outbox.put(this.userId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: contents, savedAt: Date.now() })
+      await outbox.put(this.accountId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: contents, savedAt: Date.now() })
       try {
         const saved = await this.push(contents)
         this.file = saved.file
@@ -322,7 +322,7 @@ export class VaultSession {
         await this.keyChangeLanded()
         // Edits made while saving stay pending in the outbox.
         if (!this.dirty) {
-          await outbox.put(this.userId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: null, savedAt: Date.now() })
+          await outbox.put(this.accountId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: null, savedAt: Date.now() })
         }
       } catch (error) {
         this.dirty = true
@@ -382,7 +382,7 @@ export class VaultSession {
     // The newest version opens with our key: a key change whose save got no
     // answer did land (there is nothing left to push for it).
     if (outcome.theirsUnderCurrentKey) await this.keyChangeLanded()
-    await outbox.put(this.userId, {
+    await outbox.put(this.accountId, {
       fileId: this.file.id,
       baseVersion: version,
       base: contents,

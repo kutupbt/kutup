@@ -63,7 +63,7 @@ fn form_upload(
             revision_content_at(file, revision),
         )
         .part("file", multipart::Part::bytes(bytes).file_name("encrypted"));
-    bearer(c.post(format!("{base}/api/files/upload")), &user.token)
+    bearer(c.post(format!("{base}/api/v1/drive/files")), &user.token)
         .multipart(form)
         .send()
         .unwrap()
@@ -97,7 +97,7 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
     let folder = create_folder(&c, &base, &owner);
 
     // The limits a client reads.
-    let limits: Value = bearer(c.get(format!("{base}/api/drive/limits")), &owner.token)
+    let limits: Value = bearer(c.get(format!("{base}/api/v1/drive/limits")), &owner.token)
         .send()
         .unwrap()
         .json()
@@ -168,7 +168,7 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
     assert_eq!(r.json::<Value>().unwrap()["code"], "revisionTaken");
 
     // --- Ranged reads: the ETag is the revision id. ---
-    let url = format!("{base}/api/files/{}/download", file.id);
+    let url = format!("{base}/api/v1/drive/files/{}/download", file.id);
     let etag = format!("\"{revision}\"");
     let whole = get(&c, &url, &owner.token, &[]);
     assert_eq!(whole.status(), StatusCode::OK);
@@ -244,7 +244,7 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
             multipart::Part::bytes(saved.clone()).file_name("version"),
         );
     let r = bearer(
-        c.post(format!("{base}/api/files/{}/versions", file.id)),
+        c.post(format!("{base}/api/v1/drive/files/{}/versions", file.id)),
         &owner.token,
     )
     .multipart(form)
@@ -265,7 +265,10 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
     assert_eq!(stale.status(), StatusCode::OK);
     let by_version = get(
         &c,
-        &format!("{base}/api/files/{}/versions/{version}/download", file.id),
+        &format!(
+            "{base}/api/v1/drive/files/{}/versions/{version}/download",
+            file.id
+        ),
         &owner.token,
         &[("Range", "bytes=0-47")],
     );
@@ -383,7 +386,7 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
     .map(|(k, v)| format!("{k} {}", b64(v.as_bytes())))
     .collect::<Vec<_>>()
     .join(",");
-    let created = bearer(c.post(format!("{base}/api/uploads")), &owner.token)
+    let created = bearer(c.post(format!("{base}/api/v1/drive/uploads")), &owner.token)
         .header("Tus-Resumable", "1.0.0")
         .header("Upload-Length", next.len().to_string())
         .header("Upload-Metadata", meta)
@@ -392,10 +395,10 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
     assert_eq!(created.status(), StatusCode::CREATED);
     assert_eq!(
         header(&created, "location"),
-        format!("/api/uploads/{version}")
+        format!("/api/v1/drive/uploads/{version}")
     );
     let stranger = register(&c, &base);
-    let at = format!("{base}/api/uploads/{version}");
+    let at = format!("{base}/api/v1/drive/uploads/{version}");
     let tus = |request: reqwest::blocking::RequestBuilder| {
         request
             .header("Tus-Resumable", "1.0.0")
@@ -485,7 +488,7 @@ fn tus_create_blocks(
     .map(|(k, v)| format!("{k} {}", b64(v.as_bytes())))
     .collect::<Vec<_>>()
     .join(",");
-    bearer(c.post(format!("{base}/api/uploads")), token)
+    bearer(c.post(format!("{base}/api/v1/drive/uploads")), token)
         .header("Tus-Resumable", "1.0.0")
         .header("Upload-Length", length.to_string())
         .header("Upload-Metadata", meta)

@@ -81,7 +81,7 @@ export type IdentityStatus =
 
 /** The keys a share or a lookup put to this person; what is absent is not compared. */
 export interface ClaimedKeys {
-  driveHpkePublicKey?: string
+  driveXwingPublicKey?: string
   driveSigningPublicKey?: string
   incarnationId?: string
   authorityPublicKey?: string
@@ -95,7 +95,7 @@ export interface PublishedIdentity {
   server: string
   accountId: string
   accountAuthorityPublicKey: string
-  driveHpkePublicKey: string
+  driveXwingPublicKey: string
   driveSigningPublicKey: string
   driveKeyBinding?: string | null
   /**
@@ -118,14 +118,14 @@ async function keysBound(person: PublishedIdentity): Promise<boolean> {
   return verifyDriveKeyBinding(
     refOf(person),
     person.accountAuthorityPublicKey,
-    person.driveHpkePublicKey,
+    person.driveXwingPublicKey,
     person.driveSigningPublicKey,
     person.driveKeyBinding,
     person.driveKeyBindingEpoch!,
   ).catch(() => false)
 }
 
-/** An account as a single lookup answers it (`/users/by-address`, `/users/by-id`). */
+/** An account as a single lookup answers it (`/accounts/by-address`, `/accounts/by-id`). */
 export interface AccountAnswer extends PublishedIdentity {
   username: string
   accountIncarnationId: string
@@ -153,7 +153,7 @@ async function fetchIdentity(me: DriveIdentity, account: string): Promise<Publis
     server === me.account.split('@')[1]
       ? await localIdentity(account)
       // Another server's account: the same lookup, through this server.
-      : (await api.get<PublishedIdentity>(`/users/by-address/${encodeURIComponent(account)}`)).data
+      : (await api.get<PublishedIdentity>(`/accounts/by-address/${encodeURIComponent(account)}`)).data
   if (data.account !== account) throw new Error('the lookup answered for another account')
   // An account lives on the server of its address.
   if (data.server !== server) throw new Error('the lookup answered for an account on another server')
@@ -192,7 +192,7 @@ async function flush(): Promise<void> {
   for (let start = 0; start < batch.length; start += BATCH) {
     const part = batch.slice(start, start + BATCH)
     try {
-      const { data } = await api.post<PublishedIdentity[]>('/users/drive-identities', {
+      const { data } = await api.post<PublishedIdentity[]>('/drive/identities', {
         accounts: [...new Set(part.map((entry) => entry.account))],
       })
       const found = new Map(data.map((identity) => [identity.account, identity]))
@@ -215,7 +215,7 @@ interface PinStore {
   pins: PinsText
 }
 
-let store: { userId: string; loaded: Promise<PinStore> } | null = null
+let store: { accountId: string; loaded: Promise<PinStore> } | null = null
 let writes: Promise<unknown> = Promise.resolve()
 
 /** The highest revision this browser has seen: a server cannot quietly hand back an older list. */
@@ -236,7 +236,7 @@ const SCOPE = 'pins'
 const RECORD_ID = 'pins'
 
 function headFor(me: DriveIdentity) {
-  return accountHead({ userId: me.userId, masterKeys: me.masterKeys, roots: me.roots, envelopeBinding: me.binding })
+  return accountHead({ accountId: me.accountId, masterKeys: me.masterKeys, roots: me.roots, envelopeBinding: me.binding })
 }
 
 /**
@@ -295,9 +295,9 @@ async function openPins(me: DriveIdentity, copy: ScopeRecords): Promise<PinStore
 }
 
 function pinStore(me: DriveIdentity): Promise<PinStore> {
-  if (!store || store.userId !== me.userId) {
+  if (!store || store.accountId !== me.accountId) {
     const loaded = fetchPins(me)
-    store = { userId: me.userId, loaded }
+    store = { accountId: me.accountId, loaded }
     loaded.catch(() => {
       if (store?.loaded === loaded) store = null
     })
@@ -327,7 +327,7 @@ function updatePins(me: DriveIdentity, change: (pins: PinsText) => Promise<PinsT
     })
     if (!stored) return
     await revisionGuard({ ...me, envelopeBinding: me.binding }).accept(PINS_SCOPE, PINS_ID, stored.revision)
-    store = { userId: me.userId, loaded: Promise.resolve(stored) }
+    store = { accountId: me.accountId, loaded: Promise.resolve(stored) }
   }
   const result = writes.then(run, run)
   writes = result.catch(() => undefined)
@@ -391,7 +391,7 @@ function signedAccountId(entry: RenameChainEntry): string {
 
 /** The rename chains that name `address`. */
 async function fetchRenames(address: string): Promise<RenameChains> {
-  return (await api.get<RenameChains>(`/users/renames/${encodeURIComponent(address)}`)).data
+  return (await api.get<RenameChains>(`/accounts/by-address/${encodeURIComponent(address)}/renames`)).data
 }
 
 /** Where a person known at an address they left is now. */
@@ -700,7 +700,7 @@ async function checkPublished(
   if (person.server !== account.slice(account.lastIndexOf('@') + 1).toLowerCase()) return { kind: 'invalid' }
   // The keys in use must be the ones the person's server publishes...
   if (
-    (claimed.driveHpkePublicKey && claimed.driveHpkePublicKey !== person.driveHpkePublicKey) ||
+    (claimed.driveXwingPublicKey && claimed.driveXwingPublicKey !== person.driveXwingPublicKey) ||
     (claimed.driveSigningPublicKey && claimed.driveSigningPublicKey !== person.driveSigningPublicKey) ||
     (claimed.authorityPublicKey && claimed.authorityPublicKey !== person.accountAuthorityPublicKey)
   ) {
@@ -961,12 +961,12 @@ export function checkAnswer(me: DriveIdentity, address: string, answer: AccountA
 
 /**
  * The account `address` leads to, here or on another server: one lookup
- * (`/users/by-address`). Not found is `RecipientNotFound`-worthy (null); a
+ * (`/accounts/by-address`). Not found is `RecipientNotFound`-worthy (null); a
  * name its person left is `RecipientRenamed`.
  */
 export async function lookupAddress(me: DriveIdentity, address: string): Promise<AccountAnswer | null> {
   try {
-    return (await api.get<AccountAnswer>(`/users/by-address/${encodeURIComponent(address)}`)).data
+    return (await api.get<AccountAnswer>(`/accounts/by-address/${encodeURIComponent(address)}`)).data
   } catch (error) {
     if ((error as { response?: { status?: number } }).response?.status === 404) return null
     throw await recipientError(me, address, error)

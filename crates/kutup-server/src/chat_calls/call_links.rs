@@ -35,7 +35,7 @@ use super::group_calls::{
     hosts_group_calls, livekit_token_with, GroupCallTokenResponse, TokenExtras,
 };
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Links one account may keep at a time.
@@ -159,7 +159,7 @@ pub(super) async fn vouched_account(state: &AppState, headers: &HeaderMap) -> Op
     let user = crate::middleware::authenticate_access_token(state, token)
         .await
         .ok()?;
-    Uuid::parse_str(&user.user_id).ok()
+    Uuid::parse_str(&user.account_id).ok()
 }
 
 /// The address a vouched-for account goes by now, for the others to see.
@@ -192,8 +192,8 @@ pub(super) fn base64_exact(name: &str, value: &str, bytes: usize) -> AppResult<V
     decoded.ok_or_else(|| AppError::bad_request(format!("{name} is {bytes} bytes of base64")))
 }
 
-pub(super) fn owner(auth: &AuthUser) -> AppResult<Uuid> {
-    Uuid::parse_str(&auth.user_id).map_err(|_| AppError::internal("invalid user id"))
+pub(super) fn owner(auth: &AuthAccount) -> AppResult<Uuid> {
+    Uuid::parse_str(&auth.account_id).map_err(|_| AppError::internal("invalid user id"))
 }
 
 pub(super) fn require_sfu(state: &AppState) -> AppResult<()> {
@@ -206,7 +206,7 @@ pub(super) fn require_sfu(state: &AppState) -> AppResult<()> {
 
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links",
+    path = "/api/v1/chat/call-links",
     tag = "chat",
     operation_id = "createChatCallLink",
     request_body = CreateCallLinkRequest,
@@ -219,7 +219,7 @@ pub(super) fn require_sfu(state: &AppState) -> AppResult<()> {
 )]
 pub(crate) async fn create(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Json(request): Json<CreateCallLinkRequest>,
 ) -> AppResult<(StatusCode, Json<CallLink>)> {
     require_sfu(&state)?;
@@ -314,7 +314,7 @@ pub(crate) async fn create(
 
 #[utoipa::path(
     get,
-    path = "/api/chat/call-links",
+    path = "/api/v1/chat/call-links",
     tag = "chat",
     operation_id = "listChatCallLinks",
     responses((status = 200, description = "This account's call links, newest first", body = CallLinkList)),
@@ -322,7 +322,7 @@ pub(crate) async fn create(
 )]
 pub(crate) async fn list(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
 ) -> AppResult<Json<CallLinkList>> {
     let rows: Vec<(String, String, Vec<u8>, bool, OffsetDateTime)> = sqlx::query_as(
         "SELECT encode(room_id, 'hex'), encode(nonce, 'hex'), info, waiting_room, created_at FROM chat_call_links
@@ -349,7 +349,7 @@ pub(crate) async fn list(
 
 #[utoipa::path(
     delete,
-    path = "/api/chat/call-links/{roomId}",
+    path = "/api/v1/chat/call-links/{roomId}",
     tag = "chat",
     operation_id = "deleteChatCallLink",
     params(("roomId" = String, Path, description = "The link's room id")),
@@ -361,7 +361,7 @@ pub(crate) async fn list(
 )]
 pub(crate) async fn delete(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Path(room_id): Path<String>,
 ) -> AppResult<StatusCode> {
     hex32("roomId", &room_id)?;
@@ -387,7 +387,7 @@ pub(crate) async fn delete(
 
 #[utoipa::path(
     put,
-    path = "/api/chat/call-links/{roomId}/info",
+    path = "/api/v1/chat/call-links/{roomId}/info",
     tag = "chat",
     operation_id = "updateChatCallLinkInfo",
     params(("roomId" = String, Path, description = "The link's room id")),
@@ -400,7 +400,7 @@ pub(crate) async fn delete(
 )]
 pub(crate) async fn update_info(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Path(room_id): Path<String>,
     Json(request): Json<UpdateCallLinkInfoRequest>,
 ) -> AppResult<StatusCode> {
@@ -509,7 +509,7 @@ pub(super) async fn admitted(
 /// link. No account (`middleware::rate_limit_call_link`).
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/info",
+    path = "/api/v1/chat/call-links/info",
     tag = "chat",
     operation_id = "getChatCallLinkInfo",
     request_body = CallLinkInfoRequest,
@@ -537,7 +537,7 @@ pub(crate) async fn info(
 /// who wants the others to see who they are sends their access token too.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/token",
+    path = "/api/v1/chat/call-links/token",
     tag = "chat",
     operation_id = "getChatCallLinkToken",
     request_body = CallLinkTokenRequest,

@@ -91,7 +91,7 @@
     "kinds": {
       "terms": "Terms of Service",
       "privacyNotice": "Privacy Notice",
-      "federationAbroad": "consent text for talking to other servers",
+      "federation": "consent text for sharing data with other servers",
       "marketing": "consent text for news and offers"
     }
   },
@@ -118,7 +118,8 @@
     "recoveryCode": "Recovery code",
     "recoveryCodeDescription": "Enter one of the recovery codes you saved when you turned on two-factor authentication. Each code works once.",
     "useRecoveryCode": "Use a recovery code",
-    "useAuthenticator": "Use your authenticator app"
+    "useAuthenticator": "Use your authenticator app",
+    "serverReset": "This server was reset since you last used it here, so this browser removed what it kept for it. Sign in again."
   },
   "newKeys": {
     "continue": "Continue",
@@ -208,7 +209,7 @@
         "hint": "While off, nobody on another server can reach you, and you can't reach them. Your conversations and shares with them stay, quietly: groups and calls hosted on another server are quiet for you too (you stay a member) until you turn it back on. Messages sent to you there while it is off aren't delivered later. Nothing is deleted.",
         "turnOn": "Turn on",
         "turnOff": "Turn off",
-        "consentTitle": "Talk to other servers?",
+        "consentTitle": "Share data with other servers?",
         "agree": "I agree that my Chat and Drive may reach people on other Kutup servers."
       },
       "title": "Privacy",
@@ -220,9 +221,9 @@
       "withdrawnAt": "Withdrawn on {{date}}",
       "failed": "Your choice could not be saved. Try again.",
       "purposes": {
-        "federationAbroad": {
-          "title": "Talking to other servers",
-          "description": "Let your Chat and Drive reach people on other Kutup servers, which may be in other countries. Withdrawing it stops that."
+        "federation": {
+          "title": "Sharing data with other servers",
+          "description": "Let your Chat and Drive share data with other Kutup servers, so you can reach the people whose accounts are there. Withdrawing it stops that."
         },
         "marketing": {
           "title": "News and offers",
@@ -414,6 +415,7 @@
       "description": "Every place your account is signed in. Ending a sign-in there takes effect immediately.",
       "thisDevice": "This device",
       "cli": "Command line",
+      "mailBridge": "Mail bridge",
       "browserOn": "{{browser}} on {{os}}",
       "unknownBrowser": "Unknown browser",
       "unknownApp": "Unknown app",
@@ -662,7 +664,7 @@
       "publishTitle": "Publish a version",
       "publishHint": "A published version is never changed: publish a new one. A new required version is shown to everyone at their next sign-in.",
       "kind": "Kind",
-      "kindHint": "terms, privacyNotice, a consent purpose (federationAbroad, marketing), or your own.",
+      "kindHint": "terms, privacyNotice, a consent purpose (federation, marketing), or your own.",
       "version": "Version",
       "language": "Language",
       "languageHint": "A code such as en, tr or pt-BR.",
@@ -705,8 +707,11 @@
       "disabled": "Disabled",
       "closing": "Closing",
       "awaitingSetup": "Awaiting first sign-in",
-      "on": "On",
-      "off": "Off",
+      "twoFactor": {
+        "on": "On",
+        "pending": "Not confirmed yet",
+        "off": "Off"
+      },
       "emptyTitle": "No users yet",
       "emptyDescription": "Create the first account with New user.",
       "noMatchTitle": "No matching users",
@@ -939,6 +944,8 @@
         "registrationCodeRevoke": "{{admin}} revoked the referral code …{{hint}}",
         "settingsSetRateLimit": "{{admin}} set {{limit}} to {{value}}",
         "settingsSetRateLimitReset": "{{admin}} reset {{limit}} to its first value",
+        "clientVersionSetMinimum": "{{admin}} set the oldest {{clientType}} client accepted to {{value}}",
+        "clientVersionSetMinimumReset": "{{admin}} reset the oldest {{clientType}} client accepted to the release's floor",
         "accountSetRateLimit": "{{admin}} set {{limit}} to {{value}} for {{target}}",
         "accountSetRateLimitReset": "{{admin}} gave {{target}} the server's {{limit}} again",
         "accountSetEntitlement": "{{admin}} set {{limit}} to {{value}} for {{target}}",
@@ -1012,6 +1019,8 @@
         "on": "Yes",
         "off": "No"
       },
+      "federationConsentRequired": "Ask for consent before sharing data with other servers",
+      "federationConsentRequiredHint": "Where the law asks for it: turning it on needs each person's consent in Settings → Privacy, under the text you publish for it (kind federation) in Legal documents. New accounts then start off.",
       "publicSharingHint": "Who may open links shared with “anyone with the link”. Signed-in only keeps a test server's links among its own accounts.",
       "publicSharingMode": {
         "on": "Anyone with the link",
@@ -1091,7 +1100,7 @@
         "chatDistributionMessageBytesHint": "The largest message a new Chat identity sends each kept device."
       },
       "twoFactor": "Two-factor sign-in",
-      "twoFactorHint": "Recovery codes and security keys for accounts with two-factor authentication.",
+      "twoFactorHint": "Recovery codes, security keys and authenticator codes for accounts with two-factor authentication.",
       "federation": "Federation",
       "federationHint": "How deliveries to other Kutup servers are tried again when a server doesn't answer.",
       "privacy": "Privacy and retention",
@@ -1099,6 +1108,8 @@
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Recovery codes per account",
         "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes.",
+        "totpSkewSteps": "Authenticator code drift (steps)",
+        "totpSkewStepsHint": "How many 30-second steps before or after now an authenticator code is still taken (0–2). Each code is taken once either way.",
         "securityKeysPerAccount": "Security keys per account",
         "securityKeysPerAccountHint": "How many security keys one account may add.",
         "webauthnCeremonySeconds": "Security key prompt (seconds)",
@@ -1149,7 +1160,17 @@
         "accountClosingDays": "Wait before deleting a closed account (days)",
         "accountClosingDaysHint": "An account asked to be deleted is closing this long; signing in until then keeps it.",
         "destructionEventRetentionDays": "Keep the destruction log (days)",
-        "destructionEventRetentionDaysHint": "What was deleted, when and by whom, naming no one. Keep it longer than any backup: a restore replays it."
+        "destructionEventRetentionDaysHint": "What was deleted, when and by whom, naming no one. Keep it longer than any backup: a restore replays it.",
+        "chatSendRetentionDays": "Keep Chat send records (days)",
+        "chatSendRetentionDaysHint": "The id of each message sent, which makes a send tried again arrive once. 0 keeps them."
+      },
+      "sessions": "Sessions",
+      "sessionsHint": "How long a sign-in lasts, and how long a device stays known.",
+      "sessionsLimits": {
+        "sessionTtlDays": "Sign-in lasts unused (days)",
+        "sessionTtlDaysHint": "A session not used for this long ends; each use moves its end ahead. A change applies to each session at its next use.",
+        "knownClientDays": "Remember a device (days)",
+        "knownClientDaysHint": "A browser or program someone signed in from isn't held to the limits on sign-ins from unknown devices for this long."
       },
       "mail": "Mail keys",
       "mailHint": "How many encryption keys one email address may keep.",
@@ -1973,6 +1994,29 @@
         "catchAll": "Catch-all",
         "site": "The site's",
         "saved": "Limits saved"
+      }
+    },
+    "clientVersions": {
+      "title": "Client versions",
+      "hint": "The oldest version of each app and of the command line this server accepts. Older ones are asked to reload or update.",
+      "release": "This server runs release {{release}}.",
+      "floor": "This server needs at least {{version}}.",
+      "noFloor": "No minimum from this server.",
+      "placeholder": "No minimum",
+      "saved": "Minimum version saved",
+      "types": {
+        "web-account": "Account",
+        "web-drive": "Drive",
+        "web-chat": "Chat",
+        "web-maps": "Maps",
+        "web-photos": "Photos",
+        "web-office": "Office",
+        "web-contacts": "Contacts",
+        "web-mail": "Mail",
+        "web-pass": "Pass",
+        "web-calendar": "Calendar",
+        "cli": "Command line (kutup)",
+        "mail-bridge": "Mail bridge"
       }
     }
   },

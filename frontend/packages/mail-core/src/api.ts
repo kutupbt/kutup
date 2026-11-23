@@ -175,7 +175,7 @@ export interface MailAccount {
   addressId: string
   address: string
   /**
-   * This server's own mail domain (`/user/me`'s server), never
+   * This server's own mail domain (`/account`'s server), never
    * the From's: who is a Kutup user and who is outside is judged by it. The
    * sending address's domain (`address`) only names its Message-IDs.
    */
@@ -303,7 +303,7 @@ export class UnverifiedOwnKeys extends Error {
   }
 }
 
-/** One of the account's addresses, as `GET /api/mail/addresses` lists them. */
+/** One of the account's addresses, as `GET /api/v1/mail/addresses` lists them. */
 export interface OwnAddressRow {
   id: string
   address: string
@@ -346,7 +346,7 @@ export function mailAccountOf(
   session: Pick<Session, 'masterKeys' | 'envelopeBinding' | 'username' | 'privateKey'>,
   fold: (address: string) => string | null,
   /**
-   * The account itself, as `/user/me` names it: its server and id, and
+   * The account itself, as `/account` names it: its server and id, and
    * this server's mail domain (its server name: Kutup addresses are
    * `username@server`).
    */
@@ -479,8 +479,8 @@ export function useMailAccount() {
         .get<MailIdentity>('/mail/identity')
         .then((r) => r.data)
         .catch(() => null)
-      // The account as shares name it: by `/user/me`, never by a mail domain.
-      const { data: me } = await api.get<{ server: string; accountId: string }>('/user/me')
+      // The account as shares name it: by `/account`, never by a mail domain.
+      const { data: me } = await api.get<{ server: string; accountId: string }>('/account')
       // Strict: a list older than one this device has seen stops Mail.
       const checked = await checkedAddresses(session, data, { strict: true })
       // Each sending address's own name and signature (Proton's per-address

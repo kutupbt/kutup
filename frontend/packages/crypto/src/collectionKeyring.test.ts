@@ -26,23 +26,23 @@ const keys = ring.keys.map((k) => fromBase64(k))
 
 describe('folder keyring (docs/plans/drive-share-revocation.md)', () => {
   it('unlocks every older key from the current one, as the canonical vector says', async () => {
-    const unlocked = await unlockCollectionKeyring(keys[2], ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, chain)
+    const unlocked = await unlockCollectionKeyring(keys[2], ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, chain)
     expect(unlocked).toEqual(keys)
   })
 
   it('refuses an older key: a removed member cannot read on', async () => {
     await expect(
-      unlockCollectionKeyring(keys[1], ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, chain),
+      unlockCollectionKeyring(keys[1], ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, chain),
     ).rejects.toThrow()
   })
 
   it('refuses a history with a gap or a substituted key', async () => {
     await expect(
-      unlockCollectionKeyring(keys[2], ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, [chain[0], chain[2]]),
+      unlockCollectionKeyring(keys[2], ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, [chain[0], chain[2]]),
     ).rejects.toThrow()
-    const substitute = await sealPreviousCollectionKey(new Uint8Array(32).fill(9), keys[2], ring.collectionId, ring.ownerUserId, 3)
+    const substitute = await sealPreviousCollectionKey(new Uint8Array(32).fill(9), keys[2], ring.collectionId, ring.ownerAccountId, 3)
     await expect(
-      unlockCollectionKeyring(keys[2], ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, [
+      unlockCollectionKeyring(keys[2], ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, [
         chain[0],
         chain[1],
         { ...chain[2], previousKeyEnvelope: substitute },

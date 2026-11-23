@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -29,7 +29,7 @@ pub struct VersionRow {
     storage_path: String,
     seq_at_snapshot: i64,
     doc_key_id: i64,
-    author_user_id: String,
+    author_account_id: String,
     size_bytes: i64,
     label: Option<String>,
     keep_forever: bool,
@@ -102,7 +102,7 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
         storage_path: crate::file_content::revision_path(file_id, id),
         seq_at_snapshot: seq,
         doc_key_id: dk,
-        author_user_id: author.to_string(),
+        author_account_id: author.to_string(),
         size_bytes: size,
         label,
         keep_forever: keep,
@@ -128,11 +128,11 @@ pub struct PatchVersionRequest {
     keep_forever: Option<bool>,
 }
 
-/// `GET /api/files/{fileId}/versions` — mirrors `List`.
+/// `GET /api/v1/drive/files/{fileId}/versions` — mirrors `List`.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/versions",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions",
+    tag = "drive",
     operation_id = "listFileVersions",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
@@ -140,10 +140,10 @@ pub struct PatchVersionRequest {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(file_id): Path<String>,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
@@ -157,11 +157,11 @@ pub async fn list(
     Ok(Json(out).into_response())
 }
 
-/// `GET /api/files/{fileId}/versions/{vid}/download` — mirrors `Download`.
+/// `GET /api/v1/drive/files/{fileId}/versions/{vid}/download` — mirrors `Download`.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/versions/{vid}/download",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions/{vid}/download",
+    tag = "drive",
     operation_id = "downloadFileVersion",
     security(("BearerAuth" = [])),
     params(
@@ -176,11 +176,11 @@ pub async fn list(
 )]
 pub async fn download(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, vid)): Path<(String, String)>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
     if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
@@ -221,11 +221,11 @@ pub async fn download(
     .await
 }
 
-/// `PATCH /api/files/{fileId}/versions/{vid}` — mirrors `Patch`.
+/// `PATCH /api/v1/drive/files/{fileId}/versions/{vid}` — mirrors `Patch`.
 #[utoipa::path(
     patch,
-    path = "/api/files/{fileId}/versions/{vid}",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions/{vid}",
+    tag = "drive",
     operation_id = "patchFileVersion",
     security(("BearerAuth" = [])),
     params(
@@ -237,11 +237,11 @@ pub async fn download(
 )]
 pub async fn patch(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, vid)): Path<(String, String)>,
     Json(req): Json<PatchVersionRequest>,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
     // Naming or pinning a version changes what retention keeps: an editor's call.
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
@@ -294,7 +294,7 @@ pub async fn patch(
 pub(crate) const NEWEST_VERSION: &str =
     "SELECT n.id FROM drive_file_versions n WHERE n.file_id = v.file_id AND n.kind = v.kind ORDER BY n.created_at DESC, n.id DESC LIMIT 1";
 
-/// `DELETE /api/files/{fileId}/versions/{vid}` — deletes one earlier version
+/// `DELETE /api/v1/drive/files/{fileId}/versions/{vid}` — deletes one earlier version
 /// for good and frees its storage. The file's owner or the version's author
 /// may; the newest version cannot go. `original` as the version deletes the
 /// file's first upload, once a whole-file version has replaced it (the
@@ -302,8 +302,8 @@ pub(crate) const NEWEST_VERSION: &str =
 /// that opens with the old key stays (docs/plans/pass-parity.md).
 #[utoipa::path(
     delete,
-    path = "/api/files/{fileId}/versions/{vid}",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions/{vid}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(
         ("fileId" = String, Path, description = "File id"),
@@ -318,10 +318,10 @@ pub(crate) const NEWEST_VERSION: &str =
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, vid)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     if vid == crate::handlers::files::ORIGINAL {
         return delete_original(&state, user_id, fid).await;
     }
@@ -415,11 +415,11 @@ async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResul
 /// The longest version name, in characters.
 const MAX_LABEL_CHARS: usize = 200;
 
-/// `POST /api/files/{fileId}/versions` — store a version (multipart).
+/// `POST /api/v1/drive/files/{fileId}/versions` — store a version (multipart).
 #[utoipa::path(
     post,
-    path = "/api/files/{fileId}/versions",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions",
+    tag = "drive",
     operation_id = "createFileVersion",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
@@ -430,17 +430,17 @@ const MAX_LABEL_CHARS: usize = 200;
     ),
     responses(
         (status = 201, description = "The stored version", body = VersionRow),
-        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use. `code: revision_conflict`: `metadataRevision` is not the file's current + 1 (`metadataRevision` and `metadataEnvelope` give the current one)"),
+        (status = 409, description = "`code: versionConflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use. `code: revisionConflict`: `metadataRevision` is not the file's current + 1 (`metadataRevision` and `metadataEnvelope` give the current one)"),
         (status = 413, description = "Storage quota exceeded, or larger than `driveVersionMaxBytes`")
     )
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(file_id): Path<String>,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
@@ -770,7 +770,7 @@ pub(crate) async fn current_whole_version(
     .await
 }
 
-/// `409 version_conflict` (naming the current version) unless the file still
+/// `409 versionConflict` (naming the current version) unless the file still
 /// holds what a save was based on.
 pub(crate) fn check_based_on(
     based_on: Option<Option<Uuid>>,
@@ -782,7 +782,7 @@ pub(crate) fn check_based_on(
             |id| id.to_string(),
         );
         return Err(AppError::conflict("the file changed since")
-            .with_details(serde_json::json!({ "code": "version_conflict", "current": current })));
+            .with_details(serde_json::json!({ "code": "versionConflict", "current": current })));
     }
     Ok(())
 }

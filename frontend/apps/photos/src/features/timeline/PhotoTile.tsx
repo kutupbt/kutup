@@ -9,7 +9,7 @@ import type { Photo } from '../library/library'
 
 interface TileProps {
   photo: Photo
-  userId: string
+  accountId: string
   size: number
   selected: boolean
   favourite: boolean
@@ -24,7 +24,7 @@ interface TileProps {
  * and a check to select it. On screen and missing its details or picture, it
  * moves to the front of the background catch-up.
  */
-export const PhotoTile = memo(function PhotoTile({ photo, userId, size, selected, favourite, selecting, onOpen, onToggle }: TileProps) {
+export const PhotoTile = memo(function PhotoTile({ photo, accountId: userId, size, selected, favourite, selecting, onOpen, onToggle }: TileProps) {
   const { t, i18n } = useTranslation()
   const url = useThumbnail(photo.file, 'sm', photo.folder)
   const [broken, setBroken] = useState(false)

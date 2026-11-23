@@ -168,10 +168,10 @@ keeps them; reports on them are operator tooling.
   when closing, cleared when kept). The queries that route, deliver and
   sign in read `state = 'active'` (the generated `is_active` went in W7,
   docs/plans/w7-schema.md §4).
-- Closing: `POST /api/user/close` with a reauth grant (`close`), or an
-  admin's `POST /api/admin/users/{id}/close`. Every sign-in and grant ends. A
+- Closing: `POST /api/v1/account/close` with a reauth grant (`close`), or an
+  admin's `POST /api/v1/admin/accounts/{id}/close`. Every sign-in and grant ends. A
   sign-in that passes every step gets no session but a grant (`keep`, no
-  session, minutes); `POST /api/auth/keep` makes the account active again and
+  session, minutes); `POST /api/v1/auth/keep` makes the account active again and
   answers as the sign-in. An admin keeps it with `isActive: true`. Either
   only before `closes_at` (or under a hold): after it the job may be deleting
   the account, and a keep would leave it active and emptied. The
@@ -276,7 +276,7 @@ keeps them; reports on them are operator tooling.
 - Foreign-key cascades still delete an account's events: Postgres runs them as
   the table's owner.
 - The retention job runs hourly on the owner's connection.
-- `GET /api/admin/activity/verify` walks the chain and says whether the logs
+- `GET /api/v1/admin/activity/verify` walks the chain and says whether the logs
   are append-only.
 - Admin access means opening one account's limits, mail-domain overrides or
   mail-sending state: account content is end-to-end encrypted, so these are
@@ -341,13 +341,13 @@ keeps them; reports on them are operator tooling.
 - **Operator block:** `drive_public_shares` gains `blocked_at`, `blocked_reason`
   (`legalOrder`, `abuse`, `other`) and `blocked_reference` (admin-only).
   - A blocked link answers `451` for `legalOrder` and `410` otherwise. The
-    code is `link_blocked` with the reason, so the public page says why;
-    owner and admin takedowns keep `link_removed`.
+    code is `linkBlocked` with the reason, so the public page says why;
+    owner and admin takedowns keep `linkRemoved`.
   - Unblocking is possible; both directions are audited.
 - **Per account:** the entitlement `drive.public_sharing` (1 on, 0 off; none
   follows the site's), shown as `on`/`off`, which an admin sets
   per account. While `off`, the account can't create public links, and its
-  existing ones answer `410 sharing_off`.
+  existing ones answer `410 sharingOff`.
 - **Site-wide:** a site setting `drive.public_sharing`: `on`, `off`, or
   `signedIn` (only someone signed in to this server can open a public link).
   - Applies at creation and when a link is served.
@@ -358,15 +358,15 @@ keeps them; reports on them are operator tooling.
 
 **As built (L5):**
 - `crate::public_sharing` holds the three controls and the one check every
-  public route makes first (`ensure_link_up`): `451`/`410 link_blocked`,
-  `410 link_removed`, `410 sharing_off` (with `scope`: `site` or
-  `account`), `403 sign_in_required`. Making a link answers `403
-  sharing_off` while either switch is off; `signedIn` still makes links.
+  public route makes first (`ensure_link_up`): `451`/`410 linkBlocked`,
+  `410 linkRemoved`, `410 sharingOff` (with `scope`: `site` or
+  `account`), `403 signInRequired`. Making a link answers `403
+  sharingOff` while either switch is off; `signedIn` still makes links.
 - The site switch is the site setting `drive.public_sharing` (default `on`), set in
   Server settings → Accounts and shown in the public settings. The account
   switch is the entitlement `drive.public_sharing`, on the admin's user page and in
   `/user/me`.
-- Blocks: `POST`/`DELETE /api/admin/shares/:id/block` (reason `legalOrder`,
+- Blocks: `POST`/`DELETE /api/v1/admin/public-links/:id/block` (reason `legalOrder`,
   `abuse`, `other`; an admin-only reference), from the Reports page; open
   reports close as `blocked`. Audited as `share.block`/`share.unblock`.
 - The public pages (Drive folder, Office file, Photos album) say why a link
@@ -396,16 +396,20 @@ keeps them; reports on them are operator tooling.
 - **Consents** (per purpose, separate and withdrawable):
   `consents(id, user_id, purpose, given, document_id, at, channel)`.
   - Append-only. The current state per purpose is the latest row.
-  - `GET/PUT /api/user/consents`; Settings → Privacy lists each purpose with
+  - `GET/PUT /api/v1/account/consents`; Settings → Privacy lists each purpose with
     its document version and lets the person withdraw it.
-  - **Purposes from day one:** `federationAbroad` and `marketing`. There is
+  - **Purposes from day one:** `federation` (named `federationAbroad` until
+    W7 §13 made it neutral: "share data with other servers") and
+    `marketing`. There is
     no purpose for storing the account abroad: that rests on the operator's
     contracts with its providers, not on the user.
   - **A per-account federation switch** (decision 4): federation is
     site-level today, so the account gets a "talk to other servers" switch
-    (its default a site setting). Turning it on asks for the
-    `federationAbroad` consent when a document for the purpose is published;
-    withdrawing the consent turns it off. Built in L6.
+    (its default a site setting). Turning it on asks for the `federation`
+    consent where the site setting `server.federation_consent_required` is
+    on (off in the core; a jurisdiction that needs it turns it on, and a new
+    account then starts off); withdrawing the consent turns it off. Built in
+    L6; the setting since W7 §13 (before, a published text was what asked).
   - `marketing` is recorded only: there are no marketing messages.
 
 **As built (L6):**
@@ -435,12 +439,12 @@ keeps them; reports on them are operator tooling.
   server (the relay, its key and call tokens answer `403 federationOff`; the
   account stays a member and the group is quiet for it until the switch is
   on again; the Privacy page says so). An administrator's switch needs the
-  user's own consent when a `federationAbroad` text is published, and is
+  user's own consent where the site asks for the `federation` consent, and is
   in the admin log. Queued plain chat sends and media offers of an off
   account never leave: each holds a transport sequence the peer must see,
   so the origin sends a signed withdrawal in its place
   (a `FederatedStreamControlV1` with the withdrawn code,
-  `POST /api/fed/chat/stream-control`: no sender, recipient or payload); the
+  `POST /api/fed/v2/chat/stream-control`: no sender, recipient or payload); the
   peer uses the sequence up and answers a repeat the same, and the stream
   goes on with no gap. Required of every server (no fallback: all are
   deployed together before v1).
@@ -520,7 +524,8 @@ L2 and L4 also a backup-restore test of the replay.
    the destruction log on restore.
 3. Two database roles, with a single-role fallback that warns at start, in
    `check-config` and in the admin console. kutup.dev runs two roles.
-4. A per-account federation switch, where `federationAbroad` is asked.
+4. A per-account federation switch, where the `federation` consent is asked
+   (where the site asks for it).
 5. Mail metadata is sealed before the wipe (L7).
 6. Defaults, all site settings (per account where a setting limits one
    account): closing 14 days, key-dump retention 7 days, ended sessions

@@ -10,9 +10,9 @@
 // the device too: use in any tab keeps every tab's vaults open, and a tab
 // opened after the device has idled past the delay starts locked.
 
-const STATE_KEY = 'kutup-pass-lock'
-const ACTIVITY_KEY = 'kutup-pass-activity'
-const CHANNEL = 'kutup-pass-lock'
+const STATE_KEY = 'kutup.pass.lock'
+const ACTIVITY_KEY = 'kutup.pass.activity'
+const CHANNEL = 'kutup.pass.lock'
 /** Activity is written at most this often (every keystroke need not be). */
 const ACTIVITY_WRITE_MS = 5_000
 

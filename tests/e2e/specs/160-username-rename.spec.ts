@@ -24,7 +24,7 @@ async function rename(context: BrowserContext, to: string): Promise<void> {
   await page.close()
 }
 
-/** An administrator frees a held name at once (`POST /api/admin/names/:name/free`). */
+/** An administrator frees a held name at once (`POST /api/v1/admin/names/:name/free`). */
 async function freeName(browser: Browser, name: string): Promise<void> {
   const admin = await browser.newContext()
   await signInAsAdmin(admin)

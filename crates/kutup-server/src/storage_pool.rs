@@ -14,7 +14,7 @@
 //! group's for its shared mailbox), in the transaction that stores or
 //! deletes the bytes; [`charge_within_quota`] adds the room check for writes
 //! that grow the pool. What fills the pool by app is summed from the tables
-//! themselves (`GET /api/user/storage`).
+//! themselves (`GET /api/v1/account/storage`).
 
 use sqlx::{PgExecutor, Postgres, Transaction};
 use uuid::Uuid;

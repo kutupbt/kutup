@@ -197,7 +197,7 @@ pub fn key_at(file: &File, file_key: &[u8; 32], wanted: u32) -> Result<[u8; 32]>
         .map_err(|_| anyhow!("file key has wrong length"))
 }
 
-/// The file key and generation what `/files/{id}/download` serves was
+/// The file key and generation what `/drive/files/{id}/download` serves was
 /// sealed at.
 pub fn content_key(file: &File, file_key: &[u8; 32]) -> Result<([u8; 32], u32)> {
     let generation = file.content_key_generation;

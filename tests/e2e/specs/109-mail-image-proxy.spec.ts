@@ -69,8 +69,11 @@ test('tracker protection: trackers blocked, links cleaned, images through the pr
     },
     `<p>Bülten</p><p><img src="${image}" alt="logo"><img src="${tracker}" alt=""></p><p><a href="https://shop.example.org/?id=${tag}&utm_source=news&fbclid=x">Mağaza</a></p>`,
   )
-  await expect(editor.locator(`img[src="${image}"]`)).toHaveCount(1)
-  await expect(editor.locator(`img[src="${tracker}"]`)).toHaveCount(1)
+  // In the composer too, remote images show only through the proxy: the
+  // text keeps their addresses, the page never loads them.
+  await expect(editor.locator(`img[data-remote-src="${image}"]`)).toHaveCount(1)
+  await expect(editor.locator(`img[data-remote-src="${tracker}"]`)).toHaveCount(1)
+  await expect(editor.locator('img[src^="http"]')).toHaveCount(0)
   await bobMail.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
   await expect(bobMail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
 
@@ -91,7 +94,7 @@ test('tracker protection: trackers blocked, links cleaned, images through the pr
   // stays out, with nothing offering to load it directly.
   const proxiedUrls: string[] = []
   // The address goes in the body, never in the URL.
-  const asked = (r: Request) => (new URL(r.url()).pathname === '/api/mail/images' && r.method() === 'POST' ? ((r.postDataJSON() as { url?: string }).url ?? '') : null)
+  const asked = (r: Request) => (new URL(r.url()).pathname === '/api/v1/mail/images' && r.method() === 'POST' ? ((r.postDataJSON() as { url?: string }).url ?? '') : null)
   mail.on('request', (r) => {
     const url = asked(r)
     if (url !== null) proxiedUrls.push(url)

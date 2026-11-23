@@ -13,7 +13,7 @@ export interface RelayRequest {
  */
 export function relayRequest(url: string, origin = window.location.origin): RelayRequest {
   const absolute = url.startsWith('/api/') ? origin + url : url
-  if (!absolute.startsWith(`${origin}/api/maps/proxy/`)) return { url: absolute }
+  if (!absolute.startsWith(`${origin}/api/v1/maps/proxy/`)) return { url: absolute }
   const token = getAccessToken()
   return { url: absolute, headers: token ? { Authorization: `Bearer ${token}` } : {} }
 }

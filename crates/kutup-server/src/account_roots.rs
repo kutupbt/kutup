@@ -16,7 +16,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One root record, checked.
@@ -222,17 +222,17 @@ pub struct AccountRootsResponse {
     master_keyring: Vec<String>,
 }
 
-/// `GET /api/account/roots` — the caller's own root records and master-key
+/// `GET /api/v1/account/roots` — the caller's own root records and master-key
 /// keyring, for a client that holds the master key but not the roots.
 #[utoipa::path(
     get,
-    path = "/api/account/roots",
+    path = "/api/v1/account/roots",
     tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, body = AccountRootsResponse))
 )]
-pub async fn get(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+pub async fn get(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let keys = account_keys(&state.pool, user_id).await?;
     Ok(Json(AccountRootsResponse {
         account_roots: keys.account_roots,

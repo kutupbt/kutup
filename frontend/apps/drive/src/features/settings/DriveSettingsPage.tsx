@@ -25,7 +25,7 @@ export function DriveSettingsPage() {
   const me = useQuery({
     queryKey: ['me'],
     queryFn: async () =>
-      (await api.get<{ versionRetentionDays: number; versionRetentionChoices: number[] }>('/user/me')).data,
+      (await api.get<{ versionRetentionDays: number; versionRetentionChoices: number[] }>('/account')).data,
   })
   // The periods the administrators offer (drive.version_retention_choices),
   // with the account's own when it was taken off the list since.
@@ -38,7 +38,7 @@ export function DriveSettingsPage() {
       : t('settings.versions.retention.days', { count: days })
   const retention = useMutation({
     mutationFn: async (days: number) => {
-      await api.patch('/user/me', { versionRetentionDays: days })
+      await api.patch('/account', { versionRetentionDays: days })
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['me'] }),
   })

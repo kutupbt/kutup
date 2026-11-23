@@ -1,5 +1,5 @@
 //! What changed an account's sign-in, kept for its owner to see
-//! (`GET /api/user/security-events`, docs/api.md): a new password, a
+//! (`GET /api/v1/account/security-events`, docs/api.md): a new password, a
 //! recovery, a move to the server's current OPAQUE setup, an administrator's
 //! reset, a sign-in or a failed one. Each is written in the transaction of the
 //! change it records. No IP addresses.
