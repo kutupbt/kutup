@@ -9,7 +9,7 @@ import { loadServerSettings } from '@kutup/session/apps'
 // Kutup's one service worker (`@kutup/config` src/sw/kutup-sw.js), with
 // Calendar's push turned on by `push=calendar`.
 const WORKER = '/kutup-sw.js'
-const PREF = 'kutup-calendar-push'
+const PREF = 'kutup.calendar.push'
 
 export function pushSupported(): boolean {
   return typeof navigator !== 'undefined' && 'serviceWorker' in navigator && typeof window !== 'undefined' && 'PushManager' in window && typeof Notification !== 'undefined'

@@ -58,7 +58,7 @@ account the client remembers) and follows Proton's handling of a failure
 
 ```
 "kutup/drive-key-binding/v1\0" ‖ len‖account ‖ incarnationId(32) ‖
-authorityPublicKey(32) ‖ suite(u16) ‖ driveHpkePublicKey(32) ‖
+authorityPublicKey(32) ‖ suite(u16) ‖ driveXwingPublicKey(32) ‖
 driveShareSigningPublicKey(32)
 ```
 

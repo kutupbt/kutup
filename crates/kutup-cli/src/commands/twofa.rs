@@ -2,7 +2,8 @@
 //!
 //! Manage TOTP two-factor auth: show status, enable (scan a QR / enter the secret, then
 //! confirm a code), or disable (requires a current code). The backend won't flip
-//! `totp_enabled` until a verify succeeds, so an unverified setup is a no-op for login.
+//! `twoFactor` to `on` until a verify succeeds (it is `pending` until then), so an
+//! unverified setup is a no-op for login.
 
 use anyhow::{bail, Result};
 use clap::Subcommand;
@@ -34,9 +35,11 @@ fn status(profile: &str, json: bool) -> Result<()> {
     let ctx = require_session(profile)?;
     let me = ctx.client.me()?;
     if json {
-        crate::output::print_json(&serde_json::json!({ "totpEnabled": me.totp_enabled }))?;
-    } else if me.totp_enabled {
+        crate::output::print_json(&serde_json::json!({ "twoFactor": me.two_factor }))?;
+    } else if me.two_factor == "on" {
         println!("2FA: enabled");
+    } else if me.two_factor == "pending" {
+        println!("2FA: set up, not confirmed yet (run `kutup 2fa enable` again)");
     } else {
         println!("2FA: not enabled");
     }
@@ -85,7 +88,7 @@ fn enable(profile: &str, json: bool) -> Result<()> {
     ctx.client.verify_totp(&code, &grant, &recovery_code)?;
 
     if json {
-        crate::output::print_json(&serde_json::json!({ "totpEnabled": true }))?;
+        crate::output::print_json(&serde_json::json!({ "twoFactor": "on" }))?;
     } else {
         println!(
             "2FA enabled. Save your recovery phrase — losing your authenticator without it \
@@ -106,7 +109,7 @@ fn disable(profile: &str, json: bool) -> Result<()> {
     ctx.client.disable_totp(&code, &grant)?;
 
     if json {
-        crate::output::print_json(&serde_json::json!({ "totpEnabled": false }))?;
+        crate::output::print_json(&serde_json::json!({ "twoFactor": "off" }))?;
     } else {
         println!("2FA disabled.");
     }

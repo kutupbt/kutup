@@ -22,7 +22,7 @@ import { formatBytes } from '@kutup/ui/lib/format'
 import { CleanupDialog } from './CleanupDialog'
 
 /**
- * The account's one storage pool (docs/api.md, `GET /api/user/storage`):
+ * The account's one storage pool (docs/api.md, `GET /api/v1/account/storage`):
  * a ring of what fills it, largest first, as Google One draws it, in
  * Proton's "X of Y" terms, and a way to free space. The server knows only
  * sizes; the file kinds come from the names this browser decrypts.

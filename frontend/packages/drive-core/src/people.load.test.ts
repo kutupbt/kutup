@@ -26,7 +26,7 @@ const { loadPeople } = await import('./people')
 
 const ADA_ID = '00000000-0000-4000-8000-000000000001'
 const ME = {
-  userId: '00000000-0000-4000-8000-00000000000e',
+  accountId: '00000000-0000-4000-8000-00000000000e',
   account: 'me@kutup.dev',
   accountRef: { server: 'kutup.dev', accountId: '00000000-0000-4000-8000-00000000000e' },
   binding: 'binding',
@@ -83,7 +83,7 @@ describe('loadPeople', () => {
 
   it('opens its own profile key for its own account key, and gives it to them by account', async () => {
     await loadPeople(ME)
-    expect(wasm.accountProfileKey).toHaveBeenCalledWith(ME.masterKeys, { sealed: 'own' }, `aci:${ME.userId}@kutup.dev`, 'binding')
+    expect(wasm.accountProfileKey).toHaveBeenCalledWith(ME.masterKeys, { sealed: 'own' }, `aci:${ME.accountId}@kutup.dev`, 'binding')
     expect(put).toHaveBeenCalledWith('/drive/profile-keys', {
       recipientServer: 'kutup.dev',
       recipientAccountId: ADA_ID,

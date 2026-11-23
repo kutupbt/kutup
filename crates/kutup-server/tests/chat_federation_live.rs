@@ -64,7 +64,7 @@ fn b64(bytes: &[u8]) -> String {
 /// The name a live server gives its accounts' addresses (`user@name`).
 fn server_name(c: &Client, base: &str) -> String {
     let settings: Value = c
-        .get(format!("{base}/api/auth/settings"))
+        .get(format!("{base}/api/v1/auth/settings"))
         .send()
         .unwrap()
         .json()
@@ -123,7 +123,7 @@ fn publish_direct_delivery_capability(
     };
     json_response(
         device
-            .auth(c.put(format!("{base}/api/chat/profile")))
+            .auth(c.put(format!("{base}/api/v1/chat/profile")))
             .bearer_auth(token)
             .json(&profile)
             .send()
@@ -180,7 +180,7 @@ fn chat_media_round_trip(
         "expiresAt": OffsetDateTime::now_utc().unix_timestamp() + 30 * 86_400,
     });
     let first = json_response(
-        c.post(format!("{a}/api/chat/media/deliveries"))
+        c.post(format!("{a}/api/v1/chat/media/deliveries"))
             .bearer_auth(alice_token)
             .json(&offer)
             .send()
@@ -193,7 +193,7 @@ fn chat_media_round_trip(
     Uuid::parse_str(destination_reference).unwrap();
 
     let retry = json_response(
-        c.post(format!("{a}/api/chat/media/deliveries"))
+        c.post(format!("{a}/api/v1/chat/media/deliveries"))
             .bearer_auth(alice_token)
             .json(&offer)
             .send()
@@ -205,7 +205,7 @@ fn chat_media_round_trip(
     let mut changed_offer = offer.clone();
     changed_offer["retrievalToken"] = Value::String(b64(&[0x53; 32]));
     let changed_replay = c
-        .post(format!("{a}/api/chat/media/deliveries"))
+        .post(format!("{a}/api/v1/chat/media/deliveries"))
         .bearer_auth(alice_token)
         .json(&changed_offer)
         .send()
@@ -213,21 +213,21 @@ fn chat_media_round_trip(
     assert_eq!(changed_replay.status().as_u16(), 409);
 
     let discard_origin = c
-        .delete(format!("{a}/api/chat/media/objects/{attachment_id}"))
+        .delete(format!("{a}/api/v1/chat/media/objects/{attachment_id}"))
         .bearer_auth(alice_token)
         .send()
         .unwrap();
     assert_eq!(discard_origin.status().as_u16(), 204);
 
     let downloaded = c
-        .get(format!("{b}/api/chat/media/objects/{attachment_id}"))
+        .get(format!("{b}/api/v1/chat/media/objects/{attachment_id}"))
         .bearer_auth(bob_token)
         .send()
         .unwrap();
     assert_eq!(downloaded.status().as_u16(), 200);
     assert_eq!(downloaded.bytes().unwrap().as_ref(), object.as_slice());
     let storage = json_response(
-        c.get(format!("{b}/api/chat/media/storage"))
+        c.get(format!("{b}/api/v1/chat/media/storage"))
             .bearer_auth(bob_token)
             .send()
             .unwrap(),
@@ -236,13 +236,13 @@ fn chat_media_round_trip(
     assert_eq!(storage["chatMediaBytes"], object.len() as u64);
 
     let clear = c
-        .delete(format!("{b}/api/chat/media/references/{attachment_id}"))
+        .delete(format!("{b}/api/v1/chat/media/references/{attachment_id}"))
         .bearer_auth(bob_token)
         .send()
         .unwrap();
     assert_eq!(clear.status().as_u16(), 204);
     assert_eq!(
-        c.get(format!("{b}/api/chat/media/objects/{attachment_id}"))
+        c.get(format!("{b}/api/v1/chat/media/objects/{attachment_id}"))
             .bearer_auth(bob_token)
             .send()
             .unwrap()
@@ -256,7 +256,7 @@ fn chat_media_round_trip(
 
 fn admin_user_id(c: &Client, base: &str, admin: &str, username: &str) -> String {
     let users = json_response(
-        c.get(format!("{base}/api/admin/users"))
+        c.get(format!("{base}/api/v1/admin/accounts"))
             .bearer_auth(admin)
             .send()
             .unwrap(),
@@ -274,7 +274,7 @@ fn admin_user_id(c: &Client, base: &str, admin: &str, username: &str) -> String 
 
 fn set_user_quota(c: &Client, base: &str, admin: &str, user_id: &str, bytes: i64) {
     json_response(
-        c.put(format!("{base}/api/admin/users/{user_id}"))
+        c.put(format!("{base}/api/v1/admin/accounts/{user_id}"))
             .bearer_auth(admin)
             .json(&json!({ "storageQuotaBytes": bytes }))
             .send()
@@ -324,7 +324,7 @@ fn chat_media_capability_and_quota_recovery(
     // indistinguishable, allocate no recipient storage, and consume their
     // signed origin sequence as terminal rejections.
     let invalid_capability = c
-        .post(format!("{a}/api/chat/media/deliveries"))
+        .post(format!("{a}/api/v1/chat/media/deliveries"))
         .bearer_auth(alice_token)
         .json(&offer(
             "50000000-0000-4000-8000-000000000006",
@@ -336,7 +336,7 @@ fn chat_media_capability_and_quota_recovery(
     assert_eq!(invalid_capability.status().as_u16(), 404);
     let invalid_body = invalid_capability.text().unwrap();
     let unknown_recipient = c
-        .post(format!("{a}/api/chat/media/deliveries"))
+        .post(format!("{a}/api/v1/chat/media/deliveries"))
         .bearer_auth(alice_token)
         .json(&offer(
             "50000000-0000-4000-8000-000000000007",
@@ -348,7 +348,7 @@ fn chat_media_capability_and_quota_recovery(
     assert_eq!(unknown_recipient.status().as_u16(), 404);
     assert_eq!(unknown_recipient.text().unwrap(), invalid_body);
     assert_eq!(
-        c.get(format!("{b}/api/chat/media/objects/{attachment_id}"))
+        c.get(format!("{b}/api/v1/chat/media/objects/{attachment_id}"))
             .bearer_auth(bob_token)
             .send()
             .unwrap()
@@ -360,7 +360,7 @@ fn chat_media_capability_and_quota_recovery(
     let bob_id = admin_user_id(c, b, admin_b, BOB_USERNAME);
     set_user_quota(c, b, admin_b, &bob_id, 1);
     let full = json_response(
-        c.post(format!("{a}/api/chat/media/deliveries"))
+        c.post(format!("{a}/api/v1/chat/media/deliveries"))
             .bearer_auth(alice_token)
             .json(&offer(
                 "50000000-0000-4000-8000-000000000008",
@@ -371,7 +371,7 @@ fn chat_media_capability_and_quota_recovery(
             .unwrap(),
         "destination Chat-media quota rejection",
     );
-    assert_eq!(full["status"], "storage_full");
+    assert_eq!(full["status"], "storageFull");
     assert!(full["storageReferenceId"].is_null());
 
     // Restoring quota and retrying the exact immutable object with a fresh
@@ -379,7 +379,7 @@ fn chat_media_capability_and_quota_recovery(
     // regression gate for blob/DB cleanup after the post-pull quota recheck.
     set_user_quota(c, b, admin_b, &bob_id, 10 * 1024 * 1024 * 1024);
     let recovered = json_response(
-        c.post(format!("{a}/api/chat/media/deliveries"))
+        c.post(format!("{a}/api/v1/chat/media/deliveries"))
             .bearer_auth(alice_token)
             .json(&offer(
                 "50000000-0000-4000-8000-000000000009",
@@ -392,7 +392,7 @@ fn chat_media_capability_and_quota_recovery(
     );
     assert_eq!(recovered["status"], "stored");
     let downloaded = c
-        .get(format!("{b}/api/chat/media/objects/{attachment_id}"))
+        .get(format!("{b}/api/v1/chat/media/objects/{attachment_id}"))
         .bearer_auth(bob_token)
         .send()
         .unwrap();
@@ -400,7 +400,7 @@ fn chat_media_capability_and_quota_recovery(
     assert_eq!(downloaded.bytes().unwrap().as_ref(), object.as_slice());
 
     assert_eq!(
-        c.delete(format!("{b}/api/chat/media/references/{attachment_id}"))
+        c.delete(format!("{b}/api/v1/chat/media/references/{attachment_id}"))
             .bearer_auth(bob_token)
             .send()
             .unwrap()
@@ -409,7 +409,7 @@ fn chat_media_capability_and_quota_recovery(
         204
     );
     assert_eq!(
-        c.delete(format!("{a}/api/chat/media/objects/{attachment_id}"))
+        c.delete(format!("{a}/api/v1/chat/media/objects/{attachment_id}"))
             .bearer_auth(alice_token)
             .send()
             .unwrap()
@@ -423,7 +423,7 @@ fn chat_media_capability_and_quota_recovery(
 
 /// A media offer v1 refused without recording it, as the outbox migration
 /// leaves it (docs/plans/federation-outbox.md): pending again at A as
-/// `closing_sequence` under its own sequence N, while B's mark stayed at
+/// `closingSequence` under its own sequence N, while B's mark stayed at
 /// N-1. Here it is an offer that has expired since: B now refuses it and
 /// records the refusal at N, and the real offer behind it is stored under
 /// N+1, so nothing waits on N. Needs both servers' databases
@@ -448,7 +448,7 @@ fn media_closing_sequence_from_v1(
     let pool_a = runtime.block_on(sqlx::PgPool::connect(&db_a)).unwrap();
     let pool_b = runtime.block_on(sqlx::PgPool::connect(&db_b)).unwrap();
     let alice_id = json_response(
-        c.get(format!("{a}/api/user/me"))
+        c.get(format!("{a}/api/v1/account"))
             .bearer_auth(alice_token)
             .send()
             .unwrap(),
@@ -476,38 +476,21 @@ fn media_closing_sequence_from_v1(
         )
         .unwrap();
     assert_eq!(next, mark + 1, "A and B agree before the case");
-    // The v1 offer: expired by now (B refuses it for good), its pull grant
-    // gone with its v1 settling.
+    // A queued row this server can no longer read (a retired format, a
+    // damaged payload): it must not stall the destination's queue. Its
+    // sequence is withdrawn (stream control) and it is settled.
     let old_operation = "50000000-0000-4000-8000-000000000014";
-    let transaction = json!({
-        "version": 1,
-        "originDomain": "a.test",
-        "originSequence": next,
-        "offer": {
-            "version": 1,
-            "originDomain": "a.test",
-            "destinationDomain": "b.test",
-            "recipient": bob,
-            "operationId": old_operation,
-            "attachmentId": "50000000-0000-4000-8000-000000000015",
-            "suite": 1,
-            "ciphertextBytes": 64,
-            "ciphertextSha256": "11".repeat(32),
-            "retrievalToken": b64(&[0x74; 32]),
-            "deliveryCapability": b64(capability),
-            "expiresAt": OffsetDateTime::now_utc().unix_timestamp() - 60,
-        },
-    });
+    let transaction = json!({ "version": 99, "notATransaction": true });
     runtime
         .block_on(async {
             let mut tx = pool_a.begin().await?;
             sqlx::query(
                 "INSERT INTO federation_outbox
                      (kind, destination, sequence, idempotency_key, sender_account_id,
-                      recipient_account_id, payload, state, error_class)
+                      recipient_account_id, payload, state)
                  VALUES ('media', 'b.test', $1, $2, $3::uuid, $4::uuid,
                          jsonb_build_object('transaction', $5::jsonb, 'operationId', $6::text),
-                         'pending', 'closing_sequence')",
+                         'pending')",
             )
             .bind(next)
             .bind(format!("{alice_id}:{old_operation}"))
@@ -553,12 +536,12 @@ fn media_closing_sequence_from_v1(
     loop {
         // Asking again wakes the destination's queue.
         let answer = json_response(
-            c.post(format!("{a}/api/chat/media/deliveries"))
+            c.post(format!("{a}/api/v1/chat/media/deliveries"))
                 .bearer_auth(alice_token)
                 .json(&offer)
                 .send()
                 .unwrap(),
-            "an offer behind a v1 refusal",
+            "an offer behind an undecodable row",
         );
         if answer["status"] == "stored" {
             break;
@@ -566,18 +549,18 @@ fn media_closing_sequence_from_v1(
         assert_eq!(answer["status"], "queued");
         assert!(
             Instant::now() < deadline,
-            "the offer behind a v1 refusal never went"
+            "the offer behind an undecodable row never went"
         );
         std::thread::sleep(Duration::from_millis(500));
     }
     let downloaded = c
-        .get(format!("{b}/api/chat/media/objects/{attachment_id}"))
+        .get(format!("{b}/api/v1/chat/media/objects/{attachment_id}"))
         .bearer_auth(bob_token)
         .send()
         .unwrap();
     assert_eq!(downloaded.status().as_u16(), 200);
-    // A's v1 row settled refused; B recorded its refusal at N and the
-    // offer at N+1.
+    // A's undecodable row settled; B used up N on its withdrawal and stored
+    // the offer at N+1: no gap.
     let closed: (String, Option<String>) = runtime
         .block_on(
             sqlx::query_as(
@@ -590,7 +573,7 @@ fn media_closing_sequence_from_v1(
         .unwrap();
     assert_eq!(
         closed,
-        ("rejected".to_owned(), Some("remote_rejection".to_owned()))
+        ("rejected".to_owned(), Some("undecodable".to_owned()))
     );
     let recorded: Vec<(i64, i16)> = runtime
         .block_on(
@@ -603,19 +586,18 @@ fn media_closing_sequence_from_v1(
             .fetch_all(&pool_b),
         )
         .unwrap();
-    assert_eq!(recorded, [(next, 400), (next + 1, 200)]);
-    // The v1 operation asked again (with a new expiry, as clients ask): its
-    // stored refusal, not `queued`.
-    let mut again = transaction["offer"].clone();
-    again["expiresAt"] = json!(OffsetDateTime::now_utc().unix_timestamp() + 30 * 86_400);
-    let repeat = c
-        .post(format!("{a}/api/chat/media/deliveries"))
-        .bearer_auth(alice_token)
-        .json(&again)
-        .send()
+    assert_eq!(recorded, [(next, 200), (next + 1, 200)]);
+    let last: i64 = runtime
+        .block_on(
+            sqlx::query_scalar(
+                "SELECT last_sequence FROM federation_inbound_state
+                 WHERE kind = 'media' AND origin = 'a.test'",
+            )
+            .fetch_one(&pool_b),
+        )
         .unwrap();
-    assert_eq!(repeat.status().as_u16(), 422);
-    println!("MEDIA V1 REFUSAL CLOSES ITS SEQUENCE");
+    assert_eq!(last, next + 1, "B's media stream from A has no gap");
+    println!("AN UNDECODABLE MEDIA ROW CLOSES ITS SEQUENCE");
 }
 
 /// A Chat attachment in the block format (KUTPCM2), as a client seals it.
@@ -658,7 +640,7 @@ fn upload_chat_media(
         metadata_value(&encoded_token),
     );
     let create = c
-        .post(format!("{base}/api/chat/media/uploads"))
+        .post(format!("{base}/api/v1/chat/media/uploads"))
         .bearer_auth(token)
         .header("Tus-Resumable", "1.0.0")
         .header("Upload-Length", object.len())
@@ -763,7 +745,7 @@ fn json_response(response: Response, context: &str) -> Value {
 
 fn federation_control_plane(c: &Client, base: &str, admin: &str, context: &str) -> Value {
     json_response(
-        c.get(format!("{base}/api/admin/federation"))
+        c.get(format!("{base}/api/v1/admin/federation"))
             .bearer_auth(admin)
             .send()
             .unwrap(),
@@ -803,7 +785,7 @@ fn registration_payload(
         common::try_opaque_register_answer(c, base, PASSWORD, &binding, None, setup_bearer)
             .unwrap_or_else(|(status, body)| panic!("register/start: {status} {body}"));
     let account_id = match setup {
-        Some(first) => first["userId"].as_str().unwrap().to_owned(),
+        Some(first) => first["accountId"].as_str().unwrap().to_owned(),
         None => started["accountId"].as_str().unwrap().to_owned(),
     };
     let person = AccountRef::new(&server_name(c, base), &account_id).unwrap();
@@ -836,7 +818,7 @@ fn registration_payload(
         "masterKeyEnvelope": master_key_envelope,
         "recoveryKeyEnvelope": recovery_key_envelope,
         "accountRoots": common::sealed_roots(&roots, &master_key, &binding),
-        "publicKey": b64(&identity.drive_hpke_public_key()),
+        "driveXwingPublicKey": b64(&identity.drive_xwing_public_key()),
         "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
         "accountAuthorityKeyId": identity.authority_key_id(),
         "accountIncarnationId": identity.incarnation_id(),
@@ -853,11 +835,11 @@ fn registration_payload(
 
 fn register_account(c: &Client, base: &str, email: &str, username: &str) -> (String, String) {
     let payload = registration_payload(c, base, email, username, None);
-    let public_key = payload["publicKey"].as_str().unwrap().to_owned();
+    let public_key = payload["driveXwingPublicKey"].as_str().unwrap().to_owned();
     // Sign-up answers a session (the client sends `x-kutup-client: cli`);
     // the account then signs in afresh, as it always did here.
     let response = c
-        .post(format!("{base}/api/auth/register"))
+        .post(format!("{base}/api/v1/auth/register"))
         .json(&payload)
         .send()
         .unwrap();
@@ -888,14 +870,14 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
     let setup_token = first["setupToken"].as_str().unwrap();
     let setup_payload = registration_payload(c, base, email, username, Some(&first));
     let setup = json_response(
-        c.post(format!("{base}/api/auth/complete-setup"))
+        c.post(format!("{base}/api/v1/auth/complete-setup"))
             .bearer_auth(setup_token)
             .json(&setup_payload)
             .send()
             .unwrap(),
         "bootstrap admin setup",
     );
-    assert_eq!(setup["isAdmin"], true);
+    assert_eq!(setup["role"], "breakGlassAdmin");
     setup["accessToken"].as_str().unwrap().to_string()
 }
 
@@ -912,7 +894,7 @@ fn update_feature_policy(
     global_enabled: bool,
 ) -> Value {
     let response = json_response(
-        c.put(format!("{base}/api/admin/federation"))
+        c.put(format!("{base}/api/v1/admin/federation"))
             .bearer_auth(admin)
             .json(&json!({
                 "globalEnabled": global_enabled,
@@ -934,10 +916,12 @@ fn update_feature_policy(
 }
 
 fn drive_remote_user(c: &Client, base: &str, token: &str) -> Response {
-    c.get(format!("{base}/api/users/by-address/{BOB_USERNAME}@b.test"))
-        .bearer_auth(token)
-        .send()
-        .unwrap()
+    c.get(format!(
+        "{base}/api/v1/accounts/by-address/{BOB_USERNAME}@b.test"
+    ))
+    .bearer_auth(token)
+    .send()
+    .unwrap()
 }
 
 fn update_federation_mode(c: &Client, base: &str, admin: &str, mode: &str) -> Value {
@@ -966,7 +950,7 @@ fn upsert_feature_rule(
 ) -> Value {
     json_response(
         c.put(format!(
-            "{base}/api/admin/federation/rules/{feature}/{domain}"
+            "{base}/api/v1/admin/federation/rules/{feature}/{domain}"
         ))
         .bearer_auth(admin)
         .json(&json!({
@@ -987,7 +971,7 @@ fn delete_federation_rule(c: &Client, base: &str, admin: &str, domain: &str) -> 
 fn delete_feature_rule(c: &Client, base: &str, admin: &str, feature: &str, domain: &str) -> Value {
     json_response(
         c.delete(format!(
-            "{base}/api/admin/federation/rules/{feature}/{domain}"
+            "{base}/api/v1/admin/federation/rules/{feature}/{domain}"
         ))
         .bearer_auth(admin)
         .send()
@@ -1041,8 +1025,8 @@ fn bob_device(id: u32) -> ChatDevice {
 }
 
 /// The id of Bob's second Chat device, as the server gave it when the setup
-/// phase linked it (the lowest id no row holds, which depends on whether an
-/// earlier unlisted row still waits out its listing grace).
+/// phase linked it (the account's next id, after the one the interrupted
+/// registration took).
 fn bob_second_device() -> u32 {
     recall("bobSecondDevice")
         .as_u64()
@@ -1085,7 +1069,7 @@ fn bob_account() -> AccountRef {
 /// The signed-in account (server and permanent id), as Chat names it.
 fn account_of(c: &Client, base: &str, token: &str) -> AccountRef {
     let me = json_response(
-        c.get(format!("{base}/api/user/me"))
+        c.get(format!("{base}/api/v1/account"))
             .bearer_auth(token)
             .send()
             .unwrap(),
@@ -1101,7 +1085,7 @@ fn account_of(c: &Client, base: &str, token: &str) -> AccountRef {
 /// A plain mismatch from before wire version 2, as the outbox migration
 /// leaves it (docs/plans/federation-outbox.md): under v1 B never recorded
 /// the mismatched sequence N (its mark stayed at N-1), and A's row moved to
-/// `closing_sequence` at N with its stale request. Alice's corrected resend
+/// `closingSequence` at N with its stale request. Alice's corrected resend
 /// then closes N first (B records its 409 there), goes under N+1 and is
 /// delivered, and so is the send after it: nothing waits on N. Needs both
 /// servers' databases (`KUTUP_FEDERATION_DB_A`, `KUTUP_FEDERATION_DB_B`).
@@ -1123,7 +1107,7 @@ fn closing_sequence_from_before_v2(
     let pool_a = runtime.block_on(sqlx::PgPool::connect(&db_a)).unwrap();
     let pool_b = runtime.block_on(sqlx::PgPool::connect(&db_b)).unwrap();
     let alice_id = json_response(
-        c.get(format!("{a}/api/user/me"))
+        c.get(format!("{a}/api/v1/account"))
             .bearer_auth(alice_token)
             .send()
             .unwrap(),
@@ -1170,7 +1154,7 @@ fn closing_sequence_from_before_v2(
                       recipient_account_id, payload, state, error_class)
                  VALUES ('chat', 'b.test', $1, $2, $3::uuid, $4::uuid,
                          jsonb_build_object('request', $5::jsonb, 'sender', $3::text),
-                         'pending', 'closing_sequence')",
+                         'pending', 'closingSequence')",
             )
             .bind(next)
             .bind(format!("{alice_id}:{device}:{send_id}"))
@@ -1247,7 +1231,7 @@ fn send(
     let sender = alice_device();
     sender
         .auth(c.post(format!(
-            "{base}/api/chat/accounts/{}/messages?server={}",
+            "{base}/api/v1/chat/accounts/{}/messages?server={}",
             recipient.account_id, recipient.server
         )))
         .bearer_auth(token)
@@ -1264,7 +1248,7 @@ fn mailbox(c: &Client, base: &str, token: &str, device_id: u32) -> Vec<Value> {
     let page = json_response(
         bob_device(device_id)
             .auth(c.get(format!(
-                "{base}/api/chat/messages?deviceId={device_id}&limit=100"
+                "{base}/api/v1/chat/messages?deviceId={device_id}&limit=100"
             )))
             .bearer_auth(token)
             .send()
@@ -1341,18 +1325,18 @@ fn drive_round_trip(
     let alice_identity = AccountIdentityKeysV1::derive(&test_roots(ALICE_EMAIL).identity).unwrap();
     let bob_identity = AccountIdentityKeysV1::derive(&test_roots(BOB_EMAIL).identity).unwrap();
     let alice_me = json_response(
-        c.get(format!("{a}/api/user/me"))
+        c.get(format!("{a}/api/v1/account"))
             .bearer_auth(alice_token)
             .send()
             .unwrap(),
         "get Drive collection owner",
     );
-    let owner_user_id = alice_me["id"].as_str().unwrap();
+    let owner_account_id = alice_me["id"].as_str().unwrap();
     let collection_id = uuid::Uuid::new_v4().to_string();
     let collection_key = [0x45; 32];
     let owner_key_context = DriveEnvelopeContextV1::owner_collection_key(
         &collection_id,
-        owner_user_id,
+        owner_account_id,
         1,
         alice_roots.drive_generation,
     )
@@ -1362,7 +1346,7 @@ fn drive_round_trip(
         1,
         1,
         &collection_id,
-        owner_user_id,
+        owner_account_id,
     )
     .unwrap();
     let owner_key_envelope = drive_envelope::seal_under_drive_root(
@@ -1376,7 +1360,7 @@ fn drive_round_trip(
             .unwrap();
     let epoch_statement = CollectionEpochStatementV1::create(
         &collection_id,
-        owner_user_id,
+        owner_account_id,
         1,
         None,
         &collection_key,
@@ -1385,7 +1369,7 @@ fn drive_round_trip(
     .unwrap();
     let epoch_statement_hash = epoch_statement.statement_hash();
     let created = json_response(
-        c.post(format!("{a}/api/collections"))
+        c.post(format!("{a}/api/v1/drive/collections"))
             .bearer_auth(alice_token)
             .json(&json!({
                 "id": collection_id,
@@ -1401,7 +1385,7 @@ fn drive_round_trip(
     );
     assert_eq!(created["id"], collection_id);
     let collection = json_response(
-        c.get(format!("{a}/api/collections/{collection_id}"))
+        c.get(format!("{a}/api/v1/drive/collections/{collection_id}"))
             .bearer_auth(alice_token)
             .send()
             .unwrap(),
@@ -1438,14 +1422,14 @@ fn drive_round_trip(
         1,
         1,
         &collection_id,
-        owner_user_id,
+        owner_account_id,
     )
     .unwrap();
     let public_link_envelope =
         drive_envelope::seal_b64(&collection_key, &link_key, public_link_context).unwrap();
     let public_link_id = uuid::Uuid::new_v4().to_string();
     let public_link = json_response(
-        c.post(format!("{a}/api/share/"))
+        c.post(format!("{a}/api/v1/drive/public-links/"))
             .bearer_auth(alice_token)
             .json(&json!({
                 "id": public_link_id,
@@ -1457,7 +1441,7 @@ fn drive_round_trip(
                     &alice_roots.drive,
                     DriveEnvelopeContextV1::owner_link_key(
                         &public_link_id,
-                        owner_user_id,
+                        owner_account_id,
                         alice_roots.drive_generation,
                     )
                     .unwrap(),
@@ -1470,13 +1454,13 @@ fn drive_round_trip(
     );
     let public_link_token = public_link["token"].as_str().unwrap();
     let public_link_record = json_response(
-        c.get(format!("{a}/api/share/{public_link_token}"))
+        c.get(format!("{a}/api/v1/drive/public-links/{public_link_token}"))
             .send()
             .unwrap(),
         "read public Drive share",
     );
     assert_eq!(public_link_record["targetId"], collection_id);
-    assert_eq!(public_link_record["ownerUserId"], owner_user_id);
+    assert_eq!(public_link_record["ownerAccountId"], owner_account_id);
     assert_eq!(public_link_record["collectionKeyEpoch"], 1);
     assert_eq!(
         drive_envelope::open_b64(
@@ -1497,13 +1481,13 @@ fn drive_round_trip(
             2,
             1,
             &collection_id,
-            owner_user_id,
+            owner_account_id,
         )
         .unwrap(),
     )
     .unwrap();
     assert_eq!(
-        c.post(format!("{a}/api/share/"))
+        c.post(format!("{a}/api/v1/drive/public-links/"))
             .bearer_auth(alice_token)
             .json(&json!({
                 "shareType": "collection",
@@ -1525,8 +1509,8 @@ fn drive_round_trip(
     assert_eq!(remote_user["server"], "b.test");
     assert_eq!(remote_user["account"], "bobfed@b.test");
     assert_eq!(
-        remote_user["driveHpkePublicKey"],
-        b64(&bob_identity.drive_hpke_public_key())
+        remote_user["driveXwingPublicKey"],
+        b64(&bob_identity.drive_xwing_public_key())
     );
     assert_eq!(
         remote_user["driveSigningPublicKey"],
@@ -1541,12 +1525,12 @@ fn drive_round_trip(
         bob_identity.incarnation_id()
     );
     // The two people, as every share names them: server and account id.
-    let alice_ref = AccountRef::new("a.test", owner_user_id).unwrap();
+    let alice_ref = AccountRef::new("a.test", owner_account_id).unwrap();
     let bob_ref = AccountRef::new("b.test", remote_user["accountId"].as_str().unwrap()).unwrap();
     // The same account by its id, asked of B through A (federation, never
     // a URL from the query): the address now and the same keys.
     let by_id = json_response(
-        c.get(format!("{a}/api/users/by-id/{}", bob_ref.account_id))
+        c.get(format!("{a}/api/v1/accounts/{}", bob_ref.account_id))
             .query(&[("server", "b.test")])
             .bearer_auth(alice_token)
             .send()
@@ -1559,7 +1543,7 @@ fn drive_round_trip(
     assert_eq!(by_id["driveKeyBinding"], remote_user["driveKeyBinding"]);
     let nobody = Uuid::new_v4();
     assert_eq!(
-        c.get(format!("{a}/api/users/by-id/{nobody}"))
+        c.get(format!("{a}/api/v1/accounts/{nobody}"))
             .query(&[("server", "b.test")])
             .bearer_auth(alice_token)
             .send()
@@ -1568,7 +1552,7 @@ fn drive_round_trip(
         StatusCode::NOT_FOUND
     );
     let recipient_hpke = STANDARD
-        .decode(remote_user["driveHpkePublicKey"].as_str().unwrap())
+        .decode(remote_user["driveXwingPublicKey"].as_str().unwrap())
         .unwrap();
     let named_share = NamedShareEnvelopeV1::seal(
         &collection_key,
@@ -1587,7 +1571,7 @@ fn drive_round_trip(
 
     let share = json_response(
         c.post(format!(
-            "{a}/api/collections/{collection_id}/federated-shares"
+            "{a}/api/v1/drive/collections/{collection_id}/federated-shares"
         ))
         .bearer_auth(alice_token)
         .json(&json!({
@@ -1615,7 +1599,7 @@ fn drive_round_trip(
     assert!(capability.len() >= 32);
 
     let accepted = json_response(
-        c.post(format!("{b}/api/drive/federation/shares"))
+        c.post(format!("{b}/api/v1/drive/federation/folder-shares"))
             .bearer_auth(bob_token)
             .json(&json!({"server": "a.test", "capability": capability}))
             .send()
@@ -1626,7 +1610,7 @@ fn drive_round_trip(
     let incoming_id = accepted["id"].as_str().unwrap();
 
     let incoming = json_response(
-        c.get(format!("{b}/api/drive/federation/shares"))
+        c.get(format!("{b}/api/v1/drive/federation/folder-shares"))
             .bearer_auth(bob_token)
             .send()
             .unwrap(),
@@ -1650,7 +1634,7 @@ fn drive_round_trip(
                 &alice_identity.drive_signing_public_key(),
                 &bob_ref,
                 &bob_identity.incarnation_id(),
-                bob_identity.drive_hpke_private_key(),
+                bob_identity.drive_xwing_private_key(),
             )
             .unwrap(),
         collection_key
@@ -1662,7 +1646,7 @@ fn drive_round_trip(
         .verify_authority(&alice_identity.authority_public_key())
         .unwrap();
     accepted_epoch
-        .verify_current_binding(&collection_id, owner_user_id, 1)
+        .verify_current_binding(&collection_id, owner_account_id, 1)
         .unwrap();
     accepted_epoch
         .verify_collection_key(&collection_key)
@@ -1686,7 +1670,7 @@ fn drive_round_trip(
                 1,
                 1,
                 &collection_id,
-                owner_user_id,
+                owner_account_id,
             )
             .unwrap(),
         )
@@ -1696,7 +1680,7 @@ fn drive_round_trip(
 
     let empty = json_response(
         c.get(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/files"
+            "{b}/api/v1/drive/federation/folder-shares/{incoming_id}/files"
         ))
         .bearer_auth(bob_token)
         .send()
@@ -1738,7 +1722,7 @@ fn drive_round_trip(
         let started = std::time::Instant::now();
         let response = c
             .post(format!(
-                "{b}/api/drive/federation/shares/{incoming_id}/files"
+                "{b}/api/v1/drive/federation/folder-shares/{incoming_id}/files"
             ))
             .bearer_auth(bob_token)
             .header(
@@ -1813,7 +1797,7 @@ fn drive_round_trip(
 
     let files = json_response(
         c.get(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/files"
+            "{b}/api/v1/drive/federation/folder-shares/{incoming_id}/files"
         ))
         .bearer_auth(bob_token)
         .send()
@@ -1847,7 +1831,7 @@ fn drive_round_trip(
 
     let download = c
         .get(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/files/{file_id}/content"
+            "{b}/api/v1/drive/federation/folder-shares/{incoming_id}/files/{file_id}/content"
         ))
         .bearer_auth(bob_token)
         .send()
@@ -1867,7 +1851,7 @@ fn drive_round_trip(
     let ranged_of = |file_id: &str, range: &str, if_range: Option<&str>| {
         let mut request = c
             .get(format!(
-                "{b}/api/drive/federation/shares/{incoming_id}/files/{file_id}/content"
+                "{b}/api/v1/drive/federation/folder-shares/{incoming_id}/files/{file_id}/content"
             ))
             .bearer_auth(bob_token)
             .header("Range", range);
@@ -1907,7 +1891,7 @@ fn drive_round_trip(
     // If-Range names other content.
     let part_limit = |base: &str, admin: &str, bytes: i64| {
         let r = c
-            .put(format!("{base}/api/admin/settings"))
+            .put(format!("{base}/api/v1/admin/settings"))
             .bearer_auth(admin)
             .json(&json!({ "driveStreamResponseMaxBytes": bytes }))
             .send()
@@ -1949,7 +1933,7 @@ fn drive_round_trip(
     .into_bytes();
     owner_upload.extend_from_slice(&big_upload);
     json_response(
-        c.post(format!("{a}/api/files/upload"))
+        c.post(format!("{a}/api/v1/drive/files"))
             .bearer_auth(alice_token)
             .header(
                 "Content-Type",
@@ -1998,7 +1982,7 @@ fn drive_round_trip(
 
     let delete = || {
         c.delete(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/files/{file_id}"
+            "{b}/api/v1/drive/federation/folder-shares/{incoming_id}/files/{file_id}"
         ))
         .bearer_auth(bob_token)
         .send()
@@ -2011,14 +1995,16 @@ fn drive_round_trip(
     // the folder to a new key and keeps Bob; Bob's server follows it only
     // along the signed history. Then the owner removes Bob. ---
     let rotation_ctx = |purpose, epoch, revision| {
-        DriveEnvelopeContextV1::new(purpose, epoch, revision, &collection_id, owner_user_id)
+        DriveEnvelopeContextV1::new(purpose, epoch, revision, &collection_id, owner_account_id)
             .unwrap()
     };
     let access = json_response(
-        c.get(format!("{a}/api/collections/{collection_id}/access"))
-            .bearer_auth(alice_token)
-            .send()
-            .unwrap(),
+        c.get(format!(
+            "{a}/api/v1/drive/collections/{collection_id}/access"
+        ))
+        .bearer_auth(alice_token)
+        .send()
+        .unwrap(),
         "folder access",
     );
     let fed_share = &access["federatedShares"][0];
@@ -2028,7 +2014,7 @@ fn drive_round_trip(
         bob_identity.incarnation_id()
     );
     let name_revision = json_response(
-        c.get(format!("{a}/api/collections/{collection_id}"))
+        c.get(format!("{a}/api/v1/drive/collections/{collection_id}"))
             .bearer_auth(alice_token)
             .send()
             .unwrap(),
@@ -2046,7 +2032,7 @@ fn drive_round_trip(
             alice_identity.drive_signing_key(),
             &bob_ref,
             &bob_identity.incarnation_id(),
-            &bob_identity.drive_hpke_public_key(),
+            &bob_identity.drive_xwing_public_key(),
         )
         .unwrap()
         .encode_b64()
@@ -2061,7 +2047,7 @@ fn drive_round_trip(
      -> (CollectionEpochStatementV1, u16) {
         let statement = CollectionEpochStatementV1::create(
             &collection_id,
-            owner_user_id,
+            owner_account_id,
             epoch,
             Some(previous_hash),
             key,
@@ -2069,16 +2055,16 @@ fn drive_round_trip(
         )
         .unwrap();
         let status = c
-            .post(format!("{a}/api/collections/{collection_id}/rotate"))
+            .post(format!("{a}/api/v1/drive/collections/{collection_id}/rotate"))
             .bearer_auth(alice_token)
             .json(&json!({
                 "fromEpoch": epoch - 1,
                 "epochStatement": statement.encode_b64(),
                 "ownerKeyEnvelope": drive_envelope::seal_under_drive_root(key, &alice_roots.drive,
-                    DriveEnvelopeContextV1::owner_collection_key(&collection_id, owner_user_id, epoch,
+                    DriveEnvelopeContextV1::owner_collection_key(&collection_id, owner_account_id, epoch,
                         alice_roots.drive_generation).unwrap()).unwrap(),
                 "previousKeyEnvelope": kutup_crypto::collection_keyring::seal_previous_key(
-                    previous_key, key, &collection_id, owner_user_id, epoch).unwrap(),
+                    previous_key, key, &collection_id, owner_account_id, epoch).unwrap(),
                 "nameEnvelope": drive_envelope::seal_b64(b"Federated V2 collection", key,
                     rotation_ctx(DriveEnvelopePurpose::CollectionName, epoch, revision)).unwrap(),
                 "publicLinks": [{
@@ -2113,7 +2099,7 @@ fn drive_round_trip(
     // Bob's server follows: the refreshed share opens to the new key.
     let refreshed = json_response(
         c.post(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/refresh"
+            "{b}/api/v1/drive/federation/folder-shares/{incoming_id}/refresh"
         ))
         .bearer_auth(bob_token)
         .send()
@@ -2133,14 +2119,14 @@ fn drive_round_trip(
                 &alice_identity.drive_signing_public_key(),
                 &bob_ref,
                 &bob_identity.incarnation_id(),
-                bob_identity.drive_hpke_private_key(),
+                bob_identity.drive_xwing_private_key(),
             )
             .unwrap();
     assert_eq!(opened.as_slice(), key2.as_slice());
     // And its history, relayed from the owner's server, unlocks the old key.
     let chain = json_response(
         c.get(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/epochs"
+            "{b}/api/v1/drive/federation/folder-shares/{incoming_id}/epochs"
         ))
         .bearer_auth(bob_token)
         .send()
@@ -2160,7 +2146,7 @@ fn drive_round_trip(
     let keys = kutup_crypto::collection_keyring::unlock(
         &key2,
         &collection_id,
-        owner_user_id,
+        owner_account_id,
         &alice_identity.authority_public_key(),
         &links,
     )
@@ -2180,7 +2166,7 @@ fn drive_round_trip(
     assert_eq!(status, 200, "rotate removing the federated recipient");
     let refresh_after = c
         .post(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/refresh"
+            "{b}/api/v1/drive/federation/folder-shares/{incoming_id}/refresh"
         ))
         .bearer_auth(bob_token)
         .send()
@@ -2193,7 +2179,7 @@ fn drive_round_trip(
     );
     let list_after = c
         .get(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/files"
+            "{b}/api/v1/drive/federation/folder-shares/{incoming_id}/files"
         ))
         .bearer_auth(bob_token)
         .send()
@@ -2207,7 +2193,7 @@ fn drive_round_trip(
 
     let raw_url_share = c
         .post(format!(
-            "{a}/api/collections/{collection_id}/federated-shares"
+            "{a}/api/v1/drive/collections/{collection_id}/federated-shares"
         ))
         .bearer_auth(alice_token)
         .json(&json!({
@@ -2221,7 +2207,7 @@ fn drive_round_trip(
         .unwrap();
     assert_eq!(raw_url_share.status().as_u16(), 400);
     assert_eq!(
-        c.get(format!("{a}/api/fed/drive/invite"))
+        c.get(format!("{a}/api/fed/v2/drive/folder-shares/invite"))
             .send()
             .unwrap()
             .status()
@@ -2229,9 +2215,9 @@ fn drive_round_trip(
         401
     );
     for legacy in [
-        "/api/fed/users?username=bobfed",
-        "/api/fed/invites/legacy-token",
-        "/api/fed/shares/legacy-token/files",
+        "/api/fed/v2/users?username=bobfed",
+        "/api/fed/v2/invites/legacy-token",
+        "/api/fed/v2/shares/legacy-token/files",
         "/api/fed-proxy/incoming",
     ] {
         assert_eq!(
@@ -2282,7 +2268,7 @@ fn drive_profile_key_exchange(
             key,
             parties,
             from.drive_signing_key(),
-            &to.drive_hpke_public_key(),
+            &to.drive_xwing_public_key(),
         )
         .unwrap()
         .encode_b64()
@@ -2290,7 +2276,7 @@ fn drive_profile_key_exchange(
     };
     // To a person by their server and account id.
     let put = |base: &str, token: &str, recipient: &AccountRef, envelope: &str, version: &str| {
-        c.put(format!("{base}/api/drive/profile-keys"))
+        c.put(format!("{base}/api/v1/drive/profile-keys"))
             .bearer_auth(token)
             .json(&json!({
                 "recipientServer": recipient.server,
@@ -2305,7 +2291,7 @@ fn drive_profile_key_exchange(
     };
     let person = |base: &str, token: &str, who: &AccountRef| -> Value {
         let people = json_response(
-            c.get(format!("{base}/api/drive/people"))
+            c.get(format!("{base}/api/v1/drive/people"))
                 .bearer_auth(token)
                 .send()
                 .unwrap(),
@@ -2341,7 +2327,7 @@ fn drive_profile_key_exchange(
             .open(
                 &alice_to_bob,
                 &alice.drive_signing_public_key(),
-                bob.drive_hpke_private_key()
+                bob.drive_xwing_private_key()
             )
             .unwrap(),
         alice_key
@@ -2365,7 +2351,7 @@ fn drive_profile_key_exchange(
             .open(
                 &bob_to_alice,
                 &bob.drive_signing_public_key(),
-                alice.drive_hpke_private_key()
+                alice.drive_xwing_private_key()
             )
             .unwrap(),
         bob_key
@@ -2402,7 +2388,7 @@ fn live_location_across_servers(c: &Client, a: &str, b: &str, alice_token: &str,
     let read = STANDARD.encode([0x52u8; 32]);
     let expires = OffsetDateTime::now_utc().unix_timestamp() * 1000 + 3_600_000;
     assert_eq!(
-        c.post(format!("{a}/api/live-locations"))
+        c.post(format!("{a}/api/v1/chat/live-locations"))
             .bearer_auth(alice_token)
             .json(&json!({"streamId": stream_id, "writeSecret": write, "readCapability": read, "expiresAtMs": expires}))
             .send()
@@ -2421,7 +2407,7 @@ fn live_location_across_servers(c: &Client, a: &str, b: &str, alice_token: &str,
         let update =
             live_location::seal(&key, &hex::decode(stream_id).unwrap(), counter, &point(lat))
                 .unwrap();
-        c.put(format!("{a}/api/live-locations/{stream_id}"))
+        c.put(format!("{a}/api/v1/chat/live-locations/{stream_id}"))
             .bearer_auth(alice_token)
             .header("x-kutup-live-write", secret)
             .json(&json!({"update": STANDARD.encode(update)}))
@@ -2438,11 +2424,13 @@ fn live_location_across_servers(c: &Client, a: &str, b: &str, alice_token: &str,
         "wrong write secret"
     );
     let read_from_b = |capability: &str| {
-        c.get(format!("{b}/api/live-locations/{stream_id}?server=a.test"))
-            .bearer_auth(bob_token)
-            .header("x-kutup-live-read", capability)
-            .send()
-            .unwrap()
+        c.get(format!(
+            "{b}/api/v1/chat/live-locations/{stream_id}?server=a.test"
+        ))
+        .bearer_auth(bob_token)
+        .header("x-kutup-live-read", capability)
+        .send()
+        .unwrap()
     };
     let response = read_from_b(&read);
     assert_eq!(response.status().as_u16(), 200);
@@ -2457,7 +2445,7 @@ fn live_location_across_servers(c: &Client, a: &str, b: &str, alice_token: &str,
         "wrong read capability"
     );
     assert_eq!(
-        c.delete(format!("{a}/api/live-locations/{stream_id}"))
+        c.delete(format!("{a}/api/v1/chat/live-locations/{stream_id}"))
             .bearer_auth(alice_token)
             .header("x-kutup-live-write", &write)
             .send()
@@ -2515,7 +2503,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     let admin_a = setup_admin(c, a, ADMIN_A_EMAIL, "admina");
     let admin_b = setup_admin(c, b, ADMIN_B_EMAIL, "adminb");
     let initial_policy = json_response(
-        c.get(format!("{a}/api/admin/federation"))
+        c.get(format!("{a}/api/v1/admin/federation"))
             .bearer_auth(&admin_a)
             .send()
             .unwrap(),
@@ -2529,7 +2517,9 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     update_federation_mode(c, b, &admin_b, "open");
     for base in [a, b] {
         let settings = json_response(
-            c.get(format!("{base}/api/auth/settings")).send().unwrap(),
+            c.get(format!("{base}/api/v1/auth/settings"))
+                .send()
+                .unwrap(),
             "advertised group capability",
         );
         assert_eq!(settings["chat"]["pairwiseGroups"], true);
@@ -2558,7 +2548,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     let shared_fingerprint = drive_peer["fingerprint"].as_str().unwrap().to_owned();
     let shared_first_seen = drive_peer["firstSeenAt"].as_str().unwrap().to_owned();
     let drive_evidence = json_response(
-        c.get(format!("{a}/api/admin/federation/peers/b.test/evidence"))
+        c.get(format!("{a}/api/v1/admin/federation/peers/b.test/evidence"))
             .bearer_auth(&admin_a)
             .send()
             .unwrap(),
@@ -2593,7 +2583,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     // refused) and off the device list.
     bob_chat.publish(c, b, &bob_1);
     let bob_devices_after_manifest = json_response(
-        c.get(format!("{b}/api/chat/device"))
+        c.get(format!("{b}/api/v1/chat/devices"))
             .bearer_auth(&bob_token)
             .send()
             .unwrap(),
@@ -2615,7 +2605,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     let fetch = || {
         json_response(
             c.get(format!(
-                "{a}/api/chat/accounts/{}/keys?server=b.test",
+                "{a}/api/v1/chat/accounts/{}/keys?server=b.test",
                 remote_address.account_id
             ))
             .bearer_auth(&alice_token)
@@ -2639,7 +2629,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(chat_peer["fingerprint"], shared_fingerprint);
     assert_eq!(chat_peer["firstSeenAt"], shared_first_seen);
     let chat_evidence = json_response(
-        c.get(format!("{a}/api/admin/federation/peers/b.test/evidence"))
+        c.get(format!("{a}/api/v1/admin/federation/peers/b.test/evidence"))
             .bearer_auth(&admin_a)
             .send()
             .unwrap(),
@@ -2648,7 +2638,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(chat_evidence, drive_evidence);
 
     let bulk_retry = json_response(
-        c.post(format!("{a}/api/admin/federation/peers/retry"))
+        c.post(format!("{a}/api/v1/admin/federation/peers/retry"))
             .bearer_auth(&admin_a)
             .json(&json!({"domains": ["b.test", "b.test"]}))
             .send()
@@ -2662,7 +2652,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
 
     let filtered_activity = json_response(
         c.get(format!(
-            "{a}/api/admin/activity?actionPrefix=federation.&domain=b.test&limit=100"
+            "{a}/api/v1/admin/activity?actionPrefix=federation.&domain=b.test&limit=100"
         ))
         .bearer_auth(&admin_a)
         .send()
@@ -2676,11 +2666,11 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .all(|entry| entry["action"].as_str().unwrap().starts_with("federation.")));
     assert!(filtered_entries
         .iter()
-        .any(|entry| entry["action"] == "federation.peer.retry-bulk"));
+        .any(|entry| entry["action"] == "federation.retryPeers"));
 
     let audit_export = c
         .get(format!(
-            "{a}/api/admin/activity/export?actionPrefix=federation.&domain=b.test&limit=100"
+            "{a}/api/v1/admin/activity/export?actionPrefix=federation.&domain=b.test&limit=100"
         ))
         .bearer_auth(&admin_a)
         .send()
@@ -2694,7 +2684,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .unwrap()
         .starts_with("text/csv"));
     let audit_csv = audit_export.text().unwrap();
-    assert!(audit_csv.contains("federation.peer.retry-bulk"));
+    assert!(audit_csv.contains("federation.retryPeers"));
     assert!(audit_csv.contains("b.test"));
     assert!(!audit_csv.contains("capability"));
 
@@ -2719,7 +2709,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         404
     );
     let stopped_evidence = json_response(
-        c.get(format!("{a}/api/admin/federation/peers/b.test/evidence"))
+        c.get(format!("{a}/api/v1/admin/federation/peers/b.test/evidence"))
             .bearer_auth(&admin_a)
             .send()
             .unwrap(),
@@ -2728,7 +2718,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(stopped_evidence, drive_evidence);
     assert_eq!(
         c.get(format!(
-            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            "{a}/api/v1/chat/accounts/{}/keys?server=b.test",
             remote_address.account_id
         ))
         .bearer_auth(&alice_token)
@@ -2826,7 +2816,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         200
     );
     let disabled_capabilities = json_response(
-        c.get(format!("{a}/api/auth/settings")).send().unwrap(),
+        c.get(format!("{a}/api/v1/auth/settings")).send().unwrap(),
         "disabled federation capabilities",
     );
     assert_eq!(disabled_capabilities["chat"]["federation"], false);
@@ -2839,7 +2829,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     );
     assert_eq!(
         c.get(format!(
-            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            "{a}/api/v1/chat/accounts/{}/keys?server=b.test",
             remote_address.account_id
         ))
         .bearer_auth(&alice_token)
@@ -2855,13 +2845,13 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         "allowlist"
     );
     let reenabled_capabilities = json_response(
-        c.get(format!("{a}/api/auth/settings")).send().unwrap(),
+        c.get(format!("{a}/api/v1/auth/settings")).send().unwrap(),
         "re-enabled group capability",
     );
     assert_eq!(reenabled_capabilities["chat"]["pairwiseGroups"], true);
     assert_eq!(
         c.get(format!(
-            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            "{a}/api/v1/chat/accounts/{}/keys?server=b.test",
             remote_address.account_id
         ))
         .bearer_auth(&alice_token)
@@ -2886,7 +2876,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     );
     assert_eq!(
         c.get(format!(
-            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            "{a}/api/v1/chat/accounts/{}/keys?server=b.test",
             remote_address.account_id
         ))
         .bearer_auth(&alice_token)
@@ -2906,7 +2896,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     upsert_federation_rule(c, b, &admin_b, "a.test", "block", "inherit");
     assert_eq!(
         c.get(format!(
-            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            "{a}/api/v1/chat/accounts/{}/keys?server=b.test",
             remote_address.account_id
         ))
         .bearer_auth(&alice_token)
@@ -2925,7 +2915,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     update_federation_mode(c, b, &admin_b, "open");
 
     let activity = json_response(
-        c.get(format!("{a}/api/admin/activity?limit=20"))
+        c.get(format!("{a}/api/v1/admin/activity?limit=20"))
             .bearer_auth(&admin_a)
             .send()
             .unwrap(),
@@ -2935,12 +2925,12 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .as_array()
         .unwrap()
         .iter()
-        .any(|entry| entry["action"] == "federation.policy.update"));
+        .any(|entry| entry["action"] == "federation.updatePolicy"));
     assert!(activity["entries"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|entry| entry["action"] == "federation.rule.upsert"));
+        .any(|entry| entry["action"] == "federation.setRule"));
 
     let typed_first: AccountPreKeyBundlesResponse =
         serde_json::from_value(bundles_first.clone()).unwrap();
@@ -2998,7 +2988,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     let bob_manifest_v2 = bob_chat.head.clone().unwrap();
     let refreshed_bundles = json_response(
         c.get(format!(
-            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            "{a}/api/v1/chat/accounts/{}/keys?server=b.test",
             remote_address.account_id
         ))
         .bearer_auth(&alice_token)
@@ -3021,7 +3011,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         latest_manifest = bob_chat.publish(c, b, &bob_1);
     }
     let history_url = format!(
-        "{a}/api/chat/accounts/{}/manifest-history?server=b.test",
+        "{a}/api/v1/chat/accounts/{}/manifest-history?server=b.test",
         remote_address.account_id
     );
     let first_page: AccountManifestHistoryPageV3 = serde_json::from_value(json_response(
@@ -3161,7 +3151,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
 
     let unsigned = c
         .get(format!(
-            "{b}/api/fed/chat/accounts/{}/keys",
+            "{b}/api/fed/v2/chat/accounts/{}/keys",
             account_of(c, b, &bob_token).account_id
         ))
         .send()
@@ -3192,11 +3182,11 @@ fn calls_phase(c: &Client, a: &str, b: &str) {
     update_feature_mode(c, a, &admin_a, "chat", "open");
     update_feature_mode(c, b, &admin_b, "chat", "open");
     let settings_a = json_response(
-        c.get(format!("{a}/api/auth/settings")).send().unwrap(),
+        c.get(format!("{a}/api/v1/auth/settings")).send().unwrap(),
         "A settings",
     );
     let settings_b = json_response(
-        c.get(format!("{b}/api/auth/settings")).send().unwrap(),
+        c.get(format!("{b}/api/v1/auth/settings")).send().unwrap(),
         "B settings",
     );
     assert_eq!(
@@ -3211,7 +3201,7 @@ fn calls_phase(c: &Client, a: &str, b: &str) {
     let room = "0123456789abcdef0123456789abcdef";
     let tag = "fedcba9876543210fedcba9876543210";
     let token_request = |base: &str, token: &str, host: &str, room: &str| {
-        c.post(format!("{base}/api/chat/group-calls/token"))
+        c.post(format!("{base}/api/v1/chat/group-calls/token"))
             .bearer_auth(token)
             .json(&json!({"host": host, "roomId": room, "participantId": tag}))
             .send()
@@ -3269,14 +3259,18 @@ fn queue_withdrawn_send(a_db: &str) {
     runtime.block_on(async {
         let user = uuid::Uuid::new_v4();
         let mut tx = pool.begin().await.unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(user)
+            .bind(format!("withdrawn{}", &user.simple().to_string()[..10]))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        // Federation off: the account's own entitlement (docs/plans/w7-schema.md §5).
         sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key, account_authority_key_id,
-                account_incarnation_id, drive_signing_public_key, federation)
-             VALUES ($1, $2, '', '', '', '', '', '', '', 'off')",
+            "INSERT INTO account_entitlements (account_id, key, value, source)
+             VALUES ($1, 'server.federation', 0, 'account')",
         )
         .bind(user)
-        .bind(format!("withdrawn{}", &user.simple().to_string()[..10]))
         .execute(&mut *tx)
         .await
         .unwrap();
@@ -3374,7 +3368,7 @@ fn queue_phase(c: &Client, a: &str) {
         30 * 86_400,
     );
     let queued = json_response(
-        c.post(format!("{a}/api/chat/media/deliveries"))
+        c.post(format!("{a}/api/v1/chat/media/deliveries"))
             .bearer_auth(&alice_token)
             .json(&first)
             .send()
@@ -3416,7 +3410,7 @@ fn queue_phase(c: &Client, a: &str) {
             expires_in,
         );
         let answer = json_response(
-            c.post(format!("{a}/api/chat/media/deliveries"))
+            c.post(format!("{a}/api/v1/chat/media/deliveries"))
                 .bearer_auth(&alice_token)
                 .json(&body)
                 .send()
@@ -3440,7 +3434,7 @@ fn verify_queued_media_answers(c: &Client, a: &str, b: &str, alice_token: &str, 
     loop {
         let response = c
             .get(format!(
-                "{b}/api/chat/media/objects/{BEHIND_MEDIA_ATTACHMENT_ID}"
+                "{b}/api/v1/chat/media/objects/{BEHIND_MEDIA_ATTACHMENT_ID}"
             ))
             .bearer_auth(bob_token)
             .send()
@@ -3459,7 +3453,7 @@ fn verify_queued_media_answers(c: &Client, a: &str, b: &str, alice_token: &str, 
     }
     assert_eq!(
         c.get(format!(
-            "{b}/api/chat/media/objects/{EXPIRING_MEDIA_ATTACHMENT_ID}"
+            "{b}/api/v1/chat/media/objects/{EXPIRING_MEDIA_ATTACHMENT_ID}"
         ))
         .bearer_auth(bob_token)
         .send()
@@ -3473,7 +3467,7 @@ fn verify_queued_media_answers(c: &Client, a: &str, b: &str, alice_token: &str, 
     for (index, mut offer) in offers.into_iter().enumerate() {
         offer["expiresAt"] = json!(OffsetDateTime::now_utc().unix_timestamp() + 20 * 86_400);
         let repeat = c
-            .post(format!("{a}/api/chat/media/deliveries"))
+            .post(format!("{a}/api/v1/chat/media/deliveries"))
             .bearer_auth(alice_token)
             .json(&offer)
             .send()
@@ -3564,7 +3558,7 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
         });
         assert_eq!(
             (settled.0.as_str(), settled.1.as_deref()),
-            ("rejected", Some("federation_off")),
+            ("rejected", Some("federationOff")),
             "the off account's queued send is withdrawn: {:?}",
             settled.2
         );
@@ -3579,7 +3573,7 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
     loop {
         let response = c
             .get(format!(
-                "{b}/api/chat/media/objects/{QUEUED_MEDIA_ATTACHMENT_ID}"
+                "{b}/api/v1/chat/media/objects/{QUEUED_MEDIA_ATTACHMENT_ID}"
             ))
             .bearer_auth(&bob_token)
             .send()
@@ -3634,7 +3628,7 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
     let (token_b, _) = register_account(c, b, "renames-bob@example.test", "ren_bob");
     let domain_a = server_name(c, a);
     let drive_user = |name: &str| {
-        c.get(format!("{b}/api/users/by-address/{name}@{domain_a}"))
+        c.get(format!("{b}/api/v1/accounts/by-address/{name}@{domain_a}"))
             .bearer_auth(&token_b)
             .send()
             .unwrap()
@@ -3648,7 +3642,7 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
     // Alice renames on A, her new address's key with it.
     let master_key = test_master_key(email);
     let me = json_response(
-        c.get(format!("{a}/api/user/me"))
+        c.get(format!("{a}/api/v1/account"))
             .bearer_auth(&token_a)
             .send()
             .unwrap(),
@@ -3677,10 +3671,12 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
     let deadline = std::time::Instant::now() + Duration::from_secs(90);
     let chains = loop {
         let chains = json_response(
-            c.get(format!("{b}/api/users/renames/{old}@{domain_a}"))
-                .bearer_auth(&token_b)
-                .send()
-                .unwrap(),
+            c.get(format!(
+                "{b}/api/v1/accounts/by-address/{old}@{domain_a}/renames"
+            ))
+            .bearer_auth(&token_b)
+            .send()
+            .unwrap(),
             "renames on B",
         );
         if chains["chains"].as_array().is_some_and(|c| !c.is_empty()) {
@@ -3703,6 +3699,7 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
         serde_json::from_value(entry["chain"].clone()).unwrap();
     let view = kutup_crypto::account_rename::verify_chain(
         &alice.identity.authority_public_key(),
+        alice.id.parse().unwrap(),
         &statements,
     )
     .unwrap();
@@ -3731,7 +3728,7 @@ fn federated_user(
     token: &str,
 ) -> common::User {
     let me = json_response(
-        c.get(format!("{base}/api/user/me"))
+        c.get(format!("{base}/api/v1/account"))
             .bearer_auth(token)
             .send()
             .unwrap(),
@@ -3790,26 +3787,29 @@ fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
         owner.identity.drive_signing_key(),
         &bob.person,
         &bob.identity.incarnation_id(),
-        &bob.identity.drive_hpke_public_key(),
+        &bob.identity.drive_xwing_public_key(),
     )
     .unwrap()
     .encode_b64()
     .unwrap();
     let invite = json_response(
-        c.post(format!("{a}/api/files/{}/federated-shares", file.id))
-            .bearer_auth(&owner.token)
-            .json(&json!({
-                "recipientServer": bob.person.server,
-                "recipientAccountId": bob.person.account_id,
-                "shareEnvelope": envelope,
-                "canEdit": true,
-            }))
-            .send()
-            .unwrap(),
+        c.post(format!(
+            "{a}/api/v1/drive/files/{}/federated-shares",
+            file.id
+        ))
+        .bearer_auth(&owner.token)
+        .json(&json!({
+            "recipientServer": bob.person.server,
+            "recipientAccountId": bob.person.account_id,
+            "shareEnvelope": envelope,
+            "canEdit": true,
+        }))
+        .send()
+        .unwrap(),
         "share the file to edit",
     );
     let accepted = json_response(
-        c.post(format!("{b}/api/drive/federation/file-shares"))
+        c.post(format!("{b}/api/v1/drive/federation/file-shares"))
             .bearer_auth(&bob.token)
             .json(&json!({
                 "server": owner.person.server,
@@ -3823,7 +3823,7 @@ fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
     let device = common::register_device(c, b, &bob);
     let set_max_age = |seconds: Option<i64>| {
         let r = c
-            .put(format!("{a}/api/admin/settings"))
+            .put(format!("{a}/api/v1/admin/settings"))
             .bearer_auth(admin_a)
             .json(&json!({ "remoteManifestMaxAgeSeconds": seconds.unwrap_or(300) }))
             .send()
@@ -3850,7 +3850,7 @@ fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
     // One frame through B's bridge; true once A kept it (`stored`).
     let kept = |bytes: Vec<u8>| {
         let ticket = json_response(
-            c.post(format!("{b}/api/device-ticket"))
+            c.post(format!("{b}/api/v1/account/devices/tickets"))
                 .bearer_auth(&bob.token)
                 .header(kutup_chat_proto::DEVICE_HEADER, device.header())
                 .send()
@@ -3858,7 +3858,7 @@ fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
             "device ticket",
         );
         let url = format!(
-            "{}/api/drive/federation/file-shares/{incoming}/collab/ws?ticket={}",
+            "{}/api/v1/drive/federation/file-shares/{incoming}/collab/ws?ticket={}",
             b.replacen("http", "ws", 1),
             ticket["ticket"].as_str().unwrap()
         );
@@ -3929,14 +3929,14 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
 
     // The owner finds Bob by his name: his account and keys.
     let found = json_response(
-        c.get(format!("{a}/api/users/by-address/aid_bob@{domain_b}"))
+        c.get(format!("{a}/api/v1/accounts/by-address/aid_bob@{domain_b}"))
             .bearer_auth(&owner.token)
             .send()
             .unwrap(),
         "find Bob",
     );
     assert_eq!(found["accountId"], bob.person.account_id.as_str());
-    let bob_hpke = bob.identity.drive_hpke_public_key();
+    let bob_hpke = bob.identity.drive_xwing_public_key();
 
     // A folder and a file in it, each shared with Bob's account.
     let folder = common::create_folder(c, a, &owner);
@@ -3956,7 +3956,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     .unwrap();
     let share_folder = |envelope: &str| {
         c.post(format!(
-            "{a}/api/collections/{}/federated-shares",
+            "{a}/api/v1/drive/collections/{}/federated-shares",
             folder.id
         ))
         .bearer_auth(&owner.token)
@@ -3995,22 +3995,25 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     .encode_b64()
     .unwrap();
     let file_invite = json_response(
-        c.post(format!("{a}/api/files/{}/federated-shares", sealed.id))
-            .bearer_auth(&owner.token)
-            .json(&json!({
-                "recipientServer": domain_b,
-                "recipientAccountId": bob.person.account_id,
-                "shareEnvelope": file_envelope,
-                "canEdit": false,
-            }))
-            .send()
-            .unwrap(),
+        c.post(format!(
+            "{a}/api/v1/drive/files/{}/federated-shares",
+            sealed.id
+        ))
+        .bearer_auth(&owner.token)
+        .json(&json!({
+            "recipientServer": domain_b,
+            "recipientAccountId": bob.person.account_id,
+            "shareEnvelope": file_envelope,
+            "canEdit": false,
+        }))
+        .send()
+        .unwrap(),
         "share the file",
     );
     let file_capability = invite_capability(file_invite["inviteUrl"].as_str().unwrap());
     // The listed recipient is the name Bob's server answers, not the client's.
     let access = json_response(
-        c.get(format!("{a}/api/collections/{}/access", folder.id))
+        c.get(format!("{a}/api/v1/drive/collections/{}/access", folder.id))
             .bearer_auth(&owner.token)
             .send()
             .unwrap(),
@@ -4031,7 +4034,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     );
     bob.username = "aid_bobby".into();
     let accepted = json_response(
-        c.post(format!("{b}/api/drive/federation/shares"))
+        c.post(format!("{b}/api/v1/drive/federation/folder-shares"))
             .bearer_auth(&bob.token)
             .json(&json!({ "server": domain_a, "capability": folder_capability }))
             .send()
@@ -4040,7 +4043,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     );
     let incoming_folder = accepted["id"].as_str().unwrap().to_owned();
     let accepted_file = json_response(
-        c.post(format!("{b}/api/drive/federation/file-shares"))
+        c.post(format!("{b}/api/v1/drive/federation/file-shares"))
             .bearer_auth(&bob.token)
             .json(&json!({ "server": domain_a, "capability": file_capability }))
             .send()
@@ -4058,7 +4061,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     );
     owner.username = "aid_owner2".into();
     let incoming = json_response(
-        c.get(format!("{b}/api/drive/federation/shares"))
+        c.get(format!("{b}/api/v1/drive/federation/folder-shares"))
             .bearer_auth(&bob.token)
             .send()
             .unwrap(),
@@ -4080,13 +4083,13 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
             &owner.identity.drive_signing_public_key(),
             &bob.person,
             &bob.identity.incarnation_id(),
-            bob.identity.drive_hpke_private_key(),
+            bob.identity.drive_xwing_private_key(),
         )
         .unwrap();
     assert_eq!(opened.as_slice(), folder.key);
     let file_now = json_response(
         c.get(format!(
-            "{b}/api/drive/federation/file-shares/{incoming_file}"
+            "{b}/api/v1/drive/federation/file-shares/{incoming_file}"
         ))
         .bearer_auth(&bob.token)
         .send()
@@ -4103,7 +4106,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
             &owner.identity.drive_signing_public_key(),
             &bob.person,
             &bob.identity.incarnation_id(),
-            bob.identity.drive_hpke_private_key(),
+            bob.identity.drive_xwing_private_key(),
         )
         .unwrap();
     assert_eq!(opened.as_slice(), sealed.key);
@@ -4125,7 +4128,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     let pending_capability = invite_capability(pending["inviteUrl"].as_str().unwrap());
     let admin_b = setup_admin(c, b, ADMIN_B_EMAIL, "adminb");
     let freed = c
-        .post(format!("{b}/api/admin/names/aid_bob/free"))
+        .post(format!("{b}/api/v1/admin/names/aid_bob/free"))
         .bearer_auth(&admin_b)
         .send()
         .unwrap();
@@ -4136,7 +4139,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     assert_ne!(carol.person, bob.person, "a freed name is a new account");
     // She has none of Bob's shares, profile keys or invites.
     let carol_shares = json_response(
-        c.get(format!("{b}/api/drive/federation/shares"))
+        c.get(format!("{b}/api/v1/drive/federation/folder-shares"))
             .bearer_auth(&carol.token)
             .send()
             .unwrap(),
@@ -4144,7 +4147,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     );
     assert_eq!(carol_shares, json!([]), "{carol_shares}");
     let carol_files = json_response(
-        c.get(format!("{b}/api/drive/federation/file-shares"))
+        c.get(format!("{b}/api/v1/drive/federation/file-shares"))
             .bearer_auth(&carol.token)
             .send()
             .unwrap(),
@@ -4152,7 +4155,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     );
     assert_eq!(carol_files, json!([]), "{carol_files}");
     let carol_people = json_response(
-        c.get(format!("{b}/api/drive/people"))
+        c.get(format!("{b}/api/v1/drive/people"))
             .bearer_auth(&carol.token)
             .send()
             .unwrap(),
@@ -4160,7 +4163,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     );
     assert_eq!(carol_people["people"], json!([]), "{carol_people}");
     let taken = c
-        .post(format!("{b}/api/drive/federation/shares"))
+        .post(format!("{b}/api/v1/drive/federation/folder-shares"))
         .bearer_auth(&carol.token)
         .json(&json!({ "server": domain_a, "capability": pending_capability }))
         .send()
@@ -4172,7 +4175,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     );
     // The owner's share still names Bob's account; the name now leads to Carol.
     let access = json_response(
-        c.get(format!("{a}/api/collections/{}/access", folder.id))
+        c.get(format!("{a}/api/v1/drive/collections/{}/access", folder.id))
             .bearer_auth(&owner.token)
             .send()
             .unwrap(),
@@ -4184,7 +4187,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
         .iter()
         .all(|share| share["recipientAccountId"] == bob.person.account_id.as_str()));
     let now_found = json_response(
-        c.get(format!("{a}/api/users/by-address/aid_bob@{domain_b}"))
+        c.get(format!("{a}/api/v1/accounts/by-address/aid_bob@{domain_b}"))
             .bearer_auth(&owner.token)
             .send()
             .unwrap(),
@@ -4197,7 +4200,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
     // wait is for that delivery only, well inside the half minute.
     let by_id = || {
         json_response(
-            c.get(format!("{a}/api/users/by-id/{}", bob.person.account_id))
+            c.get(format!("{a}/api/v1/accounts/{}", bob.person.account_id))
                 .query(&[("server", domain_b.as_str())])
                 .bearer_auth(&owner.token)
                 .send()

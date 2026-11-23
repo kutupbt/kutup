@@ -8,7 +8,7 @@
 //! - **Acknowledgements:** the notice was shown and confirmed (not a
 //!   consent), at sign-up in the account's creating transaction, or when a
 //!   new required version is shown at a later sign-in. Append-only.
-//! - **Consents**, per purpose (`federation_abroad`, `marketing`), given or
+//! - **Consents**, per purpose (`federation`, `marketing`), given or
 //!   withdrawn; each change is a row and the latest is the state. A
 //!   purpose's text is the current document of the purpose's kind.
 //!
@@ -26,13 +26,14 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
-use crate::middleware::{AdminUser, AuthUser};
+use crate::middleware::{AdminAccount, AuthAccount};
 use crate::AppState;
 
 /// The purposes a consent is given for: the core's, worded neutrally; their
 /// texts are the operator's documents of the same kind.
-pub const PURPOSES: [&str; 2] = ["federation_abroad", "marketing"];
+pub const PURPOSES: [&str; 2] = [crate::federation_switch::PURPOSE, "marketing"];
 
 /// One published version of a document, in one language.
 #[derive(Debug, Clone, Serialize, ToSchema, sqlx::FromRow)]
@@ -249,55 +250,55 @@ pub async fn set_consent(
 
 // --- handlers ----------------------------------------------------------------
 
-/// `GET /api/legal/documents` — the current documents (anyone: the sign-up
+/// `GET /api/v1/legal/documents` — the current documents (anyone: the sign-up
 /// page shows the required ones).
 #[utoipa::path(
     get,
-    path = "/api/legal/documents",
-    tag = "legal",
+    path = "/api/v1/legal/documents",
+    tag = "account",
     responses((status = 200, description = "Current documents", body = Vec<Document>))
 )]
 pub async fn get_documents(State(state): State<AppState>) -> AppResult<Response> {
     Ok(Json(current(&state.pool).await?).into_response())
 }
 
-/// `GET /api/user/legal/pending` — the required documents the caller hasn't
+/// `GET /api/v1/account/legal/pending` — the required documents the caller hasn't
 /// acknowledged in their current version.
 #[utoipa::path(
     get,
-    path = "/api/user/legal/pending",
-    tag = "legal",
+    path = "/api/v1/account/legal/pending",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Documents to acknowledge", body = Vec<Document>))
 )]
-pub async fn get_pending(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+pub async fn get_pending(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     Ok(Json(pending(&state.pool, user_id).await?).into_response())
 }
 
-/// `POST /api/user/legal/acknowledge` body.
+/// `POST /api/v1/account/legal/acknowledge` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AcknowledgeRequest {
     document_ids: Vec<Uuid>,
 }
 
-/// `POST /api/user/legal/acknowledge` — the caller confirmed new required
+/// `POST /api/v1/account/legal/acknowledge` — the caller confirmed new required
 /// versions.
 #[utoipa::path(
     post,
-    path = "/api/user/legal/acknowledge",
-    tag = "legal",
+    path = "/api/v1/account/legal/acknowledge",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = AcknowledgeRequest,
     responses((status = 204, description = "Recorded"))
 )]
 pub async fn post_acknowledge(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<AcknowledgeRequest>,
 ) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     if req.document_ids.is_empty() || req.document_ids.len() > 32 {
         return Err(AppError::bad_request("name 1 to 32 documents"));
     }
@@ -307,7 +308,7 @@ pub async fn post_acknowledge(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `GET /api/user/consents` answer.
+/// `GET /api/v1/account/consents` answer.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsentsView {
@@ -315,18 +316,21 @@ pub struct ConsentsView {
     consents: Vec<Consent>,
     /// The current text of each purpose, when one is published.
     documents: Vec<Document>,
+    /// Whether turning federation on asks for the `federation` consent
+    /// (`server.federation_consent_required`).
+    federation_consent_required: bool,
 }
 
-/// `GET /api/user/consents`
+/// `GET /api/v1/account/consents`
 #[utoipa::path(
     get,
-    path = "/api/user/consents",
-    tag = "legal",
+    path = "/api/v1/account/consents",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The caller's consents", body = ConsentsView))
 )]
-pub async fn get_consents(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+pub async fn get_consents(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let documents = current(&state.pool)
         .await?
         .into_iter()
@@ -335,11 +339,13 @@ pub async fn get_consents(State(state): State<AppState>, user: AuthUser) -> AppR
     Ok(Json(ConsentsView {
         consents: consents(&state.pool, user_id).await?,
         documents,
+        federation_consent_required: crate::federation_switch::consent_required(&state.pool)
+            .await?,
     })
     .into_response())
 }
 
-/// `PUT /api/user/consents` body.
+/// `PUT /api/v1/account/consents` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ConsentRequest {
@@ -349,21 +355,21 @@ pub struct ConsentRequest {
     document_id: Option<Uuid>,
 }
 
-/// `PUT /api/user/consents` — give or withdraw one purpose.
+/// `PUT /api/v1/account/consents` — give or withdraw one purpose.
 #[utoipa::path(
     put,
-    path = "/api/user/consents",
-    tag = "legal",
+    path = "/api/v1/account/consents",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = ConsentRequest,
     responses((status = 204, description = "Recorded"))
 )]
 pub async fn put_consent(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<ConsentRequest>,
 ) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     set_consent(
         &mut tx,
@@ -377,7 +383,8 @@ pub async fn put_consent(
     // Talking to other servers rests on this consent: withdrawn, it stops.
     let withdrawn = req.purpose == crate::federation_switch::PURPOSE && !req.given;
     if withdrawn {
-        crate::federation_switch::turn_off(&mut tx, user_id).await?;
+        crate::federation_switch::turn_off(&mut tx, user_id, crate::federation_switch::By::Account)
+            .await?;
     }
     tx.commit().await?;
     if withdrawn {
@@ -386,17 +393,17 @@ pub async fn put_consent(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `GET /api/admin/legal/documents` — every published version.
+/// `GET /api/v1/admin/legal/documents` — every published version.
 #[utoipa::path(
     get,
-    path = "/api/admin/legal/documents",
+    path = "/api/v1/admin/legal/documents",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Every version", body = Vec<Document>))
 )]
 pub async fn admin_documents(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Response> {
     let all: Vec<Document> = sqlx::query_as(&format!(
         "SELECT {DOCUMENT_COLUMNS} FROM legal_documents d ORDER BY d.kind, d.published_at DESC, d.language"
@@ -406,7 +413,7 @@ pub async fn admin_documents(
     Ok(Json(all).into_response())
 }
 
-/// `POST /api/admin/legal/documents` body.
+/// `POST /api/v1/admin/legal/documents` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PublishRequest {
@@ -419,11 +426,11 @@ pub struct PublishRequest {
     required_at_signup: bool,
 }
 
-/// `POST /api/admin/legal/documents` — publish a version (never edited
+/// `POST /api/v1/admin/legal/documents` — publish a version (never edited
 /// after). Audited.
 #[utoipa::path(
     post,
-    path = "/api/admin/legal/documents",
+    path = "/api/v1/admin/legal/documents",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = PublishRequest,
@@ -431,7 +438,7 @@ pub struct PublishRequest {
 )]
 pub async fn publish(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(req): Json<PublishRequest>,
 ) -> AppResult<Response> {
     let sha256 = hex::decode(req.sha256.trim())
@@ -442,7 +449,7 @@ pub async fn publish(
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err(AppError::bad_request("url is an http(s) address"));
     }
-    let admin_id = crate::handlers::trusted_uuid(&admin.user_id)?;
+    let admin_id = crate::handlers::trusted_uuid(&admin.account_id)?;
     let published: Result<Document, sqlx::Error> = sqlx::query_as(&format!(
         "INSERT INTO legal_documents AS d (kind, version, language, url, sha256, required_at_signup, published_by_account_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -465,15 +472,15 @@ pub async fn publish(
         }
         Err(sqlx::Error::Database(e)) if e.is_check_violation() => {
             return Err(AppError::bad_request(
-                "kind is lowercase letters, digits and _; version 1 to 40 characters; language a code like en or pt-BR",
+                "kind is letters and digits, a lowercase letter first (camelCase); version 1 to 40 characters; language a code like en or pt-BR",
             ))
         }
         Err(e) => return Err(e.into()),
     };
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
-        "legal.publish",
+        &admin.account_id,
+        AdminAction::LegalPublish,
         None,
         json!({
             "documentId": document.id,
@@ -493,17 +500,12 @@ mod tests {
 
     async fn account(pool: &PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
-        )
-        .bind(user_id)
-        .bind(format!("legal{}", &user_id.simple().to_string()[..12]))
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(user_id)
+            .bind(format!("legal{}", &user_id.simple().to_string()[..12]))
+            .execute(pool)
+            .await
+            .unwrap();
         user_id
     }
 

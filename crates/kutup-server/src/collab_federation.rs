@@ -51,7 +51,7 @@ use crate::handlers::collab::{
 use crate::handlers::file_versions::{store_version, to_version_row, VersionTuple, VERSION_SELECT};
 use crate::handlers::trusted_uuid;
 use crate::hub::{self, WsOut};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 use kutup_crypto::account_ref::AccountRef;
 
@@ -259,11 +259,11 @@ async fn remote_access(
     let hash = capability_hash(capability);
     let file: Option<(bool, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_edit AND s.key_generation = f.key_generation AND f.key_epoch = c.key_epoch,
-                s.recipient_account_id, s.recipient_incarnation_id
+                s.recipient_account_id, encode(s.recipient_incarnation_id, 'hex')
          FROM drive_federated_outgoing_file_shares s
          JOIN drive_files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN drive_collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_server = $2 AND s.file_id = $3
+         WHERE s.capability_hash = decode($1, 'hex') AND s.recipient_server = $2 AND s.file_id = $3
            -- An mailbox_owner that doesn't talk to other servers has, to them, no
            -- shares (crate::federation_switch).
            AND kutup_account_federates(c.owner_account_id)",
@@ -282,11 +282,11 @@ async fn remote_access(
     }
     let folder: Option<(bool, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_upload AND f.key_epoch = c.key_epoch,
-                s.recipient_account_id, s.recipient_incarnation_id
+                s.recipient_account_id, encode(s.recipient_incarnation_id, 'hex')
          FROM drive_federated_outgoing_shares s
          JOIN drive_collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
          JOIN drive_files f ON f.collection_id = c.id AND f.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_server = $2 AND f.id = $3
+         WHERE s.capability_hash = decode($1, 'hex') AND s.recipient_server = $2 AND f.id = $3
            -- An mailbox_owner that doesn't talk to other servers has, to them, no
            -- shares (crate::federation_switch).
            AND kutup_account_federates(c.owner_account_id)",
@@ -366,7 +366,7 @@ fn valid_subscription_id(id: &str) -> bool {
     (16..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// `POST /api/fed/drive/collab/subscribe` — a bridge has people in a file's
+/// `POST /api/fed/v2/drive/collab/subscribe` — a bridge has people in a file's
 /// room: push it every new frame from now on. Renews an existing
 /// subscription. Signed, capability-authorized.
 pub async fn subscribe(
@@ -374,9 +374,13 @@ pub async fn subscribe(
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Response> {
-    let (federation, authenticated, parsed) =
-        inbound::<SubscribeBody>(&state, &headers, "/api/fed/drive/collab/subscribe", &body)
-            .await?;
+    let (federation, authenticated, parsed) = inbound::<SubscribeBody>(
+        &state,
+        &headers,
+        "/api/fed/v2/drive/collab/subscribe",
+        &body,
+    )
+    .await?;
     let result = async {
         let request = parsed?;
         if !valid_subscription_id(&request.subscription_id) {
@@ -438,16 +442,20 @@ pub async fn subscribe(
     answer(federation, &authenticated, result)
 }
 
-/// `POST /api/fed/drive/collab/unsubscribe` — nobody is left in the
+/// `POST /api/fed/v2/drive/collab/unsubscribe` — nobody is left in the
 /// bridge's room.
 pub async fn unsubscribe(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Response> {
-    let (federation, authenticated, parsed) =
-        inbound::<SubscribeBody>(&state, &headers, "/api/fed/drive/collab/unsubscribe", &body)
-            .await?;
+    let (federation, authenticated, parsed) = inbound::<SubscribeBody>(
+        &state,
+        &headers,
+        "/api/fed/v2/drive/collab/unsubscribe",
+        &body,
+    )
+    .await?;
     let result = async {
         let request = parsed?;
         if let Some(sub) = state.collab_federation.subscriber(
@@ -541,7 +549,7 @@ async fn push(state: &AppState, sub: &Subscriber, body: &PushBody) -> Result<Sta
             &sub.domain,
             drive_spec(
                 Method::POST,
-                "/api/fed/drive/collab/push".into(),
+                "/api/fed/v2/drive/collab/push".into(),
                 JSON_CONTENT_TYPE.into(),
                 bytes,
                 None,
@@ -674,7 +682,7 @@ struct FramesResponse {
     positions: Vec<Option<i64>>,
 }
 
-/// `POST /api/fed/drive/collab/frames` — frames from a bridge's editors,
+/// `POST /api/fed/v2/drive/collab/frames` — frames from a bridge's editors,
 /// already checked there against their devices. Home checks each against the
 /// share (its recipient's, from the bridge's server), the sender's account
 /// manifest (its device's frame key, `remote_manifests`) and the file, keeps
@@ -686,7 +694,7 @@ pub async fn frames(
     body: Bytes,
 ) -> AppResult<Response> {
     let (federation, authenticated, parsed) =
-        inbound::<FramesBody>(&state, &headers, "/api/fed/drive/collab/frames", &body).await?;
+        inbound::<FramesBody>(&state, &headers, "/api/fed/v2/drive/collab/frames", &body).await?;
     let result = async {
         let request = parsed?;
         let access = remote_access(&state, &authenticated, &headers, request.file_id).await?;
@@ -804,7 +812,7 @@ struct LogResponse {
     floor: i64,
 }
 
-/// `POST /api/fed/drive/collab/log` — the kept frames after a position, for
+/// `POST /api/fed/v2/drive/collab/log` — the kept frames after a position, for
 /// a bridge's editor catching up (as a local one resumes). Signed.
 pub async fn log(
     State(state): State<AppState>,
@@ -812,7 +820,7 @@ pub async fn log(
     body: Bytes,
 ) -> AppResult<Response> {
     let (federation, authenticated, parsed) =
-        inbound::<LogBody>(&state, &headers, "/api/fed/drive/collab/log", &body).await?;
+        inbound::<LogBody>(&state, &headers, "/api/fed/v2/drive/collab/log", &body).await?;
     let result = async {
         let request = parsed?;
         remote_access(&state, &authenticated, &headers, request.file_id).await?;
@@ -859,7 +867,7 @@ struct FileBody {
     file_id: Uuid,
 }
 
-/// `POST /api/fed/drive/collab/versions/list` — a file's versions. Signed.
+/// `POST /api/fed/v2/drive/collab/versions/list` — a file's versions. Signed.
 pub async fn versions_list(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -868,7 +876,7 @@ pub async fn versions_list(
     let (federation, authenticated, parsed) = inbound::<FileBody>(
         &state,
         &headers,
-        "/api/fed/drive/collab/versions/list",
+        "/api/fed/v2/drive/collab/versions/list",
         &body,
     )
     .await?;
@@ -888,7 +896,7 @@ pub async fn versions_list(
     answer(federation, &authenticated, result)
 }
 
-/// `GET /api/fed/drive/collab/files/{fileId}/versions/{vid}` — one version's
+/// `GET /api/fed/v2/drive/collab/files/{fileId}/versions/{vid}` — one version's
 /// sealed blob, as a signed stream.
 pub async fn version_content(
     State(state): State<AppState>,
@@ -896,7 +904,7 @@ pub async fn version_content(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let path = format!("/api/fed/drive/collab/files/{file_id}/versions/{vid}");
+    let path = format!("/api/fed/v2/drive/collab/files/{file_id}/versions/{vid}");
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -911,17 +919,17 @@ pub async fn version_content(
         let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
         let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
         remote_access(&state, &authenticated, &headers, file_id).await?;
-        let row: Option<(String, i64)> = sqlx::query_as(
-            "SELECT storage_path, size_bytes FROM drive_file_versions WHERE id = $1 AND file_id = $2",
+        let row: Option<i64> = sqlx::query_scalar(
+            "SELECT size_bytes FROM drive_file_versions WHERE id = $1 AND file_id = $2",
         )
         .bind(vid)
         .bind(file_id)
         .fetch_optional(&state.pool)
         .await?;
-        let (path, size) = row.ok_or_else(|| AppError::not_found("not found"))?;
+        let size = row.ok_or_else(|| AppError::not_found("not found"))?;
         // Its sealed content record comes with the version list.
         let content = crate::file_content::CurrentContent {
-            path,
+            path: crate::file_content::revision_path(file_id, vid),
             size,
             version: Some(vid),
             revision: vid,
@@ -976,7 +984,7 @@ struct CreateVersionBody {
     blob: String,
 }
 
-/// `POST /api/fed/drive/collab/versions/create` — a version saved by an
+/// `POST /api/fed/v2/drive/collab/versions/create` — a version saved by an
 /// editor on the calling server. Checked as a local save; the file's owner
 /// pays (as for uploads into shared folders across servers).
 pub async fn versions_create(
@@ -987,7 +995,7 @@ pub async fn versions_create(
     let (federation, authenticated, parsed) = inbound::<CreateVersionBody>(
         &state,
         &headers,
-        "/api/fed/drive/collab/versions/create",
+        "/api/fed/v2/drive/collab/versions/create",
         &body,
     )
     .await?;
@@ -1067,7 +1075,7 @@ struct CreateAssetBody {
     blob: String,
 }
 
-/// `POST /api/fed/drive/collab/assets/create` — a picture pasted into a note
+/// `POST /api/fed/v2/drive/collab/assets/create` — a picture pasted into a note
 /// (or placed on a whiteboard) by an editor on the calling server. Checked as
 /// a local upload; the file's owner pays, as for versions.
 pub async fn assets_create(
@@ -1078,7 +1086,7 @@ pub async fn assets_create(
     let (federation, authenticated, parsed) = inbound::<CreateAssetBody>(
         &state,
         &headers,
-        "/api/fed/drive/collab/assets/create",
+        "/api/fed/v2/drive/collab/assets/create",
         &body,
     )
     .await?;
@@ -1104,7 +1112,7 @@ pub async fn assets_create(
     answer(federation, &authenticated, result)
 }
 
-/// `GET /api/fed/drive/collab/files/{fileId}/assets/{assetId}` — one of a
+/// `GET /api/fed/v2/drive/collab/files/{fileId}/assets/{assetId}` — one of a
 /// file's assets (its sealed envelope), signed. The key generation it was
 /// sealed at is not sent: the browser tries the file's keys, newest first.
 pub async fn asset_content(
@@ -1113,7 +1121,7 @@ pub async fn asset_content(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let path = format!("/api/fed/drive/collab/files/{file_id}/assets/{asset_id}");
+    let path = format!("/api/fed/v2/drive/collab/files/{file_id}/assets/{asset_id}");
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -1152,7 +1160,7 @@ struct PatchVersionBody {
     keep_forever: Option<bool>,
 }
 
-/// `POST /api/fed/drive/collab/versions/patch` — name or pin a version.
+/// `POST /api/fed/v2/drive/collab/versions/patch` — name or pin a version.
 pub async fn versions_patch(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1161,7 +1169,7 @@ pub async fn versions_patch(
     let (federation, authenticated, parsed) = inbound::<PatchVersionBody>(
         &state,
         &headers,
-        "/api/fed/drive/collab/versions/patch",
+        "/api/fed/v2/drive/collab/versions/patch",
         &body,
     )
     .await?;
@@ -1213,15 +1221,20 @@ pub async fn versions_patch(
     answer(federation, &authenticated, result)
 }
 
-/// `POST /api/fed/drive/collab/claim-seed` — whether the calling server's
-/// editor seeds a never-saved document (as `/api/files/{id}/claim-seed`).
+/// `POST /api/fed/v2/drive/collab/claim-seed` — whether the calling server's
+/// editor seeds a never-saved document (as `/api/v1/drive/files/{id}/claim-seed`).
 pub async fn claim_seed(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Response> {
-    let (federation, authenticated, parsed) =
-        inbound::<FileBody>(&state, &headers, "/api/fed/drive/collab/claim-seed", &body).await?;
+    let (federation, authenticated, parsed) = inbound::<FileBody>(
+        &state,
+        &headers,
+        "/api/fed/v2/drive/collab/claim-seed",
+        &body,
+    )
+    .await?;
     let result = async {
         let request = parsed?;
         let access = remote_access(&state, &authenticated, &headers, request.file_id).await?;
@@ -1255,7 +1268,7 @@ struct RemoteTarget {
     file_id: Uuid,
     /// The local account the share is theirs: its devices are the only ones
     /// home accepts through this capability.
-    user_id: Uuid,
+    account_id: Uuid,
 }
 
 struct Bridge {
@@ -1278,7 +1291,7 @@ struct Bridge {
 fn room_key(target: &RemoteTarget) -> String {
     format!(
         "remote:{}:{}:{}",
-        target.domain, target.file_id, target.user_id
+        target.domain, target.file_id, target.account_id
     )
 }
 
@@ -1351,13 +1364,13 @@ async fn call_home<T: Serialize, R: DeserializeOwned>(
     }
 }
 
-/// A conditional save's `version_conflict` answer from the file's server,
+/// A conditional save's `versionConflict` answer from the file's server,
 /// passed on with the version it names (checked: a version id or `original`).
 fn version_conflict(body: &[u8]) -> Option<AppError> {
     let answer: serde_json::Value = serde_json::from_slice(body).ok()?;
     // Someone else's metadata landed first: the file's metadata as it is now
     // goes back to the editor, which seals on top of it.
-    if answer.get("code")?.as_str()? == "revision_conflict" {
+    if answer.get("code")?.as_str()? == "revisionConflict" {
         let revision = answer.get("metadataRevision")?.as_i64()?;
         let envelope = match answer.get("metadataEnvelope") {
             None => None,
@@ -1371,7 +1384,7 @@ fn version_conflict(body: &[u8]) -> Option<AppError> {
         };
         return Some(crate::drive_blob::revision_conflict_at(revision, envelope));
     }
-    if answer.get("code")?.as_str()? != "version_conflict" {
+    if answer.get("code")?.as_str()? != "versionConflict" {
         return None;
     }
     let current = answer.get("current")?.as_str()?;
@@ -1380,7 +1393,7 @@ fn version_conflict(body: &[u8]) -> Option<AppError> {
     }
     Some(
         AppError::conflict("the file changed since")
-            .with_details(serde_json::json!({ "code": "version_conflict", "current": current })),
+            .with_details(serde_json::json!({ "code": "versionConflict", "current": current })),
     )
 }
 
@@ -1415,7 +1428,7 @@ async fn bridge_join(
     let subscribed: AppResult<SubscribeResponse> = call_home(
         state,
         &bridge.target,
-        "/api/fed/drive/collab/subscribe",
+        "/api/fed/v2/drive/collab/subscribe",
         &SubscribeBody {
             file_id: bridge.target.file_id,
             subscription_id: bridge.subscription_id.clone(),
@@ -1461,7 +1474,7 @@ fn bridge_release(state: &AppState, bridge: &Arc<Bridge>) {
         let _: AppResult<serde_json::Value> = call_home(
             &state,
             &target,
-            "/api/fed/drive/collab/unsubscribe",
+            "/api/fed/v2/drive/collab/unsubscribe",
             &SubscribeBody {
                 file_id: target.file_id,
                 subscription_id: id,
@@ -1519,7 +1532,7 @@ async fn bridge_sender(state: AppState, bridge: Arc<Bridge>, mut rx: mpsc::Recei
             let sent: AppResult<FramesResponse> = call_home(
                 &state,
                 &bridge.target,
-                "/api/fed/drive/collab/frames",
+                "/api/fed/v2/drive/collab/frames",
                 &body,
                 MAX_JSON_RESPONSE,
             )
@@ -1570,7 +1583,7 @@ async fn bridge_renewer(state: AppState, bridge: Arc<Bridge>) {
         let renewed: AppResult<SubscribeResponse> = call_home(
             &state,
             &bridge.target,
-            "/api/fed/drive/collab/subscribe",
+            "/api/fed/v2/drive/collab/subscribe",
             &SubscribeBody {
                 file_id: bridge.target.file_id,
                 subscription_id: bridge.subscription_id.clone(),
@@ -1595,7 +1608,7 @@ async fn bridge_renewer(state: AppState, bridge: Arc<Bridge>) {
     }
 }
 
-/// `POST /api/fed/drive/collab/push` — home's new frames for a bridge's room.
+/// `POST /api/fed/v2/drive/collab/push` — home's new frames for a bridge's room.
 /// Signed by home; names the subscription.
 pub async fn receive_push(
     State(state): State<AppState>,
@@ -1603,7 +1616,7 @@ pub async fn receive_push(
     body: Bytes,
 ) -> AppResult<Response> {
     let (federation, authenticated, parsed) =
-        inbound::<PushBody>(&state, &headers, "/api/fed/drive/collab/push", &body).await?;
+        inbound::<PushBody>(&state, &headers, "/api/fed/v2/drive/collab/push", &body).await?;
     let result = async {
         let request = parsed?;
         let bridge = state
@@ -1672,7 +1685,7 @@ async fn target_for(
                 domain,
                 capability,
                 file_id: *file_id,
-                user_id,
+                account_id: user_id,
             })
         }
         RemoteRoute::File { share_id } => {
@@ -1690,7 +1703,7 @@ async fn target_for(
                 domain,
                 capability,
                 file_id,
-                user_id,
+                account_id: user_id,
             })
         }
     }
@@ -1714,7 +1727,7 @@ fn file_route(share_id: &str) -> AppResult<RemoteRoute> {
     })
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/files/{fileId}/collab/ws` —
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/collab/ws` —
 /// live editing of a file in a folder on another server, through this one.
 pub async fn ws_folder_file(
     State(state): State<AppState>,
@@ -1733,7 +1746,7 @@ pub async fn ws_folder_file(
     .await
 }
 
-/// `GET /api/drive/federation/file-shares/{id}/collab/ws` — live editing of a
+/// `GET /api/v1/drive/federation/file-shares/{id}/collab/ws` — live editing of a
 /// file shared by itself from another server, through this one.
 pub async fn ws_shared_file(
     State(state): State<AppState>,
@@ -1754,7 +1767,7 @@ async fn bridge_ws(
 ) -> AppResult<Response> {
     let device = authenticate_socket(&state, &headers, &q).await?;
     let tab = q.tab();
-    let target = target_for(&state, device.user_id, &route).await?;
+    let target = target_for(&state, device.account_id, &route).await?;
     // Subscribed before the upgrade: a share gone or not reachable answers here.
     let (bridge, subscribed) = bridge_join(&state, &target).await?;
     let max_frame = envelope::MAX_PLAINTEXT_BYTES + envelope::MIN_PACKED;
@@ -1775,7 +1788,7 @@ async fn bridge_connection(
     device: crate::account_devices::FrameDevice,
     tab: String,
 ) {
-    let user_uuid = device.user_id;
+    let user_uuid = device.account_id;
     let hub = state.hub.clone();
     let key = bridge.key.clone();
     let (username, color): (String, String) = sqlx::query_as(
@@ -1901,7 +1914,7 @@ async fn bridge_replay(state: &AppState, bridge: &Bridge, peer: &hub::Peer, sinc
     let log: AppResult<LogResponse> = call_home(
         state,
         &bridge.target,
-        "/api/fed/drive/collab/log",
+        "/api/fed/v2/drive/collab/log",
         &LogBody {
             file_id: bridge.target.file_id,
             since,
@@ -1929,23 +1942,23 @@ async fn bridge_replay(state: &AppState, bridge: &Bridge, peer: &hub::Peer, sinc
 
 async fn relayed_target(
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     route: RemoteRoute,
 ) -> AppResult<(RemoteTarget, Uuid)> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok((target_for(state, user_id, &route).await?, user_id))
 }
 
 async fn relay_versions(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
 ) -> AppResult<Response> {
     let (target, _) = relayed_target(&state, &user, route).await?;
     let rows: serde_json::Value = call_home(
         &state,
         &target,
-        "/api/fed/drive/collab/versions/list",
+        "/api/fed/v2/drive/collab/versions/list",
         &FileBody {
             file_id: target.file_id,
         },
@@ -1957,7 +1970,7 @@ async fn relay_versions(
 
 async fn relay_version_download(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
     vid: String,
 ) -> AppResult<Response> {
@@ -1969,7 +1982,7 @@ async fn relay_version_download(
             drive_spec(
                 Method::GET,
                 format!(
-                    "/api/fed/drive/collab/files/{}/versions/{vid}",
+                    "/api/fed/v2/drive/collab/files/{}/versions/{vid}",
                     target.file_id
                 ),
                 JSON_CONTENT_TYPE.into(),
@@ -1990,7 +2003,7 @@ async fn relay_version_download(
 
 async fn relay_version_create(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
@@ -2048,7 +2061,7 @@ async fn relay_version_create(
     let created: serde_json::Value = call_home(
         &state,
         &target,
-        "/api/fed/drive/collab/versions/create",
+        "/api/fed/v2/drive/collab/versions/create",
         &CreateVersionBody {
             file_id: target.file_id,
             author_account_id: user_id,
@@ -2073,7 +2086,7 @@ async fn relay_version_create(
 /// A file's asset on another server, for this server's user.
 async fn relay_asset_download(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
     asset_id: String,
 ) -> AppResult<Response> {
@@ -2087,7 +2100,7 @@ async fn relay_asset_download(
             drive_spec(
                 Method::GET,
                 format!(
-                    "/api/fed/drive/collab/files/{}/assets/{asset_id}",
+                    "/api/fed/v2/drive/collab/files/{}/assets/{asset_id}",
                     target.file_id
                 ),
                 JSON_CONTENT_TYPE.into(),
@@ -2110,7 +2123,7 @@ async fn relay_asset_download(
 /// multipart `file` part, as for local assets).
 async fn relay_asset_upload(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
     asset_id: String,
     mut multipart: Multipart,
@@ -2148,7 +2161,7 @@ async fn relay_asset_upload(
     let _: serde_json::Value = call_home(
         &state,
         &target,
-        "/api/fed/drive/collab/assets/create",
+        "/api/fed/v2/drive/collab/assets/create",
         &CreateAssetBody {
             file_id: target.file_id,
             asset_id,
@@ -2178,7 +2191,7 @@ pub struct RelayedPatch {
 
 async fn relay_version_patch(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
     vid: String,
     patch: RelayedPatch,
@@ -2188,7 +2201,7 @@ async fn relay_version_patch(
     let row: serde_json::Value = call_home(
         &state,
         &target,
-        "/api/fed/drive/collab/versions/patch",
+        "/api/fed/v2/drive/collab/versions/patch",
         &PatchVersionBody {
             file_id: target.file_id,
             version_id: vid,
@@ -2203,14 +2216,14 @@ async fn relay_version_patch(
 
 async fn relay_claim_seed(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
 ) -> AppResult<Response> {
     let (target, _) = relayed_target(&state, &user, route).await?;
     let claimed: serde_json::Value = call_home(
         &state,
         &target,
-        "/api/fed/drive/collab/claim-seed",
+        "/api/fed/v2/drive/collab/claim-seed",
         &FileBody {
             file_id: target.file_id,
         },
@@ -2220,27 +2233,27 @@ async fn relay_claim_seed(
     Ok(Json(claimed).into_response())
 }
 
-// Routes: the same suffixes as `/api/files/{id}/…`, under a remote file's
-// base (`/api/drive/federation/shares/{shareId}/files/{fileId}` or
-// `/api/drive/federation/file-shares/{id}`).
+// Routes: the same suffixes as `/api/v1/drive/files/{id}/…`, under a remote file's
+// base (`/api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}` or
+// `/api/v1/drive/federation/file-shares/{id}`).
 
 pub async fn folder_versions(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid)): Path<(String, String)>,
 ) -> AppResult<Response> {
     relay_versions(s, u, folder_route(&sid, &fid)?).await
 }
 pub async fn file_versions(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     relay_versions(s, u, file_route(&id)?).await
 }
 pub async fn folder_version_create(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid)): Path<(String, String)>,
     m: Multipart,
 ) -> AppResult<Response> {
@@ -2248,7 +2261,7 @@ pub async fn folder_version_create(
 }
 pub async fn file_version_create(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path(id): Path<String>,
     m: Multipart,
 ) -> AppResult<Response> {
@@ -2256,21 +2269,21 @@ pub async fn file_version_create(
 }
 pub async fn folder_version_download(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid, vid)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
     relay_version_download(s, u, folder_route(&sid, &fid)?, vid).await
 }
 pub async fn file_version_download(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((id, vid)): Path<(String, String)>,
 ) -> AppResult<Response> {
     relay_version_download(s, u, file_route(&id)?, vid).await
 }
 pub async fn folder_version_patch(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid, vid)): Path<(String, String, String)>,
     Json(p): Json<RelayedPatch>,
 ) -> AppResult<Response> {
@@ -2278,7 +2291,7 @@ pub async fn folder_version_patch(
 }
 pub async fn file_version_patch(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((id, vid)): Path<(String, String)>,
     Json(p): Json<RelayedPatch>,
 ) -> AppResult<Response> {
@@ -2286,35 +2299,35 @@ pub async fn file_version_patch(
 }
 pub async fn folder_claim_seed(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid)): Path<(String, String)>,
 ) -> AppResult<Response> {
     relay_claim_seed(s, u, folder_route(&sid, &fid)?).await
 }
 pub async fn file_claim_seed(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     relay_claim_seed(s, u, file_route(&id)?).await
 }
 pub async fn folder_asset_download(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid, aid)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
     relay_asset_download(s, u, folder_route(&sid, &fid)?, aid).await
 }
 pub async fn file_asset_download(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((id, aid)): Path<(String, String)>,
 ) -> AppResult<Response> {
     relay_asset_download(s, u, file_route(&id)?, aid).await
 }
 pub async fn folder_asset_upload(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid, aid)): Path<(String, String, String)>,
     m: Multipart,
 ) -> AppResult<Response> {
@@ -2322,7 +2335,7 @@ pub async fn folder_asset_upload(
 }
 pub async fn file_asset_upload(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((id, aid)): Path<(String, String)>,
     m: Multipart,
 ) -> AppResult<Response> {

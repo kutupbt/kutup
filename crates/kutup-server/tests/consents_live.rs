@@ -1,8 +1,9 @@
 //! Consents and the federation switch (docs/plans/server-personal-data.md,
-//! A4) against a live server: turning federation on asks the
-//! `federation_abroad` consent once its text is published; withdrawing the
+//! A4) against a live server: where the site asks for it
+//! (`federationConsentRequired`, off in the core), turning federation on
+//! asks the `federation` consent under its published text; withdrawing the
 //! consent turns it off; while off, the account's requests to other servers
-//! are refused.
+//! are refused. It sets the site setting back off when done.
 //!
 //! It publishes no document required at sign-up: the tests after it register
 //! accounts without confirming any.
@@ -33,17 +34,20 @@ fn federation_follows_its_consent() {
     assert_eq!(me(&c, &base, &user.token)["federation"], "on");
 
     // The consent's text, published (not required at sign-up).
-    let published = bearer(c.post(format!("{base}/api/admin/legal/documents")), &admin)
-        .json(&json!({
-            "kind": "federation_abroad",
-            "version": uuid(),
-            "language": "en",
-            "url": "https://example.org/federation",
-            "sha256": "a".repeat(64),
-            "requiredAtSignup": false,
-        }))
-        .send()
-        .unwrap();
+    let published = bearer(
+        c.post(format!("{base}/api/v1/admin/legal/documents")),
+        &admin,
+    )
+    .json(&json!({
+        "kind": "federation",
+        "version": uuid(),
+        "language": "en",
+        "url": "https://example.org/federation",
+        "sha256": "a".repeat(64),
+        "requiredAtSignup": false,
+    }))
+    .send()
+    .unwrap();
     assert_eq!(published.status(), StatusCode::CREATED);
     let text = published.json::<Value>().unwrap()["id"]
         .as_str()
@@ -51,17 +55,20 @@ fn federation_follows_its_consent() {
         .to_owned();
 
     let set = |on: bool, document: Option<&str>| {
-        bearer(c.put(format!("{base}/api/user/federation")), &user.token)
-            .json(&json!({ "on": on, "documentId": document }))
-            .send()
-            .unwrap()
+        bearer(
+            c.put(format!("{base}/api/v1/account/federation")),
+            &user.token,
+        )
+        .json(&json!({ "on": on, "documentId": document }))
+        .send()
+        .unwrap()
     };
     // Off: requests to other servers are refused.
     assert_eq!(set(false, None).status(), StatusCode::NO_CONTENT);
     assert_eq!(me(&c, &base, &user.token)["federation"], "off");
     let remote = bearer(
         c.get(format!(
-            "{base}/api/users/by-id/{}?server=elsewhere.example",
+            "{base}/api/v1/accounts/{}?server=elsewhere.example",
             uuid()
         )),
         &user.token,
@@ -71,22 +78,38 @@ fn federation_follows_its_consent() {
     assert_eq!(remote.status(), StatusCode::FORBIDDEN);
     assert_eq!(remote.json::<Value>().unwrap()["code"], "federationOff");
 
-    // On again: the consent first, under the current text.
+    // The core asks for no consent, a text published or not.
+    assert_eq!(set(true, None).status(), StatusCode::NO_CONTENT);
+    assert_eq!(set(false, None).status(), StatusCode::NO_CONTENT);
+
+    // Where the site asks for it: on again needs the consent first, under
+    // the current text.
+    let consent_required = |required: bool| {
+        let r = bearer(c.put(format!("{base}/api/v1/admin/settings")), &admin)
+            .json(&json!({ "federationConsentRequired": required }))
+            .send()
+            .unwrap();
+        assert!(r.status().is_success(), "{}", r.text().unwrap());
+    };
+    consent_required(true);
     let refused = set(true, None);
     assert_eq!(refused.status(), StatusCode::CONFLICT);
     assert_eq!(refused.json::<Value>().unwrap()["code"], "consentRequired");
     assert_eq!(set(true, Some(&text)).status(), StatusCode::NO_CONTENT);
     assert_eq!(me(&c, &base, &user.token)["federation"], "on");
-    let consents: Value = bearer(c.get(format!("{base}/api/user/consents")), &user.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let consents: Value = bearer(
+        c.get(format!("{base}/api/v1/account/consents")),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let given = consents["consents"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|c| c["purpose"] == "federation_abroad")
+        .find(|c| c["purpose"] == "federation")
         .expect("the consent is recorded");
     assert_eq!(
         (given["given"].as_bool(), given["documentId"].as_str()),
@@ -94,20 +117,26 @@ fn federation_follows_its_consent() {
     );
 
     // Withdrawn: federation goes off with it.
-    let withdrawn = bearer(c.put(format!("{base}/api/user/consents")), &user.token)
-        .json(&json!({ "purpose": "federation_abroad", "given": false }))
-        .send()
-        .unwrap();
+    let withdrawn = bearer(
+        c.put(format!("{base}/api/v1/account/consents")),
+        &user.token,
+    )
+    .json(&json!({ "purpose": "federation", "given": false }))
+    .send()
+    .unwrap();
     assert_eq!(withdrawn.status(), StatusCode::NO_CONTENT);
     assert_eq!(me(&c, &base, &user.token)["federation"], "off");
 
     // An administrator can't turn it on over a withdrawn consent: the
     // transfer rests on the user's own (409 consentRequired). Off, it can.
     let by_admin = |federation: &str| {
-        bearer(c.put(format!("{base}/api/admin/users/{}", user.id)), &admin)
-            .json(&json!({ "federation": federation }))
-            .send()
-            .unwrap()
+        bearer(
+            c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
+            &admin,
+        )
+        .json(&json!({ "federation": federation }))
+        .send()
+        .unwrap()
     };
     let refused = by_admin("on");
     assert_eq!(refused.status(), StatusCode::CONFLICT);
@@ -120,5 +149,10 @@ fn federation_follows_its_consent() {
     assert!(by_admin("on").status().is_success());
     assert_eq!(me(&c, &base, &user.token)["federation"], "on");
 
-    purge_accounts(&c, &base, &[&user]);
+    // A new account starts off where the consent is asked: it hasn't given it.
+    let newcomer = register(&c, &base);
+    assert_eq!(me(&c, &base, &newcomer.token)["federation"], "off");
+    consent_required(false);
+
+    purge_accounts(&c, &base, &[&user, &newcomer]);
 }

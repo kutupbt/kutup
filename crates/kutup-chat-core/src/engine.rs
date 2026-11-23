@@ -1241,7 +1241,7 @@ impl Engine {
                 // says which sign-in this is.
                 let session = match listed {
                     Ok(index) => devices[index].session.clone(),
-                    Err(_) => transport.fetch_device_session().await?,
+                    Err(_) => transport.fetch_device_session().await?.session,
                 };
                 let local = self.session.manifest_device(session);
                 match listed {

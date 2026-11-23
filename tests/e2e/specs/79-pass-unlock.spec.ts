@@ -30,7 +30,7 @@ test('pass: a vault not kept with the sign-in asks for its key, refuses a wrong 
   // A slow server: keeping a key takes a while. The vault must not show
   // before its key is kept, or a reload right after would ask for it again.
   // (Kept keys are records: docs/plans/account-records.md.)
-  await page.route(/\/api\/account\/records$/, async (route) => {
+  await page.route(/\/api\/v1\/account\/records$/, async (route) => {
     if (route.request().method() === 'POST') await new Promise((resolve) => setTimeout(resolve, 2_000))
     await route.continue()
   })

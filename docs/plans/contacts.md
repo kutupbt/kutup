@@ -82,7 +82,7 @@ own.
   verifies the signature with the account authority, checks the canonical
   summary and its limits, and writes the emails index.
 - `PUT /api/contacts/{id}`: replace, with `baseRevision`, the revision the
-  edit started from (409 `revision_conflict` when another device saved
+  edit started from (409 `revisionConflict` when another device saved
   first). A contact's revision is a time in its card's authenticated header,
   which the summary's signature binds; cards are padded to a multiple of 256
   bytes (docs/plans/sealed-revisions.md).

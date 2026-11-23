@@ -93,7 +93,7 @@ export function ChangeKeyDialog({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pendingNotice, setPendingNotice] = useState(false)
-  const owner = vault.folder.source === 'owned' && vault.folder.ownerUserId === signedIn.userId
+  const owner = vault.folder.source === 'owned' && vault.folder.ownerAccountId === signedIn.accountId
 
   // A generated key file lives only here, and is wiped when the dialog goes.
   const forgetGenerated = () => {

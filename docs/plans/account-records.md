@@ -5,7 +5,8 @@ docs/plans/wipe-unification.md W3. It follows Signal's Storage Service: one
 generic store for the account's synced private state, with the account head as
 its manifest. Branch `wipe/account-records`, on #417. It will be rebased onto
 `wipe/integration` once that is green. Migrations from `20261111180000`;
-record purposes from 31.
+record purposes from 31. W7 renumbered every purpose by owner
+(docs/plans/w7-schema.md §11); the numbers below are the renumbered ones.
 
 ## 1. Today
 
@@ -75,14 +76,14 @@ Only `mail_messages` carries the change feed (`srv/change_feed.rs`).
 
 ### 2.2 One API
 
-- `GET /api/account/records/:scope?after=<seq>`: a page of the scope's
+- `GET /api/v1/account/records/:scope?after=<seq>`: a page of the scope's
   changes after `after` (records and tombstones in counter order, at most a
   site-set number), the next cursor, `more`, and the account head, all from
   one snapshot. `after=0` (a new device) lists every record and is never
   told to start over; a cursor below the forgotten tombstones' floor is
   (`resync`).
-- `GET /api/account/records/:scope/:id`.
-- `POST /api/account/records` with `{ head, puts: [{ scope, id, baseRevision,
+- `GET /api/v1/account/records/:scope/:id`.
+- `POST /api/v1/account/records` with `{ head, puts: [{ scope, id, baseRevision,
   envelope }], deletes: [{ scope, id, baseRevision }] }`.
   - It is applied in one transaction under the account lock, and the head
     advances last (`account_heads::advance`).
@@ -93,7 +94,7 @@ Only `mail_messages` carries the change feed (`srv/change_feed.rs`).
   - A retried batch that already landed fails its revision checks: the
     client reads again and finds its change there (Signal's model). No
     replay table.
-  - A conflict answers `409 revision_conflict` with the current revision of
+  - A conflict answers `409 revisionConflict` with the current revision of
     each record that conflicted.
 - `values` for the record scopes becomes one generic query on
   `account_records`. Contacts, mail names and calendars keep their own query
@@ -120,22 +121,22 @@ Only `mail_messages` carries the change feed (`srv/change_feed.rs`).
 
 Moves onto `account_records`:
 - **Chat groups, Chat contacts, identity pins, Pass secrets:** the same
-  envelopes, purposes 11, 12, 10 and 6.
-- **The Photos library** (purpose 13), one record. Its private chain goes:
+  envelopes, purposes 15, 16, 11 and 27.
+- **The Photos library** (purpose 34), one record. Its private chain goes:
   the record stops being chained and its header revision is CAS'd under the
   head like any other. `previous_envelope_digest` leaves the format.
-- **The Chat attachment ledger** (purpose 14), one record per entity. The
+- **The Chat attachment ledger** (purpose 17), one record per entity. The
   history table, the private chain and the ledger's own cursor go; the change
   feed replaces them. The operation-id idempotency stays: a replayed batch is
   a no-op by revision.
-- **Joined meetings** (purpose 15, immutable). The cap of 100 becomes the
+- **Joined meetings** (purpose 18, immutable). The cap of 100 becomes the
   scope's maximum count; the oldest is deleted in the same batch.
-- **Contact groups:** a new purpose 31, `ContactGroup`, whose plaintext
+- **Contact groups:** a new purpose 32, `ContactGroup`, whose plaintext
   follows the format-evolution rule (`v`, optional `min`, kept `extra`) and
   holds the name and colour. It gets a revision and the head. The plaintext
   `contact_groups.name` goes. The server still needs group ids to check a
   summary's `groups`; it reads them from the record ids.
-- **A calendar's own settings:** a new purpose 32, `CalendarSettings`, one
+- **A calendar's own settings:** a new purpose 29, `CalendarSettings`, one
   record per calendar the account belongs to, keyed by the calendar id. It
   holds the colour, the display flag and the default reminders, under the
   format-evolution rule, and replaces the plaintext `revision` and those
@@ -159,7 +160,7 @@ Stays:
 Every moved scope is covered by the head, so the three private chains go
 (Photos, the ledger, and the ledger's local chain pins). The pins' rename
 anchors stay: they chain a peer's renames, not the account's state. Local
-chain pins (purpose 21) stay for anything left outside the head.
+chain pins (purpose 9) stay for anything left outside the head.
 
 ## 3. Slices (each its own commit, gated)
 
@@ -243,28 +244,28 @@ parallel.
 
 Slice 4 moves `kutup-client-ffi`'s pins to the records routes with today's
 behaviour: read unverified, written without a head (an account that keeps
-one refuses it with `head_required`). The FFI has no head manager yet, and
+one refuses it with `headRequired`). The FFI has no head manager yet, and
 building one is the native-apps work: it is done together with
 `start_client`'s head check (docs/roadmap.md, "Native iOS and Android
 apps"), not as a half head manager here.
 
 ## Built: slice 6 (2026-11-16, `wipe/records-photos`)
 
-- **Scopes 5 `photosLibrary` and 6 `chatAttachments`**, purposes 13 and 14
+- **Scopes 5 `photosLibrary` and 6 `chatAttachments`**, purposes 34 and 17
   as before, both with a new id form `IdForm::Random` (32 random bytes the
   writing client chooses, 43-character base64url; `RecordScope::random_id`,
-  `randomRecordId` on the web). Purposes 13 and 14 are no longer chained, and
+  `randomRecordId` on the web). Purposes 34 and 17 are no longer chained, and
   their object is the record id (32 bytes; the ledger's was 48).
-- **Counts** are site settings: `account_records_photos_library` (default 1:
+- **Counts** are site settings: `photos.records.library` (default 1:
   a first write that raced another device's is refused by the head and redone
   on the record that landed; a client that ever finds two merges them and
-  deletes the second) and `account_records_chat_attachments` (default
+  deletes the second) and `chat.records.attachments` (default
   100,000).
 - **The ledger keeps each entity's newest revision only** (decision 1).
 - **Gone:** `photos_library`, `chat_attachment_ledger_{entities,history,
   operations}`, `chat_attachment_ledger_cursor_seq`, `GET`/`PUT
-  /api/photos/library`, `GET /api/chat/media/ledger`, `PUT
-  /api/chat/media/ledger/:entityId`, their wire types in kutup-chat-proto,
+  /api/v1/photos/library`, `GET /api/v1/chat/media/ledger`, `PUT
+  /api/v1/chat/media/ledger/:entityId`, their wire types in kutup-chat-proto,
   the WASM digest and inspect calls, and both browser-local chain pins
   (migration `20261111210000`, reversible). `account_records.envelope` now
   takes up to 4 MiB + header (the library's bound); each envelope is still
@@ -272,9 +273,9 @@ apps"), not as a half head manager here.
 
 ## As built: slice 7 (2026-11-16)
 
-- **Scopes** 7 `contactGroups` (purpose 31 `ContactGroup`, hashed ids), 8
-  `calendarSettings` (purpose 32 `CalendarSettings`, `hashed_object` of the
-  calendar id) and 9 `joinedMeetings` (purpose 15, random ids: slice 6's
+- **Scopes** 7 `contactGroups` (purpose 32 `ContactGroup`, hashed ids), 8
+  `calendarSettings` (purpose 29 `CalendarSettings`, `hashed_object` of the
+  calendar id) and 9 `joinedMeetings` (purpose 18, random ids: slice 6's
   `IdForm::Random`, 32 random bytes as 43-character base64url, drawn by the
   browser that recorded the stay). Their counts are the site settings
   `accountRecordsContactGroups` (200), `accountRecordsCalendarSettings` (500)
@@ -299,9 +300,9 @@ apps"), not as a half head manager here.
   they stay on the member row, as Proton's server reads its calendars'
   notification defaults. Sealing them would leave events without their own
   reminders silent; that needs a decision (client-computed alarms) first.
-- **Removed:** `GET/POST /api/contacts/groups`, `PUT/DELETE
-  /api/contacts/groups/:id`, `GET/POST/DELETE /api/chat/joined-meetings`,
-  `DELETE /api/chat/joined-meetings/:id`, and the tables `contact_groups`,
+- **Removed:** `GET/POST /api/v1/contacts/groups`, `PUT/DELETE
+  /api/v1/contacts/groups/:id`, `GET/POST/DELETE /api/v1/chat/joined-meetings`,
+  `DELETE /api/v1/chat/joined-meetings/:id`, and the tables `contact_groups`,
   `contact_group_members`, `chat_joined_meetings` (migration
   `20261111220000`). The head's index still reads the old stores of slices
   3 to 5's scopes until those slices land; that last part of "the old index
@@ -331,7 +332,7 @@ the whole scope (the ledger may hold 100,000 entities):
 - **Gone with the session:** sign-out clears every kept copy. The CLI
   stays full-read.
 
-This replaces the sealed blob first proposed (purpose 33 was never taken):
+This replaces the sealed blob first proposed (no purpose was ever taken for it):
 a blob of a full ledger (about 60 MB) would be resealed on every write.
 
 ### Built: one sync loop in chat-core (2026-11-17)

@@ -11,11 +11,14 @@ use reqwest::StatusCode;
 use serde_json::Value;
 
 fn events(c: &reqwest::blocking::Client, base: &str, token: &str) -> Value {
-    bearer(c.get(format!("{base}/api/user/security-events")), token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap()
+    bearer(
+        c.get(format!("{base}/api/v1/account/security-events")),
+        token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap()
 }
 
 fn of_kind<'a>(page: &'a Value, kind: &str) -> Vec<&'a Value> {
@@ -70,7 +73,7 @@ fn sign_ins_and_wrong_passwords_are_in_the_accounts_log() {
     assert!(!of_kind(&page, "signIn").is_empty());
     assert_eq!(page["retentionDays"], 365);
 
-    let out = bearer(c.post(format!("{base}/api/auth/logout")), &token)
+    let out = bearer(c.post(format!("{base}/api/v1/auth/logout")), &token)
         .send()
         .unwrap();
     assert_eq!(out.status(), StatusCode::OK);
@@ -92,7 +95,7 @@ fn a_sessions_browser_is_its_parsed_family() {
         .unwrap();
     let session = sign_in(&firefox, &base, &user.username, &user.password);
     let token = session["accessToken"].as_str().unwrap().to_owned();
-    let sessions: Value = bearer(firefox.get(format!("{base}/api/auth/sessions")), &token)
+    let sessions: Value = bearer(firefox.get(format!("{base}/api/v1/auth/sessions")), &token)
         .send()
         .unwrap()
         .json()

@@ -65,7 +65,7 @@ export function useFilters() {
   })
 }
 
-type FilterSession = { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; userId: string }
+type FilterSession = { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; accountId: string }
 
 interface FilterTools {
   /** Creates a filter: `post` gets its sealed name and the next account head. */

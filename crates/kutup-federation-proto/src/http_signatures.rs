@@ -936,7 +936,7 @@ mod tests {
         FederationHttpRequest {
             method: "POST".into(),
             authority: "beta.example".into(),
-            path: "/api/fed/chat/messages".into(),
+            path: "/api/fed/v2/chat/messages".into(),
             query: "?batch=1%2F2".into(),
             content_type: "application/json".into(),
             body: br#"{"transactionId":"01HXYZ"}"#.to_vec(),
@@ -1365,7 +1365,7 @@ mod tests {
 
         let other_request = FederationSignedRequest::sign(
             FederationHttpRequest {
-                path: "/api/fed/chat/v1/other".into(),
+                path: "/api/fed/v2/chat/v1/other".into(),
                 ..request(FederationFeature::ChatV2)
             },
             "bound-nonce",

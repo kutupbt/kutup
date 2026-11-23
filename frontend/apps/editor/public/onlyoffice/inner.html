@@ -396,7 +396,7 @@
         var lastConnectStateTs = 0
         var selfDeviceId = null  // set in oo-self handler from msg.deviceId
         var selfTab      = null  // set in oo-self handler from msg.tab
-        var selfUserId   = null  // set in oo-self handler from msg.userId
+        var selfUserId   = null  // set in oo-self handler from msg.accountId
         var selfAccount  = null  // set in oo-self handler from msg.account
         function peerKeyOf(account, deviceId) { return String(account) + '#' + String(deviceId) }
 
@@ -1278,11 +1278,11 @@
               // color mapping; bridge updates userColors so OO's next
               // foreign-cursor / lock render via window.APP.getUserColor
               // picks up the new value. No re-mount needed.
-              if (typeof msg.userId === 'string' && msg.userId) {
+              if (typeof msg.accountId === 'string' && msg.accountId) {
                 if (msg.color) {
-                  userColors[msg.userId] = msg.color
+                  userColors[msg.accountId] = msg.color
                 } else {
-                  delete userColors[msg.userId]
+                  delete userColors[msg.accountId]
                 }
               }
               return
@@ -1297,8 +1297,8 @@
               }
               // The tab: an older parent sends none, as its sockets do.
               selfTab = typeof msg.tab === 'string' && msg.tab ? msg.tab : '0'
-              if (typeof msg.userId === 'string') {
-                selfUserId = msg.userId
+              if (typeof msg.accountId === 'string') {
+                selfUserId = msg.accountId
               }
               if (typeof msg.account === 'string') {
                 selfAccount = msg.account
@@ -1335,8 +1335,8 @@
                   // includes it), fall back to a deviceId-derived key so
                   // we still get a participant entry and OO renders peer
                   // cell-edit cursors with auto-palette colors.
-                  var entryUserId = (typeof entry.userId === 'string' && entry.userId)
-                    ? entry.userId
+                  var entryUserId = (typeof entry.accountId === 'string' && entry.accountId)
+                    ? entry.accountId
                     : 'dev-' + did
                   nextById[key] = makePeer(entry.account, did, tab, entryUserId, entry.username)
                   if (entry.color) userColors[entryUserId] = entry.color

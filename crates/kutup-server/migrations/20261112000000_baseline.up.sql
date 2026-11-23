@@ -1,10 +1,13 @@
--- The schema the whole migration chain built, squashed (the wipe-2 baseline;
--- scripts/check-migration-baseline.sh proves it equal). Never edit once
--- applied: a change is then a new timestamped migration (docs/contributing.md).
+-- The wipe-2 baseline: the whole migration chain squashed, proven equal to
+-- the chain at the squash commit by scripts/check-migration-baseline.sh, then
+-- edited in place before anything applied it (docs/plans/w7-schema.md). Never
+-- edit once applied: a change is then a new timestamped migration
+-- (docs/contributing.md).
 --
--- Refuses a database that already holds the old chain's tables.
+-- Refuses a database that already holds tables: an old chain's (`users`) or
+-- this one's (`accounts`).
 DO $$ BEGIN
-  IF to_regclass('public.accounts') IS NOT NULL THEN
+  IF to_regclass('public.users') IS NOT NULL OR to_regclass('public.accounts') IS NOT NULL THEN
     RAISE EXCEPTION 'this database predates the baseline: start from an empty one';
   END IF;
 END $$;
@@ -42,6 +45,46 @@ COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
 
 
 --
+-- Name: client_type; Type: DOMAIN; Schema: public; Owner: -
+--
+
+CREATE DOMAIN public.client_type AS text
+	CONSTRAINT client_type_check CHECK ((VALUE = ANY (ARRAY['web-account'::text, 'web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text, 'cli'::text, 'mail-bridge'::text])));
+
+
+--
+-- Name: drive_collection_kind; Type: DOMAIN; Schema: public; Owner: -
+--
+
+CREATE DOMAIN public.drive_collection_kind AS text
+	CONSTRAINT drive_collection_kind_check CHECK ((VALUE = ANY (ARRAY['folder'::text, 'album'::text])));
+
+
+--
+-- Name: federation_rule_action; Type: DOMAIN; Schema: public; Owner: -
+--
+
+CREATE DOMAIN public.federation_rule_action AS text
+	CONSTRAINT federation_rule_action_check CHECK ((VALUE = ANY (ARRAY['inherit'::text, 'allow'::text, 'block'::text])));
+
+
+--
+-- Name: match_mode; Type: DOMAIN; Schema: public; Owner: -
+--
+
+CREATE DOMAIN public.match_mode AS text
+	CONSTRAINT match_mode_check CHECK ((VALUE = ANY (ARRAY['all'::text, 'any'::text])));
+
+
+--
+-- Name: suspended_reason; Type: DOMAIN; Schema: public; Owner: -
+--
+
+CREATE DOMAIN public.suspended_reason AS text
+	CONSTRAINT suspended_reason_check CHECK ((VALUE = ANY (ARRAY['admin'::text, 'operatorOrder'::text, 'security'::text])));
+
+
+--
 -- Name: account_security_events_count_step(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -63,7 +106,13 @@ END $$;
 CREATE FUNCTION public.kutup_account_federates(account uuid) RETURNS boolean
     LANGUAGE sql STABLE
     AS $$
-    SELECT EXISTS (SELECT 1 FROM accounts WHERE id = account AND federation = 'on')
+    -- The account's own switch (an entitlement), else the site's default.
+    SELECT EXISTS (SELECT 1 FROM accounts WHERE id = account)
+       AND COALESCE(
+             (SELECT value = 1 FROM account_entitlements
+               WHERE account_id = account AND key = 'server.federation'),
+             (SELECT value <> 'off' FROM site_settings WHERE key = 'server.federation_default'),
+             true)
 $$;
 
 
@@ -95,6 +144,42 @@ $$;
 
 
 --
+-- Name: kutup_b64(bytea); Type: FUNCTION; Schema: public; Owner: -
+--
+
+-- Bytes out as standard padded base64 on one line (encode() breaks lines
+-- every 76 characters): the API's form of a bytea column (w7-schema.md §2).
+CREATE FUNCTION public.kutup_b64(value bytea) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    AS $$ SELECT translate(encode(value, 'base64'), E'\n', '') $$;
+
+
+--
+-- Name: kutup_unb64(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+-- Standard padded base64 in, bytes out; anything else (whitespace, the URL
+-- alphabet, missing padding, non-zero trailing bits) is refused with
+-- SQLSTATE 22023, which the server answers as a client error.
+CREATE FUNCTION public.kutup_unb64(value text) RETURNS bytea
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+    AS $$
+DECLARE
+  bytes bytea;
+BEGIN
+  IF value !~ '^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$' THEN
+    RAISE EXCEPTION 'kutup_unb64: not canonical base64' USING ERRCODE = '22023';
+  END IF;
+  bytes := decode(value, 'base64');
+  IF public.kutup_b64(bytes) <> value THEN
+    RAISE EXCEPTION 'kutup_unb64: not canonical base64' USING ERRCODE = '22023';
+  END IF;
+  RETURN bytes;
+END
+$$;
+
+
+--
 -- Name: kutup_fold(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -113,16 +198,16 @@ CREATE TABLE public.account_names (
     folded text NOT NULL,
     name text NOT NULL,
     account_id uuid,
-    incarnation_id text,
+    incarnation_id bytea,
     state text NOT NULL,
     receive_until timestamp with time zone,
     free_at timestamp with time zone,
     CONSTRAINT account_names_check CHECK (((state = 'held'::text) = (free_at IS NOT NULL))),
     CONSTRAINT account_names_check1 CHECK (((state = 'held'::text) OR (account_id IS NOT NULL))),
     CONSTRAINT account_names_folded_check CHECK ((folded ~ '^[a-z0-9]{1,32}$'::text)),
-    CONSTRAINT account_names_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT account_names_name_check CHECK ((name ~ '^[a-z0-9_-]{3,32}$'::text)),
-    CONSTRAINT account_names_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text])))
+    CONSTRAINT account_names_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text]))),
+    CONSTRAINT account_names_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32))
 );
 
 
@@ -179,7 +264,7 @@ CREATE FUNCTION public.kutup_target_blocked(kind text, target uuid) RETURNS text
        AND (b.target_id = target
             OR (kind = 'file' AND b.share_type = 'collection'
                 AND b.target_id = (SELECT f.collection_id FROM drive_files f WHERE f.id = target)))
-     ORDER BY (b.blocked_reason = 'legal_order') DESC, b.blocked_at
+     ORDER BY (b.blocked_reason = 'legalOrder') DESC, b.blocked_at
      LIMIT 1
 $$;
 
@@ -225,6 +310,26 @@ CREATE FUNCTION public.mail_messages_mark_change() RETURNS trigger
 BEGIN
     NEW.change_xid := pg_current_xact_id()::text::bigint;
     RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: kutup_account_device_released(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.kutup_account_device_released() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- When a device id came free (docs/plans/one-device-list.md, "Device id
+    -- reuse"): the next device doesn't take it while a sender certificate of
+    -- its earlier holder may still be taken. Not for an account going away.
+    INSERT INTO account_device_releases (account_id, device_id)
+    SELECT OLD.account_id, OLD.device_id
+     WHERE EXISTS (SELECT 1 FROM accounts WHERE id = OLD.account_id)
+    ON CONFLICT (account_id, device_id) DO UPDATE SET released_at = now();
+    RETURN NULL;
 END
 $$;
 
@@ -309,11 +414,11 @@ CREATE TABLE account_keys.destruction_events (
     reference text NOT NULL,
     count integer DEFAULT 1 NOT NULL,
     CONSTRAINT destruction_events_actor_check CHECK ((actor = ANY (ARRAY['user'::text, 'admin'::text, 'job'::text]))),
-    CONSTRAINT destruction_events_category_check CHECK ((category = ANY (ARRAY['account'::text, 'security_events'::text, 'admin_audit'::text, 'sessions'::text, 'destruction_events'::text]))),
+    CONSTRAINT destruction_events_category_check CHECK ((category = ANY (ARRAY['account'::text, 'securityEvents'::text, 'adminAudit'::text, 'sessions'::text, 'destructionEvents'::text]))),
     CONSTRAINT destruction_events_check CHECK (((subjects IS NULL) = (subject_key_ids IS NULL))),
     CONSTRAINT destruction_events_check1 CHECK (((subjects IS NULL) OR ((cardinality(subjects) >= 1) AND (cardinality(subjects) = cardinality(subject_key_ids))))),
     CONSTRAINT destruction_events_count_check CHECK ((count >= 1)),
-    CONSTRAINT destruction_events_method_check CHECK ((method = ANY (ARRAY['crypto_shred'::text, 'delete'::text, 'anonymise'::text]))),
+    CONSTRAINT destruction_events_method_check CHECK ((method = ANY (ARRAY['cryptoShred'::text, 'delete'::text, 'anonymise'::text]))),
     CONSTRAINT destruction_events_reference_check CHECK (((char_length(reference) >= 1) AND (char_length(reference) <= 100)))
 );
 
@@ -342,11 +447,11 @@ CREATE TABLE public.account_heads (
     account_id uuid NOT NULL,
     sequence bigint NOT NULL,
     sealed bytea NOT NULL,
-    incarnation_id text NOT NULL,
+    incarnation_id bytea NOT NULL,
     written_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT account_heads_incarnation_id_check CHECK ((incarnation_id <> ''::text)),
     CONSTRAINT account_heads_sealed_check CHECK (((octet_length(sealed) >= 1) AND (octet_length(sealed) <= 16384))),
-    CONSTRAINT account_heads_sequence_check CHECK ((sequence >= 1))
+    CONSTRAINT account_heads_sequence_check CHECK ((sequence >= 1)),
+    CONSTRAINT account_heads_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32))
 );
 
 
@@ -405,19 +510,19 @@ CREATE TABLE public.account_records (
 --
 
 CREATE TABLE public.account_renames (
-    incarnation_id text NOT NULL,
+    incarnation_id bytea NOT NULL,
     sequence integer NOT NULL,
     account_id uuid,
-    authority_public_key text NOT NULL,
+    authority_public_key bytea NOT NULL,
     previous text NOT NULL,
     current text NOT NULL,
     counted boolean NOT NULL,
     statement jsonb NOT NULL,
-    digest text NOT NULL,
+    digest bytea NOT NULL,
     accepted_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT account_renames_digest_check CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT account_renames_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT account_renames_sequence_check CHECK (((sequence >= 1) AND (sequence <= 1000)))
+    CONSTRAINT account_renames_sequence_check CHECK (((sequence >= 1) AND (sequence <= 1000))),
+    CONSTRAINT account_renames_digest_bytes CHECK ((octet_length(digest) = 32)),
+    CONSTRAINT account_renames_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32))
 );
 
 
@@ -432,7 +537,7 @@ CREATE TABLE public.account_roots (
     envelope bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT account_roots_object_check CHECK ((octet_length(object) = 4)),
-    CONSTRAINT account_roots_purpose_check CHECK (((purpose >= 22) AND (purpose <= 27)))
+    CONSTRAINT account_roots_purpose_check CHECK (((purpose)::integer = ANY (ARRAY[3, 4, 5, 10, 19, 20])))
 );
 
 
@@ -440,23 +545,26 @@ CREATE TABLE public.account_roots (
 -- Name: account_security_events; Type: TABLE; Schema: public; Owner: -
 --
 
+-- One shape with admin_audit_log (w7-schema.md §6), unchained (pruned per
+-- kind): chain_version 0, no hashes. The kinds, who may act for each and
+-- their payload keys are src/security_events.rs's kind table.
 CREATE TABLE public.account_security_events (
     id uuid NOT NULL,
-    account_id uuid NOT NULL,
     kind text NOT NULL,
+    actor_kind text NOT NULL,
+    actor_account_id uuid,
+    subject_account_id uuid NOT NULL,
     at timestamp with time zone DEFAULT now() NOT NULL,
-    acting_session_id uuid,
-    acting_client text,
-    admin_account_id uuid,
-    old_name text,
-    new_name text,
+    payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     count integer DEFAULT 1 NOT NULL,
-    client_sealed bytea,
-    CONSTRAINT account_security_events_check CHECK (((kind = ANY (ARRAY['adminReset'::text, 'accountReset'::text, 'nameClosed'::text, 'nameFreed'::text, 'twoFactorOff'::text, 'accountKept'::text])) OR (admin_account_id IS NULL))),
-    CONSTRAINT account_security_events_client_sealed_check CHECK (((client_sealed IS NULL) OR ((octet_length(client_sealed) >= 47) AND (octet_length(client_sealed) <= 512)))),
+    chain_version smallint NOT NULL,
+    previous_hash bytea,
+    row_hash bytea,
+    CONSTRAINT account_security_events_actor_kind_check CHECK ((actor_kind = ANY (ARRAY['account'::text, 'admin'::text, 'job'::text, 'peer'::text]))),
+    CONSTRAINT account_security_events_chain_check CHECK ((((chain_version = 0) AND (previous_hash IS NULL) AND (row_hash IS NULL)) OR ((chain_version >= 1) AND (octet_length(previous_hash) = 32) AND (octet_length(row_hash) = 32)))),
+    CONSTRAINT account_security_events_chain_version_check CHECK ((chain_version = 0)),
     CONSTRAINT account_security_events_count_check CHECK ((count >= 1)),
-    CONSTRAINT account_security_events_kind_check CHECK ((kind = ANY (ARRAY['passwordChange'::text, 'recovery'::text, 'rotate'::text, 'adminReset'::text, 'accountReset'::text, 'rename'::text, 'nameDropped'::text, 'nameClosed'::text, 'nameFreed'::text, 'domainLost'::text, 'twoFactorOn'::text, 'twoFactorOff'::text, 'recoveryCodeUsed'::text, 'recoveryCodesRenewed'::text, 'securityKeyAdded'::text, 'securityKeyRemoved'::text, 'securityKeyCompromised'::text, 'authenticatorOn'::text, 'authenticatorOff'::text, 'orgJoined'::text, 'orgLeft'::text, 'orgRemoved'::text, 'orgAccessGranted'::text, 'orgAccessRevoked'::text, 'orgReset'::text, 'orgSignIn'::text, 'signIn'::text, 'signInFailedPassword'::text, 'signInFailed2fa'::text, 'signOut'::text, 'sessionRevoked'::text, 'allSessionsRevoked'::text, 'adminAccess'::text, 'accountClosing'::text, 'accountKept'::text, 'masterKeyRotated'::text]))),
-    CONSTRAINT account_security_events_names_check CHECK ((((kind = ANY (ARRAY['rename'::text, 'nameDropped'::text, 'nameClosed'::text, 'nameFreed'::text, 'domainLost'::text, 'securityKeyAdded'::text, 'securityKeyRemoved'::text, 'securityKeyCompromised'::text])) = (old_name IS NOT NULL)) AND ((kind = 'rename'::text) = (new_name IS NOT NULL))))
+    CONSTRAINT account_security_events_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text))
 );
 
 
@@ -477,19 +585,27 @@ CREATE TABLE public.admin_audit_anchor (
 -- Name: admin_audit_log; Type: TABLE; Schema: public; Owner: -
 --
 
+-- One shape with account_security_events (w7-schema.md §6). One hash chain
+-- (src/audit_log.rs): the first row's previous_hash is 32 zero bytes, so
+-- every row has both hashes; kind is AdminAction's string.
 CREATE TABLE public.admin_audit_log (
     id bigint NOT NULL,
-    admin_account_id uuid NOT NULL,
-    action text NOT NULL,
-    target_account_id uuid,
+    kind text NOT NULL,
+    actor_kind text NOT NULL,
+    actor_account_id uuid,
+    subject_account_id uuid,
+    at timestamp with time zone DEFAULT now() NOT NULL,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
-    occurred_at timestamp with time zone DEFAULT now() NOT NULL,
-    chain_version smallint DEFAULT 1 NOT NULL,
+    count integer DEFAULT 1 NOT NULL,
+    chain_version smallint NOT NULL,
     previous_hash bytea,
     row_hash bytea,
+    CONSTRAINT admin_audit_log_actor_check CHECK (((actor_kind = 'admin'::text) = (actor_account_id IS NOT NULL))),
+    CONSTRAINT admin_audit_log_actor_kind_check CHECK ((actor_kind = ANY (ARRAY['admin'::text, 'job'::text]))),
+    CONSTRAINT admin_audit_log_chain_check CHECK ((((chain_version = 0) AND (previous_hash IS NULL) AND (row_hash IS NULL)) OR ((chain_version >= 1) AND (octet_length(previous_hash) = 32) AND (octet_length(row_hash) = 32)))),
     CONSTRAINT admin_audit_log_chain_version_check CHECK ((chain_version >= 1)),
-    CONSTRAINT admin_audit_log_previous_hash_check CHECK (((previous_hash IS NULL) OR (octet_length(previous_hash) = 32))),
-    CONSTRAINT admin_audit_log_row_hash_check CHECK (((row_hash IS NULL) OR (octet_length(row_hash) = 32)))
+    CONSTRAINT admin_audit_log_count_check CHECK ((count = 1)),
+    CONSTRAINT admin_audit_log_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text))
 );
 
 
@@ -519,7 +635,7 @@ ALTER SEQUENCE public.admin_audit_log_id_seq OWNED BY public.admin_audit_log.id;
 CREATE TABLE public.photos_album_items (
     album_id uuid NOT NULL,
     file_id uuid NOT NULL,
-    file_key_envelope text NOT NULL,
+    file_key_envelope bytea NOT NULL,
     key_generation integer NOT NULL,
     album_epoch integer NOT NULL,
     added_by_account_id uuid,
@@ -555,11 +671,11 @@ CREATE TABLE public.auth_grants (
 CREATE TABLE public.auth_session_forks (
     selector_hash bytea NOT NULL,
     parent_session_id uuid NOT NULL,
-    child_client_type text NOT NULL,
+    child_client_type public.client_type NOT NULL,
     payload bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT auth_session_forks_child_client_type_check CHECK ((child_client_type = ANY (ARRAY['web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text]))),
+    CONSTRAINT auth_session_forks_child_client_type_check CHECK (((child_client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text, 'mail-bridge'::text]))),
     CONSTRAINT auth_session_forks_payload_check CHECK (((octet_length(payload) >= 1) AND (octet_length(payload) <= 16384))),
     CONSTRAINT auth_session_forks_selector_hash_check CHECK ((octet_length(selector_hash) = 32))
 );
@@ -572,7 +688,7 @@ CREATE TABLE public.auth_session_forks (
 CREATE TABLE public.auth_sessions (
     id uuid NOT NULL,
     account_id uuid NOT NULL,
-    client_type text NOT NULL,
+    client_type public.client_type NOT NULL,
     parent_session_id uuid,
     refresh_token_hash bytea NOT NULL,
     previous_refresh_token_hash bytea,
@@ -583,9 +699,8 @@ CREATE TABLE public.auth_sessions (
     expires_at timestamp with time zone NOT NULL,
     revoked_at timestamp with time zone,
     client_sealed bytea,
-    CONSTRAINT auth_sessions_check CHECK (((parent_session_id IS NULL) OR (client_type = ANY (ARRAY['web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text])))),
+    CONSTRAINT auth_sessions_check CHECK (((parent_session_id IS NULL) OR ((client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text, 'mail-bridge'::text])))),
     CONSTRAINT auth_sessions_client_sealed_check CHECK (((client_sealed IS NULL) OR ((octet_length(client_sealed) >= 47) AND (octet_length(client_sealed) <= 512)))),
-    CONSTRAINT auth_sessions_client_type_check CHECK ((client_type = ANY (ARRAY['web-account'::text, 'web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text, 'cli'::text, 'android-drive'::text, 'android-chat'::text, 'android-maps'::text, 'android-photos'::text, 'ios-drive'::text, 'ios-chat'::text, 'ios-maps'::text, 'ios-photos'::text]))),
     CONSTRAINT auth_sessions_local_key_check CHECK ((octet_length(local_key) = 32)),
     CONSTRAINT auth_sessions_previous_refresh_token_hash_check CHECK ((octet_length(previous_refresh_token_hash) = 32)),
     CONSTRAINT auth_sessions_refresh_token_hash_check CHECK ((octet_length(refresh_token_hash) = 32))
@@ -653,29 +768,14 @@ CREATE TABLE public.calendar_event_reminders (
 CREATE TABLE public.calendar_events (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     calendar_id uuid NOT NULL,
-    uid text NOT NULL,
-    author_address_id uuid,
-    author_account_id uuid,
+    shared_event_id uuid NOT NULL,
     shared_key_packet bytea NOT NULL,
     calendar_key_packet bytea NOT NULL,
-    shared_signed text NOT NULL,
-    shared_signed_signature text NOT NULL,
-    shared_encrypted bytea NOT NULL,
-    shared_encrypted_signature text NOT NULL,
     calendar_signed text NOT NULL,
     calendar_signed_signature text NOT NULL,
     calendar_encrypted bytea,
     calendar_encrypted_signature text,
-    start_utc timestamp with time zone NOT NULL,
-    end_utc timestamp with time zone NOT NULL,
-    start_tz text,
-    end_tz text,
-    full_day boolean NOT NULL,
-    rrule text,
-    recurrence_id timestamp with time zone,
-    range_end_utc timestamp with time zone,
-    sequence integer NOT NULL,
-    revision bigint DEFAULT 1 NOT NULL,
+    revision bigint NOT NULL,
     bytes bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     modified_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -685,16 +785,188 @@ CREATE TABLE public.calendar_events (
     CONSTRAINT calendar_events_calendar_key_packet_check CHECK (((octet_length(calendar_key_packet) >= 1) AND (octet_length(calendar_key_packet) <= 1024))),
     CONSTRAINT calendar_events_calendar_signed_check CHECK (((octet_length(calendar_signed) >= 1) AND (octet_length(calendar_signed) <= 65536))),
     CONSTRAINT calendar_events_calendar_signed_signature_check CHECK (((octet_length(calendar_signed_signature) >= 1) AND (octet_length(calendar_signed_signature) <= 4096))),
-    CONSTRAINT calendar_events_check CHECK ((end_utc >= start_utc)),
-    CONSTRAINT calendar_events_check1 CHECK (((calendar_encrypted IS NULL) = (calendar_encrypted_signature IS NULL))),
+    CONSTRAINT calendar_events_check CHECK (((calendar_encrypted IS NULL) = (calendar_encrypted_signature IS NULL))),
     CONSTRAINT calendar_events_revision_check CHECK ((revision >= 1)),
-    CONSTRAINT calendar_events_sequence_check CHECK ((sequence >= 0)),
-    CONSTRAINT calendar_events_shared_encrypted_check CHECK (((octet_length(shared_encrypted) >= 1) AND (octet_length(shared_encrypted) <= 262144))),
-    CONSTRAINT calendar_events_shared_encrypted_signature_check CHECK (((octet_length(shared_encrypted_signature) >= 1) AND (octet_length(shared_encrypted_signature) <= 4096))),
-    CONSTRAINT calendar_events_shared_key_packet_check CHECK (((octet_length(shared_key_packet) >= 1) AND (octet_length(shared_key_packet) <= 1024))),
-    CONSTRAINT calendar_events_shared_signed_check CHECK (((octet_length(shared_signed) >= 1) AND (octet_length(shared_signed) <= 65536))),
-    CONSTRAINT calendar_events_shared_signed_signature_check CHECK (((octet_length(shared_signed_signature) >= 1) AND (octet_length(shared_signed_signature) <= 4096))),
-    CONSTRAINT calendar_events_uid_check CHECK (((char_length(uid) >= 1) AND (char_length(uid) <= 255)))
+    CONSTRAINT calendar_events_shared_key_packet_check CHECK (((octet_length(shared_key_packet) >= 1) AND (octet_length(shared_key_packet) <= 1024)))
+);
+
+
+--
+-- Name: calendar_event_attendees; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_event_attendees (
+    shared_event_id uuid NOT NULL,
+    token bytea NOT NULL,
+    optional boolean DEFAULT false NOT NULL,
+    answer bytea,
+    answer_updated_at timestamp with time zone,
+    CONSTRAINT calendar_event_attendees_answer_check CHECK (((octet_length(answer) >= 1) AND (octet_length(answer) <= 4096))),
+    CONSTRAINT calendar_event_attendees_check CHECK (((answer IS NULL) = (answer_updated_at IS NULL))),
+    CONSTRAINT calendar_event_attendees_token_check CHECK ((octet_length(token) = 32))
+);
+
+
+--
+-- Name: calendar_event_invitees; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_event_invitees (
+    shared_event_id uuid NOT NULL,
+    invitee_account_id uuid NOT NULL,
+    invitee_address_id uuid NOT NULL,
+    key_packet bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_event_invitees_key_packet_check CHECK (((octet_length(key_packet) >= 1) AND (octet_length(key_packet) <= 1024)))
+);
+
+
+--
+-- Name: calendar_invitations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_invitations (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    calendar_id uuid NOT NULL,
+    invitee_account_id uuid NOT NULL,
+    invitee_incarnation_id bytea NOT NULL,
+    invited_by_account_id uuid NOT NULL,
+    permissions integer NOT NULL,
+    state text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT calendar_invitations_check CHECK ((expires_at > created_at)),
+    CONSTRAINT calendar_invitations_invitee_incarnation_id_check CHECK ((octet_length(invitee_incarnation_id) = 32)),
+    CONSTRAINT calendar_invitations_permissions_check CHECK (((permissions >= 0) AND (permissions <= 255))),
+    CONSTRAINT calendar_invitations_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'declined'::text])))
+);
+
+
+--
+-- Name: calendar_keys; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_keys (
+    calendar_id uuid NOT NULL,
+    key_generation integer NOT NULL,
+    public_key bytea NOT NULL,
+    fingerprint text NOT NULL,
+    locked_secret_key bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_keys_fingerprint_check CHECK ((fingerprint ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'::text)),
+    CONSTRAINT calendar_keys_key_generation_check CHECK ((key_generation >= 1)),
+    CONSTRAINT calendar_keys_locked_secret_key_check CHECK (((octet_length(locked_secret_key) >= 1) AND (octet_length(locked_secret_key) <= 8192))),
+    CONSTRAINT calendar_keys_public_key_check CHECK (((octet_length(public_key) >= 1) AND (octet_length(public_key) <= 8192)))
+);
+
+
+--
+-- Name: calendar_link_passphrases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_link_passphrases (
+    link_id uuid NOT NULL,
+    calendar_id uuid NOT NULL,
+    key_generation integer NOT NULL,
+    passphrase bytea NOT NULL,
+    CONSTRAINT calendar_link_passphrases_passphrase_check CHECK (((octet_length(passphrase) >= 1) AND (octet_length(passphrase) <= 256)))
+);
+
+
+--
+-- Name: calendar_links; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_links (
+    id uuid NOT NULL,
+    calendar_id uuid NOT NULL,
+    kind text NOT NULL,
+    secret_key_generation integer,
+    secret bytea,
+    purpose_key_packet bytea,
+    purpose_data_packet bytea,
+    purpose_signature text,
+    created_by_account_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_links_check CHECK (((kind = 'busy'::text) = (secret IS NULL))),
+    CONSTRAINT calendar_links_check1 CHECK (((secret IS NULL) = (secret_key_generation IS NULL))),
+    CONSTRAINT calendar_links_check2 CHECK ((((purpose_key_packet IS NULL) = (purpose_data_packet IS NULL)) AND ((purpose_data_packet IS NULL) = (purpose_signature IS NULL)))),
+    CONSTRAINT calendar_links_kind_check CHECK ((kind = ANY (ARRAY['full'::text, 'query'::text, 'busy'::text]))),
+    CONSTRAINT calendar_links_purpose_data_packet_check CHECK (((octet_length(purpose_data_packet) >= 1) AND (octet_length(purpose_data_packet) <= 4096))),
+    CONSTRAINT calendar_links_purpose_key_packet_check CHECK (((octet_length(purpose_key_packet) >= 1) AND (octet_length(purpose_key_packet) <= 1024))),
+    CONSTRAINT calendar_links_purpose_signature_check CHECK (((octet_length(purpose_signature) >= 1) AND (octet_length(purpose_signature) <= 4096))),
+    CONSTRAINT calendar_links_secret_check CHECK (((octet_length(secret) >= 1) AND (octet_length(secret) <= 256)))
+);
+
+
+--
+-- Name: calendar_member_shares; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_member_shares (
+    calendar_id uuid NOT NULL,
+    account_id uuid NOT NULL,
+    key_generation integer NOT NULL,
+    share bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_member_shares_share_check CHECK (((octet_length(share) >= 1) AND (octet_length(share) <= 2048)))
+);
+
+
+--
+-- Name: calendar_member_tombstones; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_member_tombstones (
+    calendar_id uuid NOT NULL,
+    account_id uuid NOT NULL,
+    reason text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_member_tombstones_reason_check CHECK ((reason = ANY (ARRAY['removed'::text, 'left'::text, 'deleted'::text])))
+);
+
+
+--
+-- Name: calendar_shared_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_shared_events (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    home_calendar_id uuid NOT NULL,
+    uid text NOT NULL,
+    author_address_id uuid,
+    author_account_id uuid,
+    shared_signed text NOT NULL,
+    shared_signed_signature text NOT NULL,
+    shared_encrypted bytea NOT NULL,
+    shared_encrypted_signature text NOT NULL,
+    attendees_encrypted bytea,
+    attendees_encrypted_signature text,
+    start_utc timestamp with time zone NOT NULL,
+    end_utc timestamp with time zone NOT NULL,
+    start_tz text,
+    end_tz text,
+    full_day boolean NOT NULL,
+    rrule text,
+    recurrence_id timestamp with time zone,
+    range_end_utc timestamp with time zone,
+    sequence integer NOT NULL,
+    revision bigint NOT NULL,
+    bytes bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    modified_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_shared_events_attendees_encrypted_check CHECK (((octet_length(attendees_encrypted) >= 1) AND (octet_length(attendees_encrypted) <= 262144))),
+    CONSTRAINT calendar_shared_events_attendees_encrypted_signature_check CHECK (((octet_length(attendees_encrypted_signature) >= 1) AND (octet_length(attendees_encrypted_signature) <= 4096))),
+    CONSTRAINT calendar_shared_events_bytes_check CHECK ((bytes >= 0)),
+    CONSTRAINT calendar_shared_events_check CHECK ((end_utc >= start_utc)),
+    CONSTRAINT calendar_shared_events_check1 CHECK (((attendees_encrypted IS NULL) = (attendees_encrypted_signature IS NULL))),
+    CONSTRAINT calendar_shared_events_revision_check CHECK ((revision >= 1)),
+    CONSTRAINT calendar_shared_events_sequence_check CHECK ((sequence >= 0)),
+    CONSTRAINT calendar_shared_events_shared_encrypted_check CHECK (((octet_length(shared_encrypted) >= 1) AND (octet_length(shared_encrypted) <= 262144))),
+    CONSTRAINT calendar_shared_events_shared_encrypted_signature_check CHECK (((octet_length(shared_encrypted_signature) >= 1) AND (octet_length(shared_encrypted_signature) <= 4096))),
+    CONSTRAINT calendar_shared_events_shared_signed_check CHECK (((octet_length(shared_signed) >= 1) AND (octet_length(shared_signed) <= 65536))),
+    CONSTRAINT calendar_shared_events_shared_signed_signature_check CHECK (((octet_length(shared_signed_signature) >= 1) AND (octet_length(shared_signed_signature) <= 4096))),
+    CONSTRAINT calendar_shared_events_uid_check CHECK (((char_length(uid) >= 1) AND (char_length(uid) <= 255)))
 );
 
 
@@ -709,10 +981,9 @@ CREATE TABLE public.calendar_members (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     default_reminders_timed jsonb DEFAULT '[{"type": "device", "trigger": "-PT15M"}, {"type": "email", "trigger": "-PT15M"}]'::jsonb NOT NULL,
     default_reminders_all_day jsonb DEFAULT '[{"type": "device", "trigger": "-PT15H"}, {"type": "email", "trigger": "-PT15H"}]'::jsonb NOT NULL,
-    passphrase_share bytea NOT NULL,
+    share_busy boolean DEFAULT false NOT NULL,
     CONSTRAINT calendar_members_default_reminders_all_day_check CHECK ((jsonb_typeof(default_reminders_all_day) = 'array'::text)),
     CONSTRAINT calendar_members_default_reminders_timed_check CHECK ((jsonb_typeof(default_reminders_timed) = 'array'::text)),
-    CONSTRAINT calendar_members_passphrase_share_check CHECK (((octet_length(passphrase_share) >= 1) AND (octet_length(passphrase_share) <= 2048))),
     CONSTRAINT calendar_members_permissions_check CHECK (((permissions >= 0) AND (permissions <= 255)))
 );
 
@@ -753,10 +1024,7 @@ CREATE TABLE public.calendar_account_settings (
 CREATE TABLE public.calendars (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     owner_account_id uuid NOT NULL,
-    suite smallint DEFAULT 1 NOT NULL,
-    public_key bytea NOT NULL,
-    fingerprint text NOT NULL,
-    locked_secret_key bytea NOT NULL,
+    suite smallint NOT NULL,
     metadata_key_packet bytea NOT NULL,
     metadata_data_packet bytea NOT NULL,
     metadata_signature text NOT NULL,
@@ -765,13 +1033,10 @@ CREATE TABLE public.calendars (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     key_generation integer NOT NULL,
     CONSTRAINT calendars_bytes_check CHECK ((bytes >= 0)),
-    CONSTRAINT calendars_fingerprint_check CHECK ((fingerprint ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'::text)),
     CONSTRAINT calendars_key_generation_check CHECK ((key_generation >= 1)),
-    CONSTRAINT calendars_locked_secret_key_check CHECK (((octet_length(locked_secret_key) >= 1) AND (octet_length(locked_secret_key) <= 8192))),
     CONSTRAINT calendars_metadata_data_packet_check CHECK (((octet_length(metadata_data_packet) >= 1) AND (octet_length(metadata_data_packet) <= 4096))),
     CONSTRAINT calendars_metadata_key_packet_check CHECK (((octet_length(metadata_key_packet) >= 1) AND (octet_length(metadata_key_packet) <= 1024))),
     CONSTRAINT calendars_metadata_signature_check CHECK (((octet_length(metadata_signature) >= 1) AND (octet_length(metadata_signature) <= 4096))),
-    CONSTRAINT calendars_public_key_check CHECK (((octet_length(public_key) >= 1) AND (octet_length(public_key) <= 8192))),
     CONSTRAINT calendars_suite_check CHECK ((suite = 1))
 );
 
@@ -782,26 +1047,10 @@ CREATE TABLE public.calendars (
 
 CREATE TABLE public.chat_account_identities (
     account_id uuid NOT NULL,
-    identity_key text NOT NULL,
+    identity_key bytea NOT NULL,
     manifest_version bigint NOT NULL,
     changed_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_account_identities_manifest_version_check CHECK ((manifest_version >= 1))
-);
-
-
---
--- Name: chat_anonymous_rate_counters; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.chat_anonymous_rate_counters (
-    scope_type text NOT NULL,
-    scope_digest bytea NOT NULL,
-    window_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT chat_anonymous_rate_counters_count_check CHECK ((count >= 0)),
-    CONSTRAINT chat_anonymous_rate_counters_scope_digest_check CHECK ((octet_length(scope_digest) = 32)),
-    CONSTRAINT chat_anonymous_rate_counters_scope_type_check CHECK ((scope_type = ANY (ARRAY['capability_bundle'::text, 'capability_minute'::text, 'capability_day'::text, 'recipient'::text, 'federation_origin'::text, 'ip_bytes'::text, 'origin_multi_requests'::text, 'origin_multi_bytes'::text, 'group_send_issue'::text, 'group_endorsement_upload'::text, 'group_send_token'::text, 'multi_recipient'::text])))
 );
 
 
@@ -830,17 +1079,17 @@ CREATE TABLE public.chat_backup_bases (
     generation bigint NOT NULL,
     covered_cursor bigint NOT NULL,
     ciphertext_bytes bigint NOT NULL,
-    ciphertext_sha256 character(64) NOT NULL,
+    ciphertext_sha256 bytea NOT NULL,
     storage_path text NOT NULL,
     state text DEFAULT 'staged'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone DEFAULT (now() + '24:00:00'::interval) NOT NULL,
     committed_at timestamp with time zone,
     CONSTRAINT chat_backup_bases_ciphertext_bytes_check CHECK (((ciphertext_bytes > 0) AND (ciphertext_bytes <= 134218752))),
-    CONSTRAINT chat_backup_bases_ciphertext_sha256_check CHECK ((ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT chat_backup_bases_covered_cursor_check CHECK ((covered_cursor >= 0)),
     CONSTRAINT chat_backup_bases_generation_check CHECK ((generation > 0)),
-    CONSTRAINT chat_backup_bases_state_check CHECK ((state = ANY (ARRAY['staged'::text, 'committed'::text])))
+    CONSTRAINT chat_backup_bases_state_check CHECK ((state = ANY (ARRAY['staged'::text, 'committed'::text]))),
+    CONSTRAINT chat_backup_bases_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
 );
 
 
@@ -852,11 +1101,11 @@ CREATE TABLE public.chat_backup_device_heads (
     account_id uuid NOT NULL,
     source_device_id integer NOT NULL,
     last_device_sequence bigint NOT NULL,
-    last_segment_digest character(64) NOT NULL,
+    last_segment_digest bytea NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_device_heads_last_device_sequence_check CHECK ((last_device_sequence > 0)),
-    CONSTRAINT chat_backup_device_heads_last_segment_digest_check CHECK ((last_segment_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_backup_device_heads_source_device_id_check CHECK ((source_device_id > 0))
+    CONSTRAINT chat_backup_device_heads_source_device_id_check CHECK ((source_device_id > 0)),
+    CONSTRAINT chat_backup_device_heads_last_segment_digest_bytes CHECK ((octet_length(last_segment_digest) = 32))
 );
 
 
@@ -868,12 +1117,12 @@ CREATE TABLE public.chat_backup_media_objects (
     account_id uuid NOT NULL,
     media_id bytea NOT NULL,
     ciphertext_bytes bigint NOT NULL,
-    ciphertext_sha256 character(64) NOT NULL,
+    ciphertext_sha256 bytea NOT NULL,
     storage_path text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_media_objects_ciphertext_bytes_check CHECK ((ciphertext_bytes > 0)),
-    CONSTRAINT chat_backup_media_objects_ciphertext_sha256_check CHECK ((ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_backup_media_objects_media_id_check CHECK ((octet_length(media_id) = 32))
+    CONSTRAINT chat_backup_media_objects_media_id_check CHECK ((octet_length(media_id) = 32)),
+    CONSTRAINT chat_backup_media_objects_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
 );
 
 
@@ -884,11 +1133,11 @@ CREATE TABLE public.chat_backup_media_objects (
 CREATE TABLE public.chat_backup_media_operations (
     account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
-    request_digest character(64) NOT NULL,
+    request_digest bytea NOT NULL,
     media_id bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_media_operations_media_id_check CHECK ((octet_length(media_id) = 32)),
-    CONSTRAINT chat_backup_media_operations_request_digest_check CHECK ((request_digest ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_backup_media_operations_request_digest_bytes CHECK ((octet_length(request_digest) = 32))
 );
 
 
@@ -913,10 +1162,10 @@ CREATE TABLE public.chat_backup_media_reconciliation_pages (
     account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
     page_index integer NOT NULL,
-    request_digest character(64) NOT NULL,
+    request_digest bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_media_reconciliation_pages_page_index_check CHECK ((page_index >= 0)),
-    CONSTRAINT chat_backup_media_reconciliation_pages_request_digest_check CHECK ((request_digest ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_backup_media_reconciliation_pages_request_digest_bytes CHECK ((octet_length(request_digest) = 32))
 );
 
 
@@ -928,14 +1177,14 @@ CREATE TABLE public.chat_backup_media_reconciliations (
     account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
     target_generation bigint NOT NULL,
-    reference_set_digest character(64) NOT NULL,
+    reference_set_digest bytea NOT NULL,
     next_page integer DEFAULT 0 NOT NULL,
     completed boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_media_reconciliations_next_page_check CHECK ((next_page >= 0)),
-    CONSTRAINT chat_backup_media_reconciliations_reference_set_digest_check CHECK ((reference_set_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_backup_media_reconciliations_target_generation_check CHECK ((target_generation > 0))
+    CONSTRAINT chat_backup_media_reconciliations_target_generation_check CHECK ((target_generation > 0)),
+    CONSTRAINT chat_backup_media_reconciliations_reference_set_digest_bytes CHECK ((octet_length(reference_set_digest) = 32))
 );
 
 
@@ -958,10 +1207,10 @@ CREATE TABLE public.chat_backup_media_references (
 CREATE TABLE public.chat_backup_provision_operations (
     account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
-    request_digest character(64) NOT NULL,
+    request_digest bytea NOT NULL,
     backup_incarnation_id uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chat_backup_provision_operations_request_digest_check CHECK ((request_digest ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_backup_provision_operations_request_digest_bytes CHECK ((octet_length(request_digest) = 32))
 );
 
 
@@ -975,20 +1224,20 @@ CREATE TABLE public.chat_backup_segments (
     operation_id uuid NOT NULL,
     source_device_id integer NOT NULL,
     device_sequence bigint NOT NULL,
-    previous_segment_digest character(64) NOT NULL,
+    previous_segment_digest bytea NOT NULL,
     account_manifest_sequence bigint NOT NULL,
     ciphertext_bytes integer NOT NULL,
-    ciphertext_sha256 character(64) NOT NULL,
+    ciphertext_sha256 bytea NOT NULL,
     ciphertext bytea NOT NULL,
     acknowledged_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_segments_account_manifest_sequence_check CHECK ((account_manifest_sequence > 0)),
     CONSTRAINT chat_backup_segments_check CHECK ((octet_length(ciphertext) = ciphertext_bytes)),
     CONSTRAINT chat_backup_segments_ciphertext_bytes_check CHECK (((ciphertext_bytes > 0) AND (ciphertext_bytes <= 263168))),
-    CONSTRAINT chat_backup_segments_ciphertext_sha256_check CHECK ((ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT chat_backup_segments_cursor_check CHECK ((cursor > 0)),
     CONSTRAINT chat_backup_segments_device_sequence_check CHECK ((device_sequence > 0)),
-    CONSTRAINT chat_backup_segments_previous_segment_digest_check CHECK ((previous_segment_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_backup_segments_source_device_id_check CHECK ((source_device_id > 0))
+    CONSTRAINT chat_backup_segments_source_device_id_check CHECK ((source_device_id > 0)),
+    CONSTRAINT chat_backup_segments_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32)),
+    CONSTRAINT chat_backup_segments_previous_segment_digest_bytes CHECK ((octet_length(previous_segment_digest) = 32))
 );
 
 
@@ -1001,12 +1250,12 @@ CREATE TABLE public.chat_backups (
     backup_incarnation_id uuid NOT NULL,
     suite smallint NOT NULL,
     protection_domain smallint NOT NULL,
-    root_envelope text NOT NULL,
+    root_envelope bytea NOT NULL,
     signer_authorization jsonb NOT NULL,
-    signer_authorization_digest character(64) NOT NULL,
+    signer_authorization_digest bytea NOT NULL,
     current_cursor bigint DEFAULT 0 NOT NULL,
     current_generation bigint DEFAULT 0 NOT NULL,
-    current_manifest_digest character(64) DEFAULT repeat('0'::text, 64) NOT NULL,
+    current_manifest_digest bytea DEFAULT decode(repeat('00'::text, 32), 'hex'::text) NOT NULL,
     current_manifest jsonb,
     current_base_object_id uuid,
     latest_protected_at timestamp with time zone,
@@ -1016,11 +1265,11 @@ CREATE TABLE public.chat_backups (
     CONSTRAINT chat_backups_current_cursor_check CHECK ((current_cursor >= 0)),
     CONSTRAINT chat_backups_current_generation_check CHECK ((current_generation >= 0)),
     CONSTRAINT chat_backups_current_manifest_check CHECK (((current_manifest IS NULL) OR (jsonb_typeof(current_manifest) = 'object'::text))),
-    CONSTRAINT chat_backups_current_manifest_digest_check CHECK ((current_manifest_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT chat_backups_protection_domain_check CHECK ((protection_domain = 1)),
     CONSTRAINT chat_backups_signer_authorization_check CHECK ((jsonb_typeof(signer_authorization) = 'object'::text)),
-    CONSTRAINT chat_backups_signer_authorization_digest_check CHECK ((signer_authorization_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_backups_suite_check CHECK ((suite = 1))
+    CONSTRAINT chat_backups_suite_check CHECK ((suite = 1)),
+    CONSTRAINT chat_backups_current_manifest_digest_bytes CHECK ((octet_length(current_manifest_digest) = 32)),
+    CONSTRAINT chat_backups_signer_authorization_digest_bytes CHECK ((octet_length(signer_authorization_digest) = 32))
 );
 
 
@@ -1030,8 +1279,8 @@ CREATE TABLE public.chat_backups (
 
 CREATE TABLE public.chat_call_link_knocks (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    room_id text NOT NULL,
-    participant_id text NOT NULL,
+    room_id bytea NOT NULL,
+    participant_id bytea NOT NULL,
     label bytea NOT NULL,
     ticket_hash bytea NOT NULL,
     status smallint DEFAULT 0 NOT NULL,
@@ -1040,10 +1289,11 @@ CREATE TABLE public.chat_call_link_knocks (
     seat_hash bytea NOT NULL,
     account_id uuid,
     CONSTRAINT chat_call_link_knocks_label_check CHECK ((octet_length(label) = 168)),
-    CONSTRAINT chat_call_link_knocks_participant_id_check CHECK ((participant_id ~ '^[0-9a-f]{32}$'::text)),
     CONSTRAINT chat_call_link_knocks_seat_hash_check CHECK ((octet_length(seat_hash) = 32)),
     CONSTRAINT chat_call_link_knocks_status_check CHECK ((status = ANY (ARRAY[0, 1, 2]))),
-    CONSTRAINT chat_call_link_knocks_ticket_hash_check CHECK ((octet_length(ticket_hash) = 32))
+    CONSTRAINT chat_call_link_knocks_ticket_hash_check CHECK ((octet_length(ticket_hash) = 32)),
+    CONSTRAINT chat_call_link_knocks_participant_id_bytes CHECK ((octet_length(participant_id) = 16)),
+    CONSTRAINT chat_call_link_knocks_room_id_bytes CHECK ((octet_length(room_id) = 16))
 );
 
 
@@ -1052,8 +1302,8 @@ CREATE TABLE public.chat_call_link_knocks (
 --
 
 CREATE TABLE public.chat_call_link_seats (
-    room_id text NOT NULL,
-    participant_id text NOT NULL,
+    room_id bytea NOT NULL,
+    participant_id bytea NOT NULL,
     seat_hash bytea NOT NULL,
     role smallint,
     no_screen boolean DEFAULT false NOT NULL,
@@ -1061,9 +1311,10 @@ CREATE TABLE public.chat_call_link_seats (
     issued_at timestamp with time zone DEFAULT now() NOT NULL,
     last_minted_at timestamp with time zone DEFAULT now() NOT NULL,
     account_id uuid,
-    CONSTRAINT chat_call_link_seats_participant_id_check CHECK ((participant_id ~ '^[0-9a-f]{32}$'::text)),
     CONSTRAINT chat_call_link_seats_role_check CHECK ((role = ANY (ARRAY[1, 2]))),
-    CONSTRAINT chat_call_link_seats_seat_hash_check CHECK ((octet_length(seat_hash) = 32))
+    CONSTRAINT chat_call_link_seats_seat_hash_check CHECK ((octet_length(seat_hash) = 32)),
+    CONSTRAINT chat_call_link_seats_participant_id_bytes CHECK ((octet_length(participant_id) = 16)),
+    CONSTRAINT chat_call_link_seats_room_id_bytes CHECK ((octet_length(room_id) = 16))
 );
 
 
@@ -1072,9 +1323,9 @@ CREATE TABLE public.chat_call_link_seats (
 --
 
 CREATE TABLE public.chat_call_links (
-    room_id text NOT NULL,
+    room_id bytea NOT NULL,
     owner_account_id uuid NOT NULL,
-    nonce text NOT NULL,
+    nonce bytea NOT NULL,
     access_token_hash bytea NOT NULL,
     info bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1086,8 +1337,8 @@ CREATE TABLE public.chat_call_links (
     CONSTRAINT chat_call_links_access_token_hash_check CHECK ((octet_length(access_token_hash) = 32)),
     CONSTRAINT chat_call_links_host_token_hash_check CHECK (((host_token_hash IS NULL) OR (octet_length(host_token_hash) = 32))),
     CONSTRAINT chat_call_links_info_check CHECK ((octet_length(info) = 552)),
-    CONSTRAINT chat_call_links_nonce_check CHECK ((nonce ~ '^[0-9a-f]{32}$'::text)),
-    CONSTRAINT chat_call_links_room_id_check CHECK ((room_id ~ '^[0-9a-f]{32}$'::text))
+    CONSTRAINT chat_call_links_nonce_bytes CHECK ((octet_length(nonce) = 16)),
+    CONSTRAINT chat_call_links_room_id_bytes CHECK ((octet_length(room_id) = 16))
 );
 
 
@@ -1097,12 +1348,13 @@ CREATE TABLE public.chat_call_links (
 
 CREATE TABLE public.chat_delivery_capabilities (
     account_id uuid NOT NULL,
-    profile_version character(64) NOT NULL,
+    profile_version bytea NOT NULL,
     profile_revision bigint NOT NULL,
     capability_hash bytea NOT NULL,
     rotated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_delivery_capabilities_capability_hash_check CHECK ((octet_length(capability_hash) = 32)),
-    CONSTRAINT chat_delivery_capabilities_profile_revision_check CHECK ((profile_revision > 0))
+    CONSTRAINT chat_delivery_capabilities_profile_revision_check CHECK ((profile_revision > 0)),
+    CONSTRAINT chat_delivery_capabilities_profile_version_bytes CHECK ((octet_length(profile_version) = 32))
 );
 
 
@@ -1112,17 +1364,17 @@ CREATE TABLE public.chat_delivery_capabilities (
 
 CREATE TABLE public.chat_device_manifest_history (
     account_id uuid NOT NULL,
-    incarnation_id character(64) NOT NULL,
+    incarnation_id bytea NOT NULL,
     version bigint NOT NULL,
-    manifest_hash character(64) NOT NULL,
-    authority_key_id character(64) NOT NULL,
+    manifest_hash bytea NOT NULL,
+    authority_key_id bytea NOT NULL,
     manifest jsonb NOT NULL,
     accepted_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chat_device_manifest_history_authority_key_id_check CHECK ((authority_key_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_device_manifest_history_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT chat_device_manifest_history_manifest_check CHECK ((jsonb_typeof(manifest) = 'object'::text)),
-    CONSTRAINT chat_device_manifest_history_manifest_hash_check CHECK ((manifest_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_device_manifest_history_version_check CHECK ((version > 0))
+    CONSTRAINT chat_device_manifest_history_version_check CHECK ((version > 0)),
+    CONSTRAINT chat_device_manifest_history_authority_key_id_bytes CHECK ((octet_length(authority_key_id) = 32)),
+    CONSTRAINT chat_device_manifest_history_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32)),
+    CONSTRAINT chat_device_manifest_history_manifest_hash_bytes CHECK ((octet_length(manifest_hash) = 32))
 );
 
 
@@ -1133,13 +1385,13 @@ CREATE TABLE public.chat_device_manifest_history (
 CREATE TABLE public.chat_device_manifests (
     account_id uuid NOT NULL,
     version bigint NOT NULL,
-    manifest_hash text NOT NULL,
-    authority_key_id text NOT NULL,
+    manifest_hash bytea NOT NULL,
+    authority_key_id bytea NOT NULL,
     manifest jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chat_device_manifests_authority_key_id_check CHECK ((length(authority_key_id) = 64)),
-    CONSTRAINT chat_device_manifests_manifest_hash_check CHECK ((length(manifest_hash) = 64)),
-    CONSTRAINT chat_device_manifests_version_check CHECK ((version > 0))
+    CONSTRAINT chat_device_manifests_version_check CHECK ((version > 0)),
+    CONSTRAINT chat_device_manifests_authority_key_id_bytes CHECK ((octet_length(authority_key_id) = 32)),
+    CONSTRAINT chat_device_manifests_manifest_hash_bytes CHECK ((octet_length(manifest_hash) = 32))
 );
 
 
@@ -1277,7 +1529,7 @@ CREATE TABLE public.chat_mailbox (
     sender_device_id integer NOT NULL,
     envelope_type smallint NOT NULL,
     suite smallint NOT NULL,
-    content text NOT NULL,
+    content bytea NOT NULL,
     server_ts timestamp with time zone DEFAULT now() NOT NULL,
     sealed_sender boolean DEFAULT false NOT NULL,
     send_id text,
@@ -1312,7 +1564,7 @@ CREATE TABLE public.chat_media_federation_inbound_pending (
     origin text NOT NULL,
     sequence bigint NOT NULL,
     operation_id uuid NOT NULL,
-    transaction_digest character(64) NOT NULL,
+    transaction_digest bytea NOT NULL,
     recipient_account_id uuid NOT NULL,
     attachment_id uuid NOT NULL,
     ciphertext_bytes bigint NOT NULL,
@@ -1322,7 +1574,7 @@ CREATE TABLE public.chat_media_federation_inbound_pending (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_media_federation_inbound_pending_ciphertext_bytes_check CHECK ((ciphertext_bytes > 0)),
     CONSTRAINT chat_media_federation_inbound_pending_sequence_check CHECK ((sequence > 0)),
-    CONSTRAINT chat_media_federation_inbound_pending_transaction_digest_check CHECK ((transaction_digest ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_media_federation_inbound_pending_transaction_digest_bytes CHECK ((octet_length(transaction_digest) = 32))
 );
 
 
@@ -1353,13 +1605,14 @@ CREATE TABLE public.chat_media_objects (
     origin_server text NOT NULL,
     suite smallint NOT NULL,
     ciphertext_bytes bigint NOT NULL,
-    ciphertext_sha256 character(64) NOT NULL,
+    ciphertext_sha256 bytea NOT NULL,
     retrieval_token_hash bytea NOT NULL,
     storage_path text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_media_objects_ciphertext_bytes_check CHECK ((ciphertext_bytes > 0)),
-    CONSTRAINT chat_media_objects_ciphertext_sha256_check CHECK ((ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_media_objects_retrieval_token_hash_check CHECK ((octet_length(retrieval_token_hash) = 32))
+    CONSTRAINT chat_media_objects_retrieval_token_hash_check CHECK ((octet_length(retrieval_token_hash) = 32)),
+    CONSTRAINT chat_media_objects_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32)),
+    CONSTRAINT chat_media_objects_suite_check CHECK ((suite = 2))
 );
 
 
@@ -1373,29 +1626,13 @@ CREATE TABLE public.chat_media_origin_delivery_operations (
     recipient_account_id uuid NOT NULL,
     attachment_id uuid NOT NULL,
     ciphertext_bytes bigint NOT NULL,
-    ciphertext_sha256 character(64) NOT NULL,
-    offer_digest character(64) NOT NULL,
+    ciphertext_sha256 bytea NOT NULL,
+    offer_digest bytea NOT NULL,
     storage_reference_id uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_media_origin_delivery_operations_ciphertext_bytes_check CHECK ((ciphertext_bytes > 0)),
-    CONSTRAINT chat_media_origin_delivery_operations_ciphertext_sha256_check CHECK ((ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_media_origin_delivery_operations_offer_digest_check CHECK ((offer_digest ~ '^[0-9a-f]{64}$'::text))
-);
-
-
---
--- Name: chat_media_rate_counters; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.chat_media_rate_counters (
-    scope_type text NOT NULL,
-    scope_digest bytea NOT NULL,
-    window_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT chat_media_rate_counters_count_check CHECK ((count >= 0)),
-    CONSTRAINT chat_media_rate_counters_scope_digest_check CHECK ((octet_length(scope_digest) = 32)),
-    CONSTRAINT chat_media_rate_counters_scope_type_check CHECK ((scope_type = ANY (ARRAY['capability_minute'::text, 'capability_day'::text, 'recipient'::text, 'federation_origin'::text])))
+    CONSTRAINT chat_media_origin_delivery_operations_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32)),
+    CONSTRAINT chat_media_origin_delivery_operations_offer_digest_bytes CHECK ((octet_length(offer_digest) = 32))
 );
 
 
@@ -1434,6 +1671,7 @@ CREATE TABLE public.chat_media_uploads (
     CONSTRAINT chat_media_uploads_check CHECK ((received_bytes <= total_bytes)),
     CONSTRAINT chat_media_uploads_received_bytes_check CHECK ((received_bytes >= 0)),
     CONSTRAINT chat_media_uploads_retrieval_token_hash_check CHECK ((octet_length(retrieval_token_hash) = 32)),
+    CONSTRAINT chat_media_uploads_suite_check CHECK ((suite = 2)),
     CONSTRAINT chat_media_uploads_total_bytes_check CHECK ((total_bytes > 0))
 );
 
@@ -1458,8 +1696,8 @@ CREATE TABLE public.chat_one_time_kyber_pre_keys (
     account_id uuid NOT NULL,
     device_id integer NOT NULL,
     key_id bigint NOT NULL,
-    public_key text NOT NULL,
-    signature text NOT NULL,
+    public_key bytea NOT NULL,
+    signature bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -1472,7 +1710,7 @@ CREATE TABLE public.chat_one_time_pre_keys (
     account_id uuid NOT NULL,
     device_id integer NOT NULL,
     key_id bigint NOT NULL,
-    public_key text NOT NULL,
+    public_key bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -1484,20 +1722,21 @@ CREATE TABLE public.chat_one_time_pre_keys (
 CREATE TABLE public.chat_profiles (
     account_id uuid NOT NULL,
     suite smallint NOT NULL,
-    version character(64) NOT NULL,
+    profile_version bytea NOT NULL,
     revision bigint NOT NULL,
     source_device_id integer NOT NULL,
-    name_ciphertext text NOT NULL,
-    avatar_ciphertext text,
-    wrapped_key text NOT NULL,
+    name_ciphertext bytea NOT NULL,
+    avatar_ciphertext bytea,
+    wrapped_key bytea NOT NULL,
     access_key_verifier bytea NOT NULL,
     is_current boolean DEFAULT true NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    about_ciphertext text,
+    about_ciphertext bytea,
     CONSTRAINT chat_profiles_access_key_verifier_check CHECK ((octet_length(access_key_verifier) = 32)),
     CONSTRAINT chat_profiles_revision_check CHECK ((revision > 0)),
     CONSTRAINT chat_profiles_source_device_id_check CHECK ((((source_device_id >= 1) AND (source_device_id <= 127)) OR (source_device_id = 128))),
-    CONSTRAINT chat_profiles_suite_check CHECK ((suite = 1))
+    CONSTRAINT chat_profiles_suite_check CHECK ((suite = 1)),
+    CONSTRAINT chat_profiles_profile_version_bytes CHECK ((octet_length(profile_version) = 32))
 );
 
 
@@ -1578,14 +1817,14 @@ CREATE TABLE public.chat_zk_server_keys (
 CREATE TABLE public.drive_collection_key_epoch_history (
     collection_id uuid NOT NULL,
     epoch integer NOT NULL,
-    owner_key_envelope text NOT NULL,
-    epoch_statement text NOT NULL,
-    epoch_statement_hash text NOT NULL,
+    owner_key_envelope bytea NOT NULL,
+    epoch_statement bytea NOT NULL,
+    epoch_statement_hash bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    previous_key_envelope text,
+    previous_key_envelope bytea,
     CONSTRAINT drive_collection_key_epoch_history_epoch_check CHECK ((epoch > 0)),
-    CONSTRAINT drive_collection_key_epoch_history_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_collection_key_epoch_history_previous_key CHECK (((epoch = 1) = (previous_key_envelope IS NULL)))
+    CONSTRAINT drive_collection_key_epoch_history_previous_key CHECK (((epoch = 1) = (previous_key_envelope IS NULL))),
+    CONSTRAINT drive_collection_key_epoch_history_epoch_statement_hash_bytes CHECK ((octet_length(epoch_statement_hash) = 32))
 );
 
 
@@ -1598,12 +1837,12 @@ CREATE TABLE public.drive_collection_shares (
     collection_id uuid NOT NULL,
     sharer_account_id uuid NOT NULL,
     recipient_account_id uuid NOT NULL,
-    named_share_envelope text NOT NULL,
+    named_share_envelope bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     can_upload boolean DEFAULT false NOT NULL,
     can_delete boolean DEFAULT false NOT NULL,
     upload_quota_bytes bigint,
-    CONSTRAINT drive_collection_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096))
+    CONSTRAINT drive_collection_shares_named_share_envelope_check CHECK ((octet_length(named_share_envelope) <= 3072))
 );
 
 
@@ -1614,29 +1853,28 @@ CREATE TABLE public.drive_collection_shares (
 CREATE TABLE public.drive_collections (
     id uuid NOT NULL,
     owner_account_id uuid NOT NULL,
-    name_envelope text NOT NULL,
-    owner_key_envelope text NOT NULL,
+    name_envelope bytea NOT NULL,
+    owner_key_envelope bytea NOT NULL,
     key_epoch integer NOT NULL,
     name_revision bigint NOT NULL,
-    epoch_statement text NOT NULL,
-    epoch_statement_hash text NOT NULL,
+    epoch_statement bytea NOT NULL,
+    epoch_statement_hash bytea NOT NULL,
     parent_collection_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     color text,
     deleted_at timestamp with time zone,
     trash_root_id uuid,
-    kind text DEFAULT 'folder'::text NOT NULL,
-    name_hash text,
+    kind public.drive_collection_kind DEFAULT 'folder'::text NOT NULL,
+    name_hash bytea,
     name_hash_generation integer,
     CONSTRAINT drive_collections_album_top_level CHECK (((kind = 'folder'::text) OR (parent_collection_id IS NULL))),
-    CONSTRAINT drive_collections_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_collections_folder_name_hash CHECK (((kind <> 'folder'::text) OR (name_hash IS NOT NULL))),
     CONSTRAINT drive_collections_key_epoch_check CHECK ((key_epoch > 0)),
-    CONSTRAINT drive_collections_kind_check CHECK ((kind = ANY (ARRAY['folder'::text, 'album'::text]))),
-    CONSTRAINT drive_collections_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_collections_name_hash_generation_check CHECK (((name_hash_generation IS NULL) OR ((name_hash_generation > 0) AND (kind = 'folder'::text)))),
-    CONSTRAINT drive_collections_name_revision_check CHECK ((name_revision > 0))
+    CONSTRAINT drive_collections_name_revision_check CHECK ((name_revision > 0)),
+    CONSTRAINT drive_collections_epoch_statement_hash_bytes CHECK ((octet_length(epoch_statement_hash) = 32)),
+    CONSTRAINT drive_collections_name_hash_bytes CHECK ((octet_length(name_hash) = 32))
 );
 
 
@@ -1654,7 +1892,7 @@ CREATE TABLE public.consents (
     at timestamp with time zone DEFAULT now() NOT NULL,
     channel text NOT NULL,
     CONSTRAINT consents_channel_check CHECK ((channel = ANY (ARRAY['settings'::text, 'signup'::text, 'admin'::text]))),
-    CONSTRAINT consents_purpose_check CHECK ((purpose = ANY (ARRAY['federation_abroad'::text, 'marketing'::text])))
+    CONSTRAINT consents_purpose_check CHECK ((purpose = ANY (ARRAY['federation'::text, 'marketing'::text])))
 );
 
 
@@ -1700,7 +1938,7 @@ CREATE TABLE public.contacts (
     summary text NOT NULL,
     signature bytea NOT NULL,
     card bytea NOT NULL,
-    revision bigint DEFAULT 1 NOT NULL,
+    revision bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT contacts_card_check CHECK (((octet_length(card) >= 1) AND (octet_length(card) <= 600000))),
@@ -1727,6 +1965,18 @@ CREATE TABLE public.account_device_tickets (
 
 
 --
+-- Name: account_device_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.account_device_releases (
+    account_id uuid NOT NULL,
+    device_id integer NOT NULL,
+    released_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT account_device_releases_device_id_check CHECK (((device_id >= 1) AND (device_id <= 127)))
+);
+
+
+--
 -- Name: account_devices; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1735,14 +1985,14 @@ CREATE TABLE public.account_devices (
     device_id integer NOT NULL,
     suite smallint,
     registration_id bigint,
-    identity_key text,
+    identity_key bytea,
     signed_pre_key_id bigint,
-    signed_pre_key text,
-    signed_pre_key_signature text,
+    signed_pre_key bytea,
+    signed_pre_key_signature bytea,
     last_resort_kyber_pre_key_id bigint,
-    last_resort_kyber_pre_key text,
-    last_resort_kyber_pre_key_signature text,
-    name text DEFAULT ''::text NOT NULL,
+    last_resort_kyber_pre_key bytea,
+    last_resort_kyber_pre_key_signature bytea,
+    name text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     last_seen_at timestamp with time zone,
     credential_salt bytea NOT NULL,
@@ -1781,7 +2031,7 @@ CREATE TABLE public.document_acknowledgements (
 CREATE TABLE public.drive_federation_mutations (
     origin text NOT NULL,
     request_id text NOT NULL,
-    request_hash text NOT NULL,
+    request_hash bytea NOT NULL,
     share_id uuid NOT NULL,
     operation text NOT NULL,
     response_status smallint NOT NULL,
@@ -1792,10 +2042,10 @@ CREATE TABLE public.drive_federation_mutations (
     CONSTRAINT drive_federation_mutations_origin_check CHECK ((origin = lower(origin))),
     CONSTRAINT drive_federation_mutations_origin_check1 CHECK (((length(origin) >= 3) AND (length(origin) <= 253))),
     CONSTRAINT drive_federation_mutations_origin_check2 CHECK ((origin ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT drive_federation_mutations_request_hash_check CHECK ((request_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federation_mutations_request_id_check CHECK (((length(request_id) >= 1) AND (length(request_id) <= 128))),
     CONSTRAINT drive_federation_mutations_request_id_check1 CHECK ((request_id ~ '^[A-Za-z0-9._~-]+$'::text)),
-    CONSTRAINT drive_federation_mutations_response_status_check CHECK (((response_status >= 100) AND (response_status <= 599)))
+    CONSTRAINT drive_federation_mutations_response_status_check CHECK (((response_status >= 100) AND (response_status <= 599))),
+    CONSTRAINT drive_federation_mutations_request_hash_bytes CHECK ((octet_length(request_hash) = 32))
 );
 
 
@@ -1806,17 +2056,17 @@ CREATE TABLE public.drive_federation_mutations (
 CREATE TABLE public.drive_profile_keys (
     account_id uuid NOT NULL,
     direction text NOT NULL,
-    envelope text NOT NULL,
-    profile_version text NOT NULL,
+    envelope bytea NOT NULL,
+    profile_version bytea NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    peer_incarnation_id text NOT NULL,
+    peer_incarnation_id bytea NOT NULL,
     peer_server text NOT NULL,
     peer_account_id uuid NOT NULL,
     CONSTRAINT drive_profile_keys_direction_check CHECK ((direction = ANY (ARRAY['sent'::text, 'received'::text]))),
-    CONSTRAINT drive_profile_keys_envelope_check CHECK ((length(envelope) <= 4096)),
-    CONSTRAINT drive_profile_keys_peer_incarnation_id_check CHECK ((peer_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_profile_keys_envelope_check CHECK ((octet_length(envelope) <= 3072)),
     CONSTRAINT drive_profile_keys_peer_server_check CHECK (((peer_server = lower(peer_server)) AND ((length(peer_server) >= 3) AND (length(peer_server) <= 253)))),
-    CONSTRAINT drive_profile_keys_profile_version_check CHECK ((profile_version ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT drive_profile_keys_peer_incarnation_id_bytes CHECK ((octet_length(peer_incarnation_id) = 32)),
+    CONSTRAINT drive_profile_keys_profile_version_bytes CHECK ((octet_length(profile_version) = 32))
 );
 
 
@@ -1829,18 +2079,17 @@ CREATE TABLE public.drive_federated_incoming_file_shares (
     account_id uuid NOT NULL,
     owner_server text NOT NULL,
     remote_capability text NOT NULL,
-    capability_hash text NOT NULL,
+    capability_hash bytea NOT NULL,
     remote_file_id uuid NOT NULL,
     owner_account_id uuid NOT NULL,
-    owner_account text NOT NULL,
-    owner_incarnation_id text NOT NULL,
-    owner_signing_public_key text NOT NULL,
+    owner_incarnation_id bytea NOT NULL,
+    owner_signing_public_key bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT drive_federated_incoming_file_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_federated_incoming_file_shares_owner_incarnation_id_check CHECK ((owner_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federated_incoming_file_shares_remote_capability_check CHECK (((length(remote_capability) >= 32) AND (length(remote_capability) <= 256))),
     CONSTRAINT drive_federated_incoming_file_shares_remote_capability_check1 CHECK ((remote_capability ~ '^[A-Za-z0-9._~-]+$'::text)),
-    CONSTRAINT drive_federated_incoming_file_shares_owner_server_check CHECK ((owner_server = lower(owner_server)))
+    CONSTRAINT drive_federated_incoming_file_shares_owner_server_check CHECK ((owner_server = lower(owner_server))),
+    CONSTRAINT drive_federated_incoming_file_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
+    CONSTRAINT drive_federated_incoming_file_shares_owner_incarnation_id_bytes CHECK ((octet_length(owner_incarnation_id) = 32))
 );
 
 
@@ -1853,37 +2102,35 @@ CREATE TABLE public.drive_federated_incoming_shares (
     account_id uuid NOT NULL,
     owner_server text NOT NULL,
     remote_capability text NOT NULL,
-    capability_hash text NOT NULL,
+    capability_hash bytea NOT NULL,
     remote_collection_id uuid NOT NULL,
-    named_share_envelope text NOT NULL,
-    name_envelope text NOT NULL,
+    named_share_envelope bytea NOT NULL,
+    name_envelope bytea NOT NULL,
     key_epoch integer NOT NULL,
     name_revision bigint NOT NULL,
-    epoch_statement text NOT NULL,
-    epoch_statement_hash text NOT NULL,
+    epoch_statement bytea NOT NULL,
+    epoch_statement_hash bytea NOT NULL,
     owner_account_id uuid NOT NULL,
-    owner_account text NOT NULL,
-    owner_incarnation_id text NOT NULL,
-    owner_signing_public_key text NOT NULL,
-    owner_authority_public_key text NOT NULL,
+    owner_incarnation_id bytea NOT NULL,
+    owner_signing_public_key bytea NOT NULL,
+    owner_authority_public_key bytea NOT NULL,
     can_upload boolean DEFAULT false NOT NULL,
     can_delete boolean DEFAULT false NOT NULL,
     upload_quota_bytes bigint,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    collection_kind text DEFAULT 'folder'::text NOT NULL,
-    CONSTRAINT drive_federated_incoming_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_federated_incoming_shares_collection_kind_check CHECK ((collection_kind = ANY (ARRAY['folder'::text, 'album'::text]))),
-    CONSTRAINT drive_federated_incoming_shares_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
+    collection_kind public.drive_collection_kind DEFAULT 'folder'::text NOT NULL,
     CONSTRAINT drive_federated_incoming_shares_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_federated_incoming_shares_name_revision_check CHECK ((name_revision > 0)),
-    CONSTRAINT drive_federated_incoming_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096)),
-    CONSTRAINT drive_federated_incoming_shares_owner_incarnation_id_check CHECK ((owner_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_federated_incoming_shares_named_share_envelope_check CHECK ((octet_length(named_share_envelope) <= 3072)),
     CONSTRAINT drive_federated_incoming_shares_remote_capability_check CHECK (((length(remote_capability) >= 32) AND (length(remote_capability) <= 256))),
     CONSTRAINT drive_federated_incoming_shares_remote_capability_check1 CHECK ((remote_capability ~ '^[A-Za-z0-9._~-]+$'::text)),
     CONSTRAINT drive_federated_incoming_shares_owner_server_check CHECK ((owner_server = lower(owner_server))),
     CONSTRAINT drive_federated_incoming_shares_owner_server_check1 CHECK (((length(owner_server) >= 3) AND (length(owner_server) <= 253))),
     CONSTRAINT drive_federated_incoming_shares_owner_server_check2 CHECK ((owner_server ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT drive_federated_incoming_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0)))
+    CONSTRAINT drive_federated_incoming_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0))),
+    CONSTRAINT drive_federated_incoming_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
+    CONSTRAINT drive_federated_incoming_shares_epoch_statement_hash_bytes CHECK ((octet_length(epoch_statement_hash) = 32)),
+    CONSTRAINT drive_federated_incoming_shares_owner_incarnation_id_bytes CHECK ((octet_length(owner_incarnation_id) = 32))
 );
 
 
@@ -1895,22 +2142,20 @@ CREATE TABLE public.drive_federated_outgoing_file_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     file_id uuid NOT NULL,
     sharer_account_id uuid NOT NULL,
-    recipient_username text NOT NULL,
     recipient_server text NOT NULL,
-    recipient_incarnation_id text NOT NULL,
-    share_envelope text NOT NULL,
+    recipient_incarnation_id bytea NOT NULL,
+    share_envelope bytea NOT NULL,
     key_generation integer NOT NULL,
-    capability_hash text NOT NULL,
+    capability_hash bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     can_edit boolean DEFAULT false NOT NULL,
     recipient_account_id uuid NOT NULL,
-    CONSTRAINT drive_federated_outgoing_file_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federated_outgoing_file_shares_key_generation_check CHECK ((key_generation > 0)),
     CONSTRAINT drive_federated_outgoing_file_shares_recipient_server_check CHECK ((recipient_server = lower(recipient_server))),
     CONSTRAINT drive_federated_outgoing_file_shares_recipient_server_check1 CHECK (((length(recipient_server) >= 3) AND (length(recipient_server) <= 253))),
-    CONSTRAINT drive_federated_outgoing_file_shares_recipient_incarnation_id_c CHECK ((recipient_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_federated_outgoing_file_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
-    CONSTRAINT drive_federated_outgoing_file_shares_share_envelope_check CHECK ((length(share_envelope) <= 4096))
+    CONSTRAINT drive_federated_outgoing_file_shares_share_envelope_check CHECK ((octet_length(share_envelope) <= 3072)),
+    CONSTRAINT drive_federated_outgoing_file_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
+    CONSTRAINT drive_fed_outgoing_file_shares_recipient_incarnation_id_bytes CHECK ((octet_length(recipient_incarnation_id) = 32))
 );
 
 
@@ -1922,24 +2167,22 @@ CREATE TABLE public.drive_federated_outgoing_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     collection_id uuid NOT NULL,
     sharer_account_id uuid NOT NULL,
-    recipient_username text NOT NULL,
     recipient_server text NOT NULL,
-    named_share_envelope text NOT NULL,
-    capability_hash text NOT NULL,
+    named_share_envelope bytea NOT NULL,
+    capability_hash bytea NOT NULL,
     can_upload boolean DEFAULT false NOT NULL,
     can_delete boolean DEFAULT false NOT NULL,
     upload_quota_bytes bigint,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    recipient_incarnation_id character(64) NOT NULL,
+    recipient_incarnation_id bytea NOT NULL,
     recipient_account_id uuid NOT NULL,
-    CONSTRAINT drive_federated_outgoing_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_federated_outgoing_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096)),
+    CONSTRAINT drive_federated_outgoing_shares_named_share_envelope_check CHECK ((octet_length(named_share_envelope) <= 3072)),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check CHECK ((recipient_server = lower(recipient_server))),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check1 CHECK (((length(recipient_server) >= 3) AND (length(recipient_server) <= 253))),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check2 CHECK ((recipient_server ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT drive_federated_outgoing_shares_recipient_incarnation_check CHECK ((recipient_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_federated_outgoing_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
-    CONSTRAINT drive_federated_outgoing_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0)))
+    CONSTRAINT drive_federated_outgoing_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0))),
+    CONSTRAINT drive_federated_outgoing_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
+    CONSTRAINT drive_federated_outgoing_shares_recipient_incarnation_id_bytes CHECK ((octet_length(recipient_incarnation_id) = 32))
 );
 
 
@@ -1950,16 +2193,14 @@ CREATE TABLE public.drive_federated_outgoing_shares (
 CREATE TABLE public.federation_domain_rules (
     domain text NOT NULL,
     feature text NOT NULL,
-    inbound_action text DEFAULT 'inherit'::text NOT NULL,
-    outbound_action text DEFAULT 'inherit'::text NOT NULL,
+    inbound_action public.federation_rule_action DEFAULT 'inherit'::text NOT NULL,
+    outbound_action public.federation_rule_action DEFAULT 'inherit'::text NOT NULL,
     trust_requirement text DEFAULT 'inherit'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT federation_domain_rules_domain_check CHECK ((domain = lower(domain))),
     CONSTRAINT federation_domain_rules_domain_check1 CHECK (((length(domain) >= 3) AND (length(domain) <= 253))),
     CONSTRAINT federation_domain_rules_domain_check2 CHECK ((domain ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT federation_domain_rules_inbound_action_check CHECK ((inbound_action = ANY (ARRAY['inherit'::text, 'allow'::text, 'block'::text]))),
-    CONSTRAINT federation_domain_rules_outbound_action_check CHECK ((outbound_action = ANY (ARRAY['inherit'::text, 'allow'::text, 'block'::text]))),
     CONSTRAINT federation_domain_rules_trust_requirement_check CHECK ((trust_requirement = ANY (ARRAY['inherit'::text, 'tofu'::text, 'verified'::text])))
 );
 
@@ -1987,7 +2228,7 @@ CREATE TABLE public.federation_feature_policy_documents (
     domain text NOT NULL,
     feature_type smallint NOT NULL,
     sequence bigint NOT NULL,
-    policy_hash character(64) NOT NULL,
+    policy_hash bytea NOT NULL,
     federation_identity_generation bigint NOT NULL,
     envelope jsonb NOT NULL,
     is_local boolean NOT NULL,
@@ -1996,8 +2237,8 @@ CREATE TABLE public.federation_feature_policy_documents (
     CONSTRAINT federation_feature_policy_documents_domain_check CHECK ((domain = lower(domain))),
     CONSTRAINT federation_feature_policy_documents_envelope_check CHECK ((jsonb_typeof(envelope) = 'object'::text)),
     CONSTRAINT federation_feature_policy_documents_feature_type_check CHECK ((feature_type = 1)),
-    CONSTRAINT federation_feature_policy_documents_policy_hash_check CHECK ((policy_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_feature_policy_documents_sequence_check CHECK ((sequence > 0))
+    CONSTRAINT federation_feature_policy_documents_sequence_check CHECK ((sequence > 0)),
+    CONSTRAINT federation_feature_policy_documents_policy_hash_bytes CHECK ((octet_length(policy_hash) = 32))
 );
 
 
@@ -2010,11 +2251,11 @@ CREATE TABLE public.federation_feature_policy_failures (
     domain text NOT NULL,
     feature_type smallint NOT NULL,
     failure_class text NOT NULL,
-    evidence_digest character(64) NOT NULL,
+    evidence_digest bytea NOT NULL,
     received_value jsonb,
     occurred_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT federation_feature_policy_failures_evidence_digest_check CHECK ((evidence_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_feature_policy_failures_failure_class_check CHECK ((failure_class = ANY (ARRAY['rollback'::text, 'gap'::text, 'wrong_domain'::text, 'unknown_type'::text, 'malformed'::text, 'signature'::text, 'identity_chain'::text, 'configuration_replacement'::text])))
+    CONSTRAINT federation_feature_policy_failures_failure_class_check CHECK ((failure_class = ANY (ARRAY['rollback'::text, 'gap'::text, 'wrongDomain'::text, 'unknownType'::text, 'malformed'::text, 'signature'::text, 'identityChain'::text, 'configurationReplacement'::text]))),
+    CONSTRAINT federation_feature_policy_failures_evidence_digest_bytes CHECK ((octet_length(evidence_digest) = 32))
 );
 
 
@@ -2027,12 +2268,13 @@ CREATE TABLE public.federation_inbound (
     origin text NOT NULL,
     sequence bigint NOT NULL,
     transaction_id text,
-    digest text,
+    digest bytea,
     status smallint NOT NULL,
     answer jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT federation_inbound_sequence_check CHECK ((sequence > 0)),
-    CONSTRAINT federation_inbound_status_check CHECK (((status >= 200) AND (status <= 599)))
+    CONSTRAINT federation_inbound_status_check CHECK (((status >= 200) AND (status <= 599))),
+    CONSTRAINT federation_inbound_digest_bytes CHECK ((octet_length(digest) = 32))
 );
 
 
@@ -2055,14 +2297,14 @@ CREATE TABLE public.federation_inbound_state (
 
 CREATE TABLE public.federation_local_identity_documents (
     sequence bigint NOT NULL,
-    document_hash text NOT NULL,
-    key_id text NOT NULL,
+    document_hash bytea NOT NULL,
+    key_id bytea NOT NULL,
     document jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT federation_local_identity_documents_document_check CHECK ((jsonb_typeof(document) = 'object'::text)),
-    CONSTRAINT federation_local_identity_documents_document_hash_check CHECK ((document_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_local_identity_documents_key_id_check CHECK ((key_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_local_identity_documents_sequence_check CHECK ((sequence >= 0))
+    CONSTRAINT federation_local_identity_documents_sequence_check CHECK ((sequence >= 0)),
+    CONSTRAINT federation_local_identity_documents_document_hash_bytes CHECK ((octet_length(document_hash) = 32)),
+    CONSTRAINT federation_local_identity_documents_key_id_bytes CHECK ((octet_length(key_id) = 32))
 );
 
 
@@ -2103,32 +2345,31 @@ CREATE TABLE public.federation_peer_identities (
     domain text NOT NULL,
     trust_state text NOT NULL,
     current_sequence bigint NOT NULL,
-    current_document_hash text NOT NULL,
-    current_key_id text NOT NULL,
-    current_public_key text NOT NULL,
+    current_document_hash bytea NOT NULL,
+    current_key_id bytea NOT NULL,
+    current_public_key bytea NOT NULL,
     first_seen_at timestamp with time zone NOT NULL,
     last_seen_at timestamp with time zone NOT NULL,
     verified_at timestamp with time zone,
     quarantine_reason text,
     pending_document jsonb,
     pending_identity_chain jsonb,
-    pending_document_hash text,
+    pending_document_hash bytea,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     current_api_base text,
     capabilities jsonb DEFAULT '[]'::jsonb NOT NULL,
     discovery_expires_at timestamp with time zone,
     last_discovery_error text,
     CONSTRAINT federation_peer_identities_capabilities_check CHECK ((jsonb_typeof(capabilities) = 'array'::text)),
-    CONSTRAINT federation_peer_identities_check CHECK ((((trust_state = 'quarantined'::text) AND (quarantine_reason IS NOT NULL) AND (pending_document IS NOT NULL) AND (jsonb_typeof(pending_document) = 'object'::text) AND (pending_identity_chain IS NOT NULL) AND (jsonb_typeof(pending_identity_chain) = 'array'::text) AND (jsonb_array_length(pending_identity_chain) > 0) AND (pending_document_hash IS NOT NULL)) OR ((trust_state <> 'quarantined'::text) AND (quarantine_reason IS NULL) AND (pending_document IS NULL) AND (pending_identity_chain IS NULL) AND (pending_document_hash IS NULL)))),
-    CONSTRAINT federation_peer_identities_current_document_hash_check CHECK ((current_document_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_peer_identities_current_key_id_check CHECK ((current_key_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_peer_identities_current_public_key_check CHECK ((current_public_key ~ '^[A-Za-z0-9+/]{43}=$'::text)),
+    CONSTRAINT federation_peer_identities_current_public_key_check CHECK ((octet_length(current_public_key) = 32)),
     CONSTRAINT federation_peer_identities_current_sequence_check CHECK ((current_sequence >= 0)),
     CONSTRAINT federation_peer_identities_domain_check CHECK ((domain = lower(domain))),
     CONSTRAINT federation_peer_identities_domain_check1 CHECK (((length(domain) >= 3) AND (length(domain) <= 253))),
     CONSTRAINT federation_peer_identities_domain_check2 CHECK ((domain ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT federation_peer_identities_pending_document_hash_check CHECK (((pending_document_hash IS NULL) OR (pending_document_hash ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT federation_peer_identities_trust_state_check CHECK ((trust_state = ANY (ARRAY['tofu'::text, 'verified'::text, 'quarantined'::text])))
+    CONSTRAINT federation_peer_identities_trust_state_check CHECK ((trust_state = ANY (ARRAY['tofu'::text, 'verified'::text, 'quarantined'::text]))),
+    CONSTRAINT federation_peer_identities_current_document_hash_bytes CHECK ((octet_length(current_document_hash) = 32)),
+    CONSTRAINT federation_peer_identities_current_key_id_bytes CHECK ((octet_length(current_key_id) = 32)),
+    CONSTRAINT federation_peer_identities_pending_document_hash_bytes CHECK ((octet_length(pending_document_hash) = 32))
 );
 
 
@@ -2139,16 +2380,16 @@ CREATE TABLE public.federation_peer_identities (
 CREATE TABLE public.federation_peer_identity_documents (
     domain text NOT NULL,
     sequence bigint NOT NULL,
-    document_hash text NOT NULL,
-    key_id text NOT NULL,
+    document_hash bytea NOT NULL,
+    key_id bytea NOT NULL,
     document jsonb NOT NULL,
     acceptance text NOT NULL,
     recorded_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT federation_peer_identity_documents_acceptance_check CHECK ((acceptance = ANY (ARRAY['accepted'::text, 'quarantined'::text, 'superseded'::text]))),
     CONSTRAINT federation_peer_identity_documents_document_check CHECK ((jsonb_typeof(document) = 'object'::text)),
-    CONSTRAINT federation_peer_identity_documents_document_hash_check CHECK ((document_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_peer_identity_documents_key_id_check CHECK ((key_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_peer_identity_documents_sequence_check CHECK ((sequence >= 0))
+    CONSTRAINT federation_peer_identity_documents_sequence_check CHECK ((sequence >= 0)),
+    CONSTRAINT federation_peer_identity_documents_document_hash_bytes CHECK ((octet_length(document_hash) = 32)),
+    CONSTRAINT federation_peer_identity_documents_key_id_bytes CHECK ((octet_length(key_id) = 32))
 );
 
 
@@ -2171,16 +2412,16 @@ CREATE TABLE public.federation_policy (
 CREATE TABLE public.federation_request_replays (
     origin text NOT NULL,
     request_id text NOT NULL,
-    request_hash text NOT NULL,
+    request_hash bytea NOT NULL,
     first_seen_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     CONSTRAINT federation_request_replays_check CHECK ((expires_at > first_seen_at)),
     CONSTRAINT federation_request_replays_origin_check CHECK ((origin = lower(origin))),
     CONSTRAINT federation_request_replays_origin_check1 CHECK (((length(origin) >= 3) AND (length(origin) <= 253))),
     CONSTRAINT federation_request_replays_origin_check2 CHECK ((origin ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT federation_request_replays_request_hash_check CHECK ((request_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT federation_request_replays_request_id_check CHECK (((length(request_id) >= 1) AND (length(request_id) <= 128))),
-    CONSTRAINT federation_request_replays_request_id_check1 CHECK ((request_id ~ '^[A-Za-z0-9._~-]+$'::text))
+    CONSTRAINT federation_request_replays_request_id_check1 CHECK ((request_id ~ '^[A-Za-z0-9._~-]+$'::text)),
+    CONSTRAINT federation_request_replays_request_hash_bytes CHECK ((octet_length(request_hash) = 32))
 );
 
 
@@ -2244,9 +2485,9 @@ CREATE TABLE public.drive_file_assets (
 CREATE TABLE public.drive_file_key_history (
     file_id uuid NOT NULL,
     generation integer NOT NULL,
-    previous_key_envelope text NOT NULL,
+    previous_key_envelope bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    previous_metadata_envelope text,
+    previous_metadata_envelope bytea,
     previous_metadata_revision bigint,
     CONSTRAINT drive_file_key_history_generation_check CHECK ((generation > 1))
 );
@@ -2275,13 +2516,13 @@ CREATE TABLE public.drive_file_shares (
     file_id uuid NOT NULL,
     sharer_account_id uuid NOT NULL,
     recipient_account_id uuid NOT NULL,
-    share_envelope text NOT NULL,
+    share_envelope bytea NOT NULL,
     key_generation integer NOT NULL,
     can_edit boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT drive_file_shares_check CHECK ((sharer_account_id <> recipient_account_id)),
     CONSTRAINT drive_file_shares_key_generation_check CHECK ((key_generation > 0)),
-    CONSTRAINT drive_file_shares_share_envelope_check CHECK ((length(share_envelope) <= 4096))
+    CONSTRAINT drive_file_shares_share_envelope_check CHECK ((octet_length(share_envelope) <= 3072))
 );
 
 
@@ -2293,7 +2534,7 @@ CREATE TABLE public.drive_file_thumbnails (
     file_id uuid NOT NULL,
     variant text NOT NULL,
     size_bytes bigint NOT NULL,
-    s3_version_id text DEFAULT ''::text NOT NULL,
+    object_id uuid NOT NULL,
     source_version uuid,
     uploader_account_id uuid NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2329,7 +2570,6 @@ CREATE TABLE public.collab_update_log (
 CREATE TABLE public.drive_file_versions (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     file_id uuid NOT NULL,
-    storage_path text NOT NULL,
     seq_at_snapshot bigint NOT NULL,
     doc_key_id bigint NOT NULL,
     author_account_id uuid NOT NULL,
@@ -2338,15 +2578,17 @@ CREATE TABLE public.drive_file_versions (
     keep_forever boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     kind text NOT NULL,
-    ciphertext_sha256 text,
+    ciphertext_sha256 bytea,
     key_generation integer NOT NULL,
     parent_version_id uuid,
     remote_author_server text,
     remote_author_account_id uuid,
-    blob_suite smallint DEFAULT 2 NOT NULL,
-    revision_content_envelope text,
+    blob_suite smallint NOT NULL,
+    revision_content_envelope bytea NOT NULL,
+    CONSTRAINT drive_file_versions_blob_suite_check CHECK ((blob_suite = 2)),
     CONSTRAINT drive_file_versions_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'yjs'::text]))),
-    CONSTRAINT drive_file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL)))
+    CONSTRAINT drive_file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL))),
+    CONSTRAINT drive_file_versions_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
 );
 
 
@@ -2358,38 +2600,38 @@ CREATE TABLE public.drive_files (
     id uuid NOT NULL,
     collection_id uuid NOT NULL,
     uploader_account_id uuid NOT NULL,
-    metadata_envelope text NOT NULL,
-    file_key_envelope text NOT NULL,
+    metadata_envelope bytea NOT NULL,
+    file_key_envelope bytea NOT NULL,
     key_epoch integer NOT NULL,
-    metadata_revision bigint DEFAULT 1 NOT NULL,
-    storage_path text NOT NULL,
+    metadata_revision bigint NOT NULL,
     encrypted_size_bytes bigint DEFAULT 0 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    current_doc_key_id bigint DEFAULT 1 NOT NULL,
+    current_doc_key_id bigint NOT NULL,
     seed_committed boolean DEFAULT false NOT NULL,
     deleted_at timestamp with time zone,
     trash_root_id uuid,
-    ciphertext_sha256 text,
+    ciphertext_sha256 bytea,
     original_pruned boolean DEFAULT false NOT NULL,
     fed_share_id uuid,
     original_key_generation integer NOT NULL,
     key_generation integer NOT NULL,
     collab_log_floor bigint DEFAULT 0 NOT NULL,
     editors_can_share boolean DEFAULT false NOT NULL,
-    name_hash text NOT NULL,
-    content_hash text,
+    name_hash bytea NOT NULL,
+    content_hash bytea,
     content_revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    blob_suite smallint DEFAULT 2 NOT NULL,
-    revision_content_envelope text,
-    CONSTRAINT drive_files_ciphertext_sha256_check CHECK (((ciphertext_sha256 IS NULL) OR (ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    blob_suite smallint NOT NULL,
+    revision_content_envelope bytea NOT NULL,
+    CONSTRAINT drive_files_blob_suite_check CHECK ((blob_suite = 2)),
     CONSTRAINT drive_files_collab_log_floor_check CHECK ((collab_log_floor >= 0)),
-    CONSTRAINT drive_files_content_hash_check CHECK ((content_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_files_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_files_key_generation CHECK ((key_generation > 0)),
     CONSTRAINT drive_files_metadata_revision_check CHECK ((metadata_revision > 0)),
-    CONSTRAINT drive_files_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_files_original_key_generation CHECK ((original_key_generation > 0))
+    CONSTRAINT drive_files_original_key_generation CHECK ((original_key_generation > 0)),
+    CONSTRAINT drive_files_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32)),
+    CONSTRAINT drive_files_content_hash_bytes CHECK ((octet_length(content_hash) = 32)),
+    CONSTRAINT drive_files_name_hash_bytes CHECK ((octet_length(name_hash) = 32))
 );
 
 
@@ -2417,7 +2659,7 @@ CREATE TABLE public.legal_documents (
     required_at_signup boolean DEFAULT false NOT NULL,
     published_at timestamp with time zone DEFAULT now() NOT NULL,
     published_by_account_id uuid,
-    CONSTRAINT legal_documents_kind_check CHECK ((kind ~ '^[a-z][a-z0-9_]{0,39}$'::text)),
+    CONSTRAINT legal_documents_kind_check CHECK ((kind ~ '^[a-z][A-Za-z0-9]{0,39}$'::text)),
     CONSTRAINT legal_documents_language_check CHECK ((language ~ '^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$'::text)),
     CONSTRAINT legal_documents_sha256_check CHECK ((octet_length(sha256) = 32)),
     CONSTRAINT legal_documents_url_check CHECK (((char_length(url) >= 1) AND (char_length(url) <= 2048))),
@@ -2455,7 +2697,7 @@ CREATE TABLE public.mail_address_keys (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     address_id uuid NOT NULL,
     fingerprint text NOT NULL,
-    sha256_fingerprint character(64) NOT NULL,
+    sha256_fingerprint text NOT NULL,
     public_key bytea NOT NULL,
     private_key_envelope bytea NOT NULL,
     is_primary boolean NOT NULL,
@@ -2666,18 +2908,17 @@ CREATE TABLE public.mail_filter_runs (
 CREATE TABLE public.mail_filters (
     id uuid NOT NULL,
     account_id uuid NOT NULL,
-    name_sealed text NOT NULL,
+    name_sealed bytea NOT NULL,
     enabled boolean DEFAULT true NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
-    match text NOT NULL,
+    match public.match_mode NOT NULL,
     conditions jsonb NOT NULL,
     actions jsonb NOT NULL,
     source text DEFAULT 'manual'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_filters_actions_check CHECK ((jsonb_typeof(actions) = 'object'::text)),
     CONSTRAINT mail_filters_conditions_check CHECK ((jsonb_typeof(conditions) = 'array'::text)),
-    CONSTRAINT mail_filters_match_check CHECK ((match = ANY (ARRAY['all'::text, 'any'::text]))),
-    CONSTRAINT mail_filters_name_sealed_check CHECK (((length(name_sealed) >= 1) AND (length(name_sealed) <= 1000))),
+    CONSTRAINT mail_filters_name_sealed_check CHECK (((octet_length(name_sealed) >= 1) AND (octet_length(name_sealed) <= 750))),
     CONSTRAINT mail_filters_source_check CHECK ((source = ANY (ARRAY['manual'::text, 'sender'::text])))
 );
 
@@ -2690,7 +2931,7 @@ CREATE TABLE public.mail_folders (
     id uuid NOT NULL,
     account_id uuid NOT NULL,
     parent_id uuid,
-    name_sealed text,
+    name_sealed bytea,
     color text NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
     expanded boolean DEFAULT true NOT NULL,
@@ -2698,7 +2939,7 @@ CREATE TABLE public.mail_folders (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_folders_check CHECK (((parent_id IS NULL) OR (parent_id <> id))),
     CONSTRAINT mail_folders_color_check CHECK ((color ~ '^#[0-9a-f]{6}$'::text)),
-    CONSTRAINT mail_folders_name_sealed_check CHECK (((length(name_sealed) >= 1) AND (length(name_sealed) <= 1000)))
+    CONSTRAINT mail_folders_name_sealed_check CHECK (((octet_length(name_sealed) >= 1) AND (octet_length(name_sealed) <= 750)))
 );
 
 
@@ -2763,7 +3004,7 @@ CREATE TABLE public.mail_forwardings (
     forwardee_address_id uuid,
     kind text NOT NULL,
     state text NOT NULL,
-    match text DEFAULT 'all'::text NOT NULL,
+    match public.match_mode DEFAULT 'all'::text NOT NULL,
     conditions jsonb DEFAULT '[]'::jsonb NOT NULL,
     activation text,
     confirmation_hash bytea,
@@ -2784,15 +3025,14 @@ CREATE TABLE public.mail_forwardings (
     code_sent_at timestamp with time zone,
     CONSTRAINT mail_forwardings_activation_check CHECK (((activation IS NULL) OR (length(activation) <= 65536))),
     CONSTRAINT mail_forwardings_bounces_today_check CHECK ((bounces_today >= 0)),
-    CONSTRAINT mail_forwardings_check CHECK (((kind = 'end_to_end'::text) = (forwardee_address_id IS NOT NULL))),
+    CONSTRAINT mail_forwardings_check CHECK (((kind = 'endToEnd'::text) = (forwardee_address_id IS NOT NULL))),
     CONSTRAINT mail_forwardings_code_hash_length CHECK (((code_hash IS NULL) OR (length(code_hash) = 32))),
     CONSTRAINT mail_forwardings_code_whole CHECK ((((code_hash IS NULL) = (code_key_version IS NULL)) AND ((code_hash IS NULL) = (code_expires_at IS NULL)))),
     CONSTRAINT mail_forwardings_conditions_check CHECK ((jsonb_typeof(conditions) = 'array'::text)),
     CONSTRAINT mail_forwardings_confirmation_hash_check CHECK (((confirmation_hash IS NULL) OR (octet_length(confirmation_hash) = 32))),
     CONSTRAINT mail_forwardings_forwardee_email_check CHECK (((length(forwardee_email) >= 3) AND (length(forwardee_email) <= 320))),
     CONSTRAINT mail_forwardings_invites_today_check CHECK ((invites_today >= 0)),
-    CONSTRAINT mail_forwardings_kind_check CHECK ((kind = ANY (ARRAY['end_to_end'::text, 'outside'::text]))),
-    CONSTRAINT mail_forwardings_match_check CHECK ((match = ANY (ARRAY['all'::text, 'any'::text]))),
+    CONSTRAINT mail_forwardings_kind_check CHECK ((kind = ANY (ARRAY['endToEnd'::text, 'outside'::text]))),
     CONSTRAINT mail_forwardings_notice_check CHECK (((notice IS NULL) OR (notice = ANY (ARRAY['bounces'::text, 'budget'::text])))),
     CONSTRAINT mail_forwardings_sent_today_check CHECK ((sent_today >= 0)),
     CONSTRAINT mail_forwardings_skipped_check CHECK ((skipped >= 0)),
@@ -2824,9 +3064,9 @@ CREATE TABLE public.mail_group_key_shares (
     account_id uuid NOT NULL,
     share bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    member_incarnation_id text NOT NULL,
-    CONSTRAINT mail_group_key_shares_member_incarnation_check CHECK ((member_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT mail_group_key_shares_share_check CHECK (((octet_length(share) >= 1) AND (octet_length(share) <= 16384)))
+    member_incarnation_id bytea NOT NULL,
+    CONSTRAINT mail_group_key_shares_share_check CHECK (((octet_length(share) >= 1) AND (octet_length(share) <= 16384))),
+    CONSTRAINT mail_group_key_shares_member_incarnation_id_bytes CHECK ((octet_length(member_incarnation_id) = 32))
 );
 
 
@@ -2838,7 +3078,7 @@ CREATE TABLE public.mail_group_keys (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     group_id uuid NOT NULL,
     fingerprint text NOT NULL,
-    sha256_fingerprint character(64) NOT NULL,
+    sha256_fingerprint text NOT NULL,
     public_key bytea NOT NULL,
     is_primary boolean DEFAULT false NOT NULL,
     flags integer DEFAULT 3 NOT NULL,
@@ -2871,7 +3111,6 @@ CREATE TABLE public.mail_group_members (
 
 CREATE TABLE public.mail_group_objects (
     object_key text NOT NULL,
-    object_version text DEFAULT ''::text NOT NULL,
     group_id uuid NOT NULL,
     size_bytes bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2905,11 +3144,11 @@ CREATE TABLE public.mail_group_signing_shares (
     signer_public_key bytea NOT NULL,
     account_id uuid NOT NULL,
     share bytea NOT NULL,
-    member_incarnation_id text NOT NULL,
+    member_incarnation_id bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT mail_group_signing_shares_member_incarnation_id_check CHECK ((member_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT mail_group_signing_shares_share_check CHECK (((octet_length(share) >= 1) AND (octet_length(share) <= 2048))),
-    CONSTRAINT mail_group_signing_shares_signer_public_key_check CHECK ((octet_length(signer_public_key) = 32))
+    CONSTRAINT mail_group_signing_shares_signer_public_key_check CHECK ((octet_length(signer_public_key) = 32)),
+    CONSTRAINT mail_group_signing_shares_member_incarnation_id_bytes CHECK ((octet_length(member_incarnation_id) = 32))
 );
 
 
@@ -2993,12 +3232,12 @@ CREATE TABLE public.mail_key_lists (
 CREATE TABLE public.mail_labels (
     id uuid NOT NULL,
     account_id uuid NOT NULL,
-    name_sealed text NOT NULL,
+    name_sealed bytea NOT NULL,
     color text NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_labels_color_check CHECK ((color ~ '^#[0-9a-f]{6}$'::text)),
-    CONSTRAINT mail_labels_name_sealed_check CHECK (((length(name_sealed) >= 1) AND (length(name_sealed) <= 1000)))
+    CONSTRAINT mail_labels_name_sealed_check CHECK (((octet_length(name_sealed) >= 1) AND (octet_length(name_sealed) <= 750)))
 );
 
 
@@ -3040,7 +3279,6 @@ CREATE TABLE public.mail_messages (
     starred boolean DEFAULT false NOT NULL,
     protection text NOT NULL,
     object_key text NOT NULL,
-    object_version text DEFAULT ''::text NOT NULL,
     size_bytes bigint NOT NULL,
     received_at timestamp with time zone DEFAULT now() NOT NULL,
     sent_at timestamp with time zone,
@@ -3075,7 +3313,7 @@ CREATE TABLE public.mail_messages (
     CONSTRAINT mail_messages_key_packet_check CHECK (((octet_length(key_packet) >= 1) AND (octet_length(key_packet) <= 4096))),
     CONSTRAINT mail_messages_message_id_hash_check CHECK ((octet_length(message_id_hash) = 32)),
     CONSTRAINT mail_messages_owner CHECK (((account_id IS NOT NULL) OR (group_id IS NOT NULL))),
-    CONSTRAINT mail_messages_protection_check CHECK ((protection = ANY (ARRAY['zero_access'::text, 'end_to_end'::text]))),
+    CONSTRAINT mail_messages_protection_check CHECK ((protection = ANY (ARRAY['zeroAccess'::text, 'endToEnd'::text]))),
     CONSTRAINT mail_messages_references_hashes_check CHECK ((cardinality(references_hashes) <= 50)),
     CONSTRAINT mail_messages_search_tokens_check CHECK ((cardinality(search_tokens) <= 4000)),
     CONSTRAINT mail_messages_size_bytes_check CHECK ((size_bytes > 0))
@@ -3093,7 +3331,6 @@ CREATE TABLE public.mail_outbox (
     is_admin boolean NOT NULL,
     deliver_at timestamp with time zone NOT NULL,
     parts_key text NOT NULL,
-    parts_version text NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
@@ -3127,7 +3364,7 @@ CREATE TABLE public.mail_sending_events (
     account_id uuid NOT NULL,
     kind text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT mail_sending_events_kind_check CHECK ((kind = ANY (ARRAY['bounce'::text, 'spam_refused'::text])))
+    CONSTRAINT mail_sending_events_kind_check CHECK ((kind = ANY (ARRAY['bounce'::text, 'spamRefused'::text])))
 );
 
 
@@ -3185,7 +3422,7 @@ CREATE TABLE public.mail_settings (
     composer_mode text DEFAULT 'popup'::text NOT NULL,
     view_mode text DEFAULT 'conversation'::text NOT NULL,
     attach_public_key boolean DEFAULT false NOT NULL,
-    pgp_scheme text DEFAULT 'pgp_mime'::text NOT NULL,
+    pgp_scheme text DEFAULT 'pgpMime'::text NOT NULL,
     confirm_link boolean DEFAULT true NOT NULL,
     page_size integer DEFAULT 50 NOT NULL,
     spam_action text DEFAULT 'ask'::text NOT NULL,
@@ -3208,9 +3445,9 @@ CREATE TABLE public.mail_settings (
     CONSTRAINT mail_settings_font_face_check CHECK ((font_face = ANY (ARRAY['sans-serif'::text, 'serif'::text, 'georgia'::text, 'arial'::text, 'helvetica'::text, 'monospace'::text, 'tahoma'::text, 'verdana'::text, 'times'::text, 'trebuchet'::text]))),
     CONSTRAINT mail_settings_font_size_check CHECK ((font_size = ANY (ARRAY[10, 12, 14, 16, 18, 20, 22, 24, 26]))),
     CONSTRAINT mail_settings_page_size_check CHECK ((page_size = ANY (ARRAY[50, 100, 200]))),
-    CONSTRAINT mail_settings_pgp_scheme_check CHECK ((pgp_scheme = ANY (ARRAY['pgp_mime'::text, 'inline'::text]))),
+    CONSTRAINT mail_settings_pgp_scheme_check CHECK ((pgp_scheme = ANY (ARRAY['pgpMime'::text, 'inline'::text]))),
     CONSTRAINT mail_settings_remote_images_check CHECK ((remote_images = ANY (ARRAY['ask'::text, 'always'::text]))),
-    CONSTRAINT mail_settings_spam_action_check CHECK ((spam_action = ANY (ARRAY['ask'::text, 'just_spam'::text, 'spam_and_unsubscribe'::text]))),
+    CONSTRAINT mail_settings_spam_action_check CHECK ((spam_action = ANY (ARRAY['ask'::text, 'justSpam'::text, 'spamAndUnsubscribe'::text]))),
     CONSTRAINT mail_settings_text_direction_check CHECK ((text_direction = ANY (ARRAY['ltr'::text, 'rtl'::text]))),
     CONSTRAINT mail_settings_view_layout_check CHECK ((view_layout = ANY (ARRAY['column'::text, 'row'::text]))),
     CONSTRAINT mail_settings_view_mode_check CHECK ((view_mode = ANY (ARRAY['conversation'::text, 'message'::text])))
@@ -3255,18 +3492,6 @@ CREATE TABLE public.opaque_server_setups (
     retired_at timestamp with time zone,
     CONSTRAINT opaque_server_setups_key_id_check CHECK ((key_id > 0)),
     CONSTRAINT opaque_server_setups_sealed_setup_check CHECK (((octet_length(sealed_setup) >= 1) AND (octet_length(sealed_setup) <= 4096)))
-);
-
-
---
--- Name: organization_access_requests; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.organization_access_requests (
-    organization_id uuid NOT NULL,
-    account_id uuid NOT NULL,
-    request bytea NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -3340,15 +3565,17 @@ CREATE TABLE public.organization_members (
 
 
 --
--- Name: organization_setting_overrides; Type: TABLE; Schema: public; Owner: -
+-- Name: organization_entitlements; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.organization_setting_overrides (
+CREATE TABLE public.organization_entitlements (
     organization_id uuid NOT NULL,
     key text NOT NULL,
     value bigint NOT NULL,
+    source text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT organization_setting_overrides_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text))
+    CONSTRAINT organization_entitlements_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text)),
+    CONSTRAINT organization_entitlements_source_check CHECK ((source = ANY (ARRAY['admin'::text, 'plan'::text, 'organization'::text])))
 );
 
 
@@ -3456,12 +3683,12 @@ CREATE TABLE public.drive_public_shares (
     share_type text NOT NULL,
     target_id uuid NOT NULL,
     token text NOT NULL,
-    collection_key_envelope text NOT NULL,
+    collection_key_envelope bytea NOT NULL,
     collection_key_epoch integer NOT NULL,
     owner_account_id uuid NOT NULL,
     expires_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    owner_link_key_envelope text NOT NULL,
+    owner_link_key_envelope bytea NOT NULL,
     removed_at timestamp with time zone,
     blocked_at timestamp with time zone,
     blocked_reason text,
@@ -3469,10 +3696,25 @@ CREATE TABLE public.drive_public_shares (
     blocked_by_account_id uuid,
     owner_removed_at timestamp with time zone,
     CONSTRAINT drive_public_shares_blocked CHECK ((((blocked_at IS NULL) = (blocked_reason IS NULL)) AND ((blocked_at IS NOT NULL) OR ((blocked_reference IS NULL) AND (blocked_by_account_id IS NULL))) AND ((owner_removed_at IS NULL) OR (blocked_at IS NOT NULL)))),
-    CONSTRAINT drive_public_shares_blocked_reason_check CHECK ((blocked_reason = ANY (ARRAY['legal_order'::text, 'abuse'::text, 'other'::text]))),
+    CONSTRAINT drive_public_shares_blocked_reason_check CHECK ((blocked_reason = ANY (ARRAY['legalOrder'::text, 'abuse'::text, 'other'::text]))),
     CONSTRAINT drive_public_shares_blocked_reference_check CHECK (((char_length(blocked_reference) >= 1) AND (char_length(blocked_reference) <= 200))),
     CONSTRAINT drive_public_shares_collection_key_epoch_check CHECK ((collection_key_epoch > 0)),
     CONSTRAINT drive_public_shares_share_type_check CHECK ((share_type = ANY (ARRAY['collection'::text, 'file'::text])))
+);
+
+
+--
+-- Name: rate_counters; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.rate_counters (
+    scope text NOT NULL,
+    subject bytea NOT NULL,
+    window_start timestamp with time zone NOT NULL,
+    count bigint NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT rate_counters_count_check CHECK ((count >= 0)),
+    CONSTRAINT rate_counters_subject_check CHECK ((octet_length(subject) = 32))
 );
 
 
@@ -3520,11 +3762,11 @@ CREATE TABLE public.remote_account_manifests (
     domain text NOT NULL,
     account_id uuid NOT NULL,
     sequence bigint NOT NULL,
-    manifest_hash text NOT NULL,
+    manifest_hash bytea NOT NULL,
     manifest jsonb NOT NULL,
     fetched_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT remote_account_manifests_manifest_hash_check CHECK ((manifest_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT remote_account_manifests_sequence_check CHECK ((sequence >= 1))
+    CONSTRAINT remote_account_manifests_sequence_check CHECK ((sequence >= 1)),
+    CONSTRAINT remote_account_manifests_manifest_hash_bytes CHECK ((octet_length(manifest_hash) = 32))
 );
 
 
@@ -3533,21 +3775,24 @@ CREATE TABLE public.remote_account_manifests (
 --
 
 CREATE TABLE public.remote_account_renames (
-    domain text NOT NULL,
-    incarnation_id character(64) NOT NULL,
-    authority_public_key text NOT NULL,
+    server text NOT NULL,
+    account_id uuid NOT NULL,
+    incarnation_id bytea NOT NULL,
+    authority_public_key bytea,
     sequence integer NOT NULL,
-    head_digest bytea NOT NULL,
+    head_digest bytea,
     current_address text NOT NULL,
     state text NOT NULL,
     chain jsonb NOT NULL,
     addresses text[] NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT remote_account_renames_domain_check CHECK ((domain = lower(domain))),
+    CONSTRAINT remote_account_renames_server_check CHECK ((server = lower(server))),
     CONSTRAINT remote_account_renames_head_digest_check CHECK ((octet_length(head_digest) = 32)),
-    CONSTRAINT remote_account_renames_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT remote_account_renames_sequence_check CHECK (((sequence >= 1) AND (sequence <= 1000))),
-    CONSTRAINT remote_account_renames_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text, 'gone'::text])))
+    CONSTRAINT remote_account_renames_sequence_check CHECK (((sequence >= 0) AND (sequence <= 1000))),
+    CONSTRAINT remote_account_renames_chain_check CHECK ((((sequence = 0) AND (authority_public_key IS NULL) AND (head_digest IS NULL) AND (chain = '[]'::jsonb)) OR ((sequence >= 1) AND (authority_public_key IS NOT NULL) AND (head_digest IS NOT NULL)))),
+    CONSTRAINT remote_account_renames_current_address_check CHECK ((split_part(current_address, '@'::text, 2) = server)),
+    CONSTRAINT remote_account_renames_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text, 'gone'::text]))),
+    CONSTRAINT remote_account_renames_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32))
 );
 
 
@@ -3578,9 +3823,9 @@ CREATE TABLE public.retired_account_ids (
 
 CREATE TABLE public.chat_sealed_sender_certificates (
     certificate_id bigint NOT NULL,
-    root_id text NOT NULL,
-    root_public_key text NOT NULL,
-    certificate text NOT NULL,
+    root_id bytea NOT NULL,
+    root_public_key bytea NOT NULL,
+    certificate bytea NOT NULL,
     online_private_key bytea,
     published_at bigint NOT NULL,
     activates_at bigint NOT NULL,
@@ -3590,7 +3835,7 @@ CREATE TABLE public.chat_sealed_sender_certificates (
     CONSTRAINT chat_sealed_sender_certificates_check CHECK ((activates_at >= published_at)),
     CONSTRAINT chat_sealed_sender_certificates_check1 CHECK ((expires_at > activates_at)),
     CONSTRAINT chat_sealed_sender_certificates_online_private_key_check CHECK ((octet_length(online_private_key) = 32)),
-    CONSTRAINT chat_sealed_sender_certificates_root_id_check CHECK ((root_id ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_sealed_sender_certificates_root_id_bytes CHECK ((octet_length(root_id) = 32))
 );
 
 
@@ -3603,7 +3848,20 @@ CREATE TABLE public.server_generated_keys (
     private_key bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT server_generated_keys_private_key_check CHECK ((octet_length(private_key) = 32)),
-    CONSTRAINT server_generated_keys_purpose_check CHECK ((purpose = ANY (ARRAY['federation-identity'::text, 'fake-accounts'::text, 'registration-codes'::text, 'two-factor-recovery-codes'::text])))
+    CONSTRAINT server_generated_keys_purpose_check CHECK ((purpose = ANY (ARRAY['federationIdentity'::text, 'fakeAccounts'::text, 'registrationCodes'::text, 'twoFactorRecoveryCodes'::text])))
+);
+
+
+--
+-- Name: server_instance; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.server_instance (
+    singleton boolean DEFAULT true NOT NULL,
+    id bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT server_instance_id_check CHECK ((octet_length(id) = 16)),
+    CONSTRAINT server_instance_singleton_check CHECK (singleton)
 );
 
 
@@ -3625,12 +3883,11 @@ CREATE TABLE public.storage_pending_deletions (
     id bigint NOT NULL,
     kind text NOT NULL,
     key text NOT NULL,
-    version_id text DEFAULT ''::text NOT NULL,
     queued_at timestamp with time zone DEFAULT now() NOT NULL,
     attempts integer DEFAULT 0 NOT NULL,
     last_error text,
     CONSTRAINT storage_pending_deletions_key_check CHECK ((key <> ''::text)),
-    CONSTRAINT storage_pending_deletions_kind_check CHECK ((kind = ANY (ARRAY['object'::text, 'stored'::text, 'version'::text, 'prefix'::text])))
+    CONSTRAINT storage_pending_deletions_kind_check CHECK ((kind = ANY (ARRAY['object'::text, 'prefix'::text])))
 );
 
 
@@ -3676,30 +3933,28 @@ CREATE TABLE public.drive_uploads (
     file_id uuid NOT NULL,
     total_bytes bigint NOT NULL,
     received_bytes bigint DEFAULT 0 NOT NULL,
-    metadata_envelope text,
-    file_key_envelope text,
+    file_key_envelope bytea,
     key_epoch integer NOT NULL,
-    metadata_revision bigint,
-    storage_path text NOT NULL,
     s3_upload_id text NOT NULL,
     s3_part_etags jsonb DEFAULT '[]'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     pending_bytes bytea DEFAULT '\x'::bytea NOT NULL,
-    name_hash text,
+    name_hash bytea,
     kind text DEFAULT 'file'::text NOT NULL,
     key_generation integer,
-    content_hash text,
+    content_hash bytea,
     based_on text,
     revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    blob_suite smallint DEFAULT 2 NOT NULL,
+    blob_suite smallint NOT NULL,
     uploaded_at timestamp with time zone,
+    CONSTRAINT drive_uploads_blob_suite_check CHECK ((blob_suite = 2)),
     CONSTRAINT drive_uploads_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_uploads_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'version'::text]))),
-    CONSTRAINT drive_uploads_kind_fields CHECK ((((kind = 'file'::text) AND (name_hash IS NOT NULL) AND (file_key_envelope IS NOT NULL) AND (key_generation IS NULL) AND (content_hash IS NULL) AND (based_on IS NULL)) OR ((kind = 'version'::text) AND (name_hash IS NULL) AND (file_key_envelope IS NULL) AND (key_generation IS NOT NULL) AND (key_generation > 0) AND ((content_hash IS NULL) OR (content_hash ~ '^[0-9a-f]{64}$'::text))))),
-    CONSTRAINT drive_uploads_metadata_revision_check CHECK ((metadata_revision > 0)),
-    CONSTRAINT drive_uploads_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_uploads_uploaded_check CHECK (((uploaded_at IS NULL) OR ((blob_suite = 2) AND (received_bytes = total_bytes))))
+    CONSTRAINT drive_uploads_kind_fields CHECK ((((kind = 'file'::text) AND (name_hash IS NOT NULL) AND (file_key_envelope IS NOT NULL) AND (key_generation IS NULL) AND (content_hash IS NULL) AND (based_on IS NULL)) OR ((kind = 'version'::text) AND (name_hash IS NULL) AND (file_key_envelope IS NULL) AND (key_generation IS NOT NULL) AND (key_generation > 0) AND ((content_hash IS NULL) OR (octet_length(content_hash) = 32))))),
+    CONSTRAINT drive_uploads_uploaded_check CHECK (((uploaded_at IS NULL) OR ((blob_suite = 2) AND (received_bytes = total_bytes)))),
+    CONSTRAINT drive_uploads_content_hash_bytes CHECK ((octet_length(content_hash) = 32)),
+    CONSTRAINT drive_uploads_name_hash_bytes CHECK ((octet_length(name_hash) = 32))
 );
 
 
@@ -3756,15 +4011,17 @@ CREATE TABLE public.account_security_keys (
 
 
 --
--- Name: account_setting_overrides; Type: TABLE; Schema: public; Owner: -
+-- Name: account_entitlements; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.account_setting_overrides (
+CREATE TABLE public.account_entitlements (
     account_id uuid NOT NULL,
     key text NOT NULL,
     value bigint NOT NULL,
+    source text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT account_setting_overrides_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text))
+    CONSTRAINT account_entitlements_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text)),
+    CONSTRAINT account_entitlements_source_check CHECK ((source = ANY (ARRAY['admin'::text, 'plan'::text, 'organization'::text, 'account'::text])))
 );
 
 
@@ -3777,7 +4034,7 @@ CREATE TABLE public.account_ui_preferences (
     theme text,
     language text,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT account_ui_preferences_language_check CHECK ((language = ANY (ARRAY['en'::text, 'tr'::text]))),
+    CONSTRAINT account_ui_preferences_language_check CHECK ((language ~ '^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$'::text)),
     CONSTRAINT account_ui_preferences_theme_check CHECK ((theme = ANY (ARRAY['light'::text, 'dark'::text, 'system'::text])))
 );
 
@@ -3788,37 +4045,36 @@ CREATE TABLE public.account_ui_preferences (
 
 CREATE TABLE public.accounts (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    master_key_envelope text NOT NULL,
-    recovery_key_envelope text NOT NULL,
-    public_key text NOT NULL,
-    account_authority_public_key text NOT NULL,
-    account_authority_key_id character(64) NOT NULL,
-    account_incarnation_id character(64) NOT NULL,
-    drive_signing_public_key text NOT NULL,
-    totp_enabled boolean DEFAULT false NOT NULL,
-    storage_quota_bytes bigint DEFAULT '10737418240'::bigint NOT NULL,
+    master_key_envelope bytea,
+    recovery_key_envelope bytea,
+    drive_xwing_public_key bytea,
+    account_authority_public_key bytea,
+    account_authority_key_id bytea,
+    account_incarnation_id bytea,
+    drive_signing_public_key bytea,
     storage_used_bytes bigint DEFAULT 0 NOT NULL,
-    is_admin boolean DEFAULT false NOT NULL,
+    role text DEFAULT 'member'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    is_first_login boolean DEFAULT false NOT NULL,
+    keys_set_up_at timestamp with time zone,
     username text NOT NULL,
-    recovery_key_verifier text DEFAULT ''::text NOT NULL,
+    recovery_key_verifier text,
     color text,
     version_retention_days integer DEFAULT 30 NOT NULL,
-    drive_key_binding text,
-    key_binding text,
+    drive_key_binding bytea,
+    key_binding uuid,
     opaque_record bytea,
     opaque_suite smallint,
     opaque_server_key_id smallint,
-    is_break_glass boolean DEFAULT false NOT NULL,
-    identity_suite smallint DEFAULT 1 NOT NULL,
-    drive_key_binding_epoch integer DEFAULT 1 NOT NULL,
+    identity_suite smallint NOT NULL,
+    drive_key_binding_epoch integer NOT NULL,
     security_keys_require_uv boolean DEFAULT false NOT NULL,
     totp_secret_sealed bytea,
+    totp_pending_secret_sealed bytea,
+    totp_last_step bigint,
     data_key_lost_at timestamp with time zone,
     state text DEFAULT 'active'::text NOT NULL,
-    suspended_reason text,
+    suspended_reason public.suspended_reason,
     state_changed_at timestamp with time zone DEFAULT now() NOT NULL,
     closing_by text,
     closes_at timestamp with time zone,
@@ -3826,42 +4082,41 @@ CREATE TABLE public.accounts (
     legal_hold_reference text,
     legal_hold_at timestamp with time zone,
     legal_hold_by_account_id uuid,
-    suspended_before_close text,
+    suspended_before_close public.suspended_reason,
     deleting_at timestamp with time zone,
     deleting_for text,
     deletion_attempts integer DEFAULT 0 NOT NULL,
     deletion_next_try_at timestamp with time zone,
-    is_active boolean GENERATED ALWAYS AS ((state = 'active'::text)) STORED,
-    public_sharing text DEFAULT 'on'::text NOT NULL,
-    federation text DEFAULT 'on'::text NOT NULL,
-    master_key_generation integer DEFAULT 1 NOT NULL,
-    CONSTRAINT accounts_account_authority_key_id_check CHECK (((account_authority_key_id = ''::bpchar) OR (account_authority_key_id ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT accounts_account_incarnation_id_check CHECK (((account_incarnation_id = ''::bpchar) OR (account_incarnation_id ~ '^[0-9a-f]{64}$'::text))),
+    master_key_generation integer NOT NULL,
+    next_device_id smallint DEFAULT 1 NOT NULL,
     CONSTRAINT accounts_closing CHECK ((((state = 'closing'::text) = (closing_by IS NOT NULL)) AND ((state = 'closing'::text) = (closes_at IS NOT NULL)))),
     CONSTRAINT accounts_closing_by_check CHECK ((closing_by = ANY (ARRAY['user'::text, 'admin'::text, 'restore'::text]))),
     CONSTRAINT accounts_color_format CHECK (((color IS NULL) OR (color ~ '^#[0-9a-fA-F]{6}$'::text))),
     CONSTRAINT accounts_deleting_for_check CHECK ((deleting_for = ANY (ARRAY['delete'::text, 'reset'::text]))),
     CONSTRAINT accounts_deletion_attempts_check CHECK ((deletion_attempts >= 0)),
     CONSTRAINT accounts_drive_key_binding_epoch_check CHECK ((drive_key_binding_epoch > 0)),
-    CONSTRAINT accounts_federation_check CHECK ((federation = ANY (ARRAY['on'::text, 'off'::text]))),
-    CONSTRAINT accounts_identity_suite_check CHECK ((identity_suite = ANY (ARRAY[1, 2]))),
-    CONSTRAINT accounts_key_binding_check CHECK ((key_binding ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
+    CONSTRAINT accounts_identity_suite_check CHECK ((identity_suite = 2)),
+    CONSTRAINT accounts_key_binding_check CHECK (((key_binding)::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
     CONSTRAINT accounts_legal_hold CHECK ((((legal_hold_reference IS NULL) = (legal_hold_at IS NULL)) AND ((legal_hold_reference IS NOT NULL) OR (legal_hold_by_account_id IS NULL)))),
     CONSTRAINT accounts_legal_hold_reference_check CHECK (((char_length(legal_hold_reference) >= 1) AND (char_length(legal_hold_reference) <= 200))),
     CONSTRAINT accounts_master_key_generation_check CHECK ((master_key_generation > 0)),
+    CONSTRAINT accounts_next_device_id_check CHECK (((next_device_id >= 1) AND (next_device_id <= 127))),
     CONSTRAINT accounts_opaque_check CHECK ((((opaque_record IS NULL) = (opaque_suite IS NULL)) AND ((opaque_record IS NULL) = (opaque_server_key_id IS NULL)))),
     CONSTRAINT accounts_opaque_record_check CHECK (((octet_length(opaque_record) >= 1) AND (octet_length(opaque_record) <= 1024))),
     CONSTRAINT accounts_opaque_server_key_id_check CHECK ((opaque_server_key_id > 0)),
     CONSTRAINT accounts_opaque_suite_check CHECK ((opaque_suite = 1)),
-    CONSTRAINT accounts_public_sharing_check CHECK ((public_sharing = ANY (ARRAY['on'::text, 'off'::text]))),
+    CONSTRAINT accounts_keys_set_up CHECK (((keys_set_up_at IS NULL) OR ((octet_length(master_key_envelope) > 0) AND (octet_length(recovery_key_envelope) > 0) AND (octet_length(drive_xwing_public_key) > 0) AND (octet_length(account_authority_public_key) > 0) AND (account_authority_key_id IS NOT NULL) AND (account_incarnation_id IS NOT NULL) AND (octet_length(drive_signing_public_key) > 0) AND (key_binding IS NOT NULL) AND (octet_length(drive_key_binding) > 0)))),
+    CONSTRAINT accounts_role_check CHECK ((role = ANY (ARRAY['member'::text, 'admin'::text, 'breakGlassAdmin'::text]))),
     CONSTRAINT accounts_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'closing'::text]))),
     CONSTRAINT accounts_suspended_before_close CHECK (((suspended_before_close IS NULL) OR (state = 'closing'::text))),
-    CONSTRAINT accounts_suspended_before_close_check CHECK ((suspended_before_close = ANY (ARRAY['admin'::text, 'operator_order'::text, 'security'::text]))),
     CONSTRAINT accounts_suspended_reason CHECK (((state = 'suspended'::text) = (suspended_reason IS NOT NULL))),
-    CONSTRAINT accounts_suspended_reason_check CHECK ((suspended_reason = ANY (ARRAY['admin'::text, 'operator_order'::text, 'security'::text]))),
     CONSTRAINT accounts_totp_secret_sealed_check CHECK (((totp_secret_sealed IS NULL) OR ((octet_length(totp_secret_sealed) >= 47) AND (octet_length(totp_secret_sealed) <= 200)))),
+    CONSTRAINT accounts_totp_pending_secret_sealed_check CHECK (((totp_pending_secret_sealed IS NULL) OR ((octet_length(totp_pending_secret_sealed) >= 47) AND (octet_length(totp_pending_secret_sealed) <= 200)))),
+    CONSTRAINT accounts_totp_last_step CHECK (((totp_last_step IS NULL) OR ((totp_last_step >= 0) AND (totp_secret_sealed IS NOT NULL)))),
     CONSTRAINT accounts_username_format CHECK ((username ~ '^[a-z0-9_-]{3,32}$'::text)),
-    CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days = ANY (ARRAY[7, 30, 90, 180, 365, 3650])))
+    CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days > 0)),
+    CONSTRAINT accounts_account_authority_key_id_bytes CHECK ((octet_length(account_authority_key_id) = 32)),
+    CONSTRAINT accounts_account_incarnation_id_bytes CHECK ((octet_length(account_incarnation_id) = 32))
 );
 
 
@@ -4137,14 +4392,6 @@ ALTER TABLE ONLY public.calendar_account_settings
 
 
 --
--- Name: calendars calendars_fingerprint_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.calendars
-    ADD CONSTRAINT calendars_fingerprint_key UNIQUE (fingerprint);
-
-
---
 -- Name: calendars calendars_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4153,19 +4400,115 @@ ALTER TABLE ONLY public.calendars
 
 
 --
+-- Name: calendar_event_attendees calendar_event_attendees_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_attendees
+    ADD CONSTRAINT calendar_event_attendees_pkey PRIMARY KEY (shared_event_id, token);
+
+
+--
+-- Name: calendar_event_invitees calendar_event_invitees_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_invitees
+    ADD CONSTRAINT calendar_event_invitees_pkey PRIMARY KEY (shared_event_id, invitee_account_id);
+
+
+--
+-- Name: calendar_events calendar_events_calendar_id_shared_event_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_events
+    ADD CONSTRAINT calendar_events_calendar_id_shared_event_id_key UNIQUE (calendar_id, shared_event_id);
+
+
+--
+-- Name: calendar_invitations calendar_invitations_calendar_id_invitee_account_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_invitations
+    ADD CONSTRAINT calendar_invitations_calendar_id_invitee_account_id_key UNIQUE (calendar_id, invitee_account_id);
+
+
+--
+-- Name: calendar_invitations calendar_invitations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_invitations
+    ADD CONSTRAINT calendar_invitations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: calendar_keys calendar_keys_fingerprint_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_keys
+    ADD CONSTRAINT calendar_keys_fingerprint_key UNIQUE (fingerprint);
+
+
+--
+-- Name: calendar_keys calendar_keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_keys
+    ADD CONSTRAINT calendar_keys_pkey PRIMARY KEY (calendar_id, key_generation);
+
+
+--
+-- Name: calendar_link_passphrases calendar_link_passphrases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_link_passphrases
+    ADD CONSTRAINT calendar_link_passphrases_pkey PRIMARY KEY (link_id, key_generation);
+
+
+--
+-- Name: calendar_links calendar_links_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_links
+    ADD CONSTRAINT calendar_links_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: calendar_member_shares calendar_member_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_member_shares
+    ADD CONSTRAINT calendar_member_shares_pkey PRIMARY KEY (calendar_id, account_id, key_generation);
+
+
+--
+-- Name: calendar_member_tombstones calendar_member_tombstones_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_member_tombstones
+    ADD CONSTRAINT calendar_member_tombstones_pkey PRIMARY KEY (calendar_id, account_id);
+
+
+--
+-- Name: calendar_shared_events calendar_shared_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_shared_events
+    ADD CONSTRAINT calendar_shared_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: calendar_shared_events calendar_shared_events_uid_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_shared_events
+    ADD CONSTRAINT calendar_shared_events_uid_key UNIQUE NULLS NOT DISTINCT (home_calendar_id, uid, recurrence_id);
+
+
+--
 -- Name: chat_account_identities chat_account_identities_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_account_identities
     ADD CONSTRAINT chat_account_identities_pkey PRIMARY KEY (account_id);
-
-
---
--- Name: chat_anonymous_rate_counters chat_anonymous_rate_counters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.chat_anonymous_rate_counters
-    ADD CONSTRAINT chat_anonymous_rate_counters_pkey PRIMARY KEY (scope_type, scope_digest, window_start);
 
 
 --
@@ -4489,27 +4832,11 @@ ALTER TABLE ONLY public.chat_media_objects
 
 
 --
--- Name: chat_media_objects chat_media_objects_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.chat_media_objects
-    ADD CONSTRAINT chat_media_objects_suite_check CHECK ((suite = 2)) NOT VALID;
-
-
---
 -- Name: chat_media_origin_delivery_operations chat_media_origin_delivery_operations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_origin_delivery_operations
     ADD CONSTRAINT chat_media_origin_delivery_operations_pkey PRIMARY KEY (origin_account_id, operation_id);
-
-
---
--- Name: chat_media_rate_counters chat_media_rate_counters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.chat_media_rate_counters
-    ADD CONSTRAINT chat_media_rate_counters_pkey PRIMARY KEY (scope_type, scope_digest, window_start);
 
 
 --
@@ -4553,14 +4880,6 @@ ALTER TABLE ONLY public.chat_media_uploads
 
 
 --
--- Name: chat_media_uploads chat_media_uploads_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.chat_media_uploads
-    ADD CONSTRAINT chat_media_uploads_suite_check CHECK ((suite = 2)) NOT VALID;
-
-
---
 -- Name: chat_multi_send_ids chat_multi_send_ids_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4589,7 +4908,7 @@ ALTER TABLE ONLY public.chat_one_time_pre_keys
 --
 
 ALTER TABLE ONLY public.chat_profiles
-    ADD CONSTRAINT chat_profiles_pkey PRIMARY KEY (account_id, version);
+    ADD CONSTRAINT chat_profiles_pkey PRIMARY KEY (account_id, profile_version);
 
 
 --
@@ -4718,6 +5037,14 @@ ALTER TABLE ONLY public.contacts
 
 ALTER TABLE ONLY public.account_device_tickets
     ADD CONSTRAINT account_device_tickets_pkey PRIMARY KEY (token_hash);
+
+
+--
+-- Name: account_device_releases account_device_releases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_device_releases
+    ADD CONSTRAINT account_device_releases_pkey PRIMARY KEY (account_id, device_id);
 
 
 --
@@ -5017,14 +5344,6 @@ ALTER TABLE ONLY public.collab_update_log
 
 
 --
--- Name: drive_file_versions drive_file_versions_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.drive_file_versions
-    ADD CONSTRAINT drive_file_versions_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
-
-
---
 -- Name: drive_file_versions drive_file_versions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5037,15 +5356,7 @@ ALTER TABLE ONLY public.drive_file_versions
 --
 
 ALTER TABLE public.drive_file_versions
-    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (length(revision_content_envelope) = 476))) NOT VALID;
-
-
---
--- Name: drive_files drive_files_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.drive_files
-    ADD CONSTRAINT drive_files_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
+    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK ((octet_length(revision_content_envelope) = 356));
 
 
 --
@@ -5061,7 +5372,7 @@ ALTER TABLE ONLY public.drive_files
 --
 
 ALTER TABLE public.drive_files
-    ADD CONSTRAINT drive_files_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (length(revision_content_envelope) = 476))) NOT VALID;
+    ADD CONSTRAINT drive_files_revision_content_check CHECK ((octet_length(revision_content_envelope) = 356));
 
 
 --
@@ -5497,14 +5808,6 @@ ALTER TABLE ONLY public.opaque_server_setups
 
 
 --
--- Name: organization_access_requests organization_access_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.organization_access_requests
-    ADD CONSTRAINT organization_access_requests_pkey PRIMARY KEY (organization_id, account_id);
-
-
---
 -- Name: organization_key_shares organization_key_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5545,11 +5848,11 @@ ALTER TABLE ONLY public.organization_members
 
 
 --
--- Name: organization_setting_overrides organization_setting_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: organization_entitlements organization_entitlements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.organization_setting_overrides
-    ADD CONSTRAINT organization_setting_overrides_pkey PRIMARY KEY (organization_id, key);
+ALTER TABLE ONLY public.organization_entitlements
+    ADD CONSTRAINT organization_entitlements_pkey PRIMARY KEY (organization_id, key);
 
 
 --
@@ -5625,6 +5928,14 @@ ALTER TABLE ONLY public.drive_public_shares
 
 
 --
+-- Name: rate_counters rate_counters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rate_counters
+    ADD CONSTRAINT rate_counters_pkey PRIMARY KEY (scope, subject, window_start);
+
+
+--
 -- Name: registration_code_uses registration_code_uses_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5669,7 +5980,7 @@ ALTER TABLE ONLY public.remote_account_manifests
 --
 
 ALTER TABLE ONLY public.remote_account_renames
-    ADD CONSTRAINT remote_account_renames_pkey PRIMARY KEY (domain, incarnation_id);
+    ADD CONSTRAINT remote_account_renames_pkey PRIMARY KEY (server, account_id);
 
 
 --
@@ -5713,6 +6024,14 @@ ALTER TABLE ONLY public.server_generated_keys
 
 
 --
+-- Name: server_instance server_instance_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.server_instance
+    ADD CONSTRAINT server_instance_pkey PRIMARY KEY (singleton);
+
+
+--
 -- Name: site_settings site_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5721,11 +6040,11 @@ ALTER TABLE ONLY public.site_settings
 
 
 --
--- Name: storage_pending_deletions storage_pending_deletions_kind_key_version_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: storage_pending_deletions storage_pending_deletions_kind_key_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.storage_pending_deletions
-    ADD CONSTRAINT storage_pending_deletions_kind_key_version_id_key UNIQUE (kind, key, version_id);
+    ADD CONSTRAINT storage_pending_deletions_kind_key_key UNIQUE (kind, key);
 
 
 --
@@ -5745,27 +6064,11 @@ ALTER TABLE ONLY public.two_factor_recovery_codes
 
 
 --
--- Name: drive_uploads drive_uploads_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.drive_uploads
-    ADD CONSTRAINT drive_uploads_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
-
-
---
 -- Name: drive_uploads drive_uploads_file_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.drive_uploads
     ADD CONSTRAINT drive_uploads_file_id_key UNIQUE (file_id);
-
-
---
--- Name: drive_uploads drive_uploads_metadata_at_commit; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.drive_uploads
-    ADD CONSTRAINT drive_uploads_metadata_at_commit CHECK (((metadata_envelope IS NULL) AND (metadata_revision IS NULL))) NOT VALID;
 
 
 --
@@ -5801,11 +6104,11 @@ ALTER TABLE ONLY public.account_security_keys
 
 
 --
--- Name: account_setting_overrides account_setting_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: account_entitlements account_entitlements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.account_setting_overrides
-    ADD CONSTRAINT account_setting_overrides_pkey PRIMARY KEY (account_id, key);
+ALTER TABLE ONLY public.account_entitlements
+    ADD CONSTRAINT account_entitlements_pkey PRIMARY KEY (account_id, key);
 
 
 --
@@ -5891,10 +6194,10 @@ CREATE UNIQUE INDEX account_names_one_current ON public.account_names USING btre
 
 
 --
--- Name: account_names_user; Type: INDEX; Schema: public; Owner: -
+-- Name: account_names_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_names_user ON public.account_names USING btree (account_id);
+CREATE INDEX account_names_account ON public.account_names USING btree (account_id);
 
 
 --
@@ -5933,17 +6236,17 @@ CREATE INDEX account_renames_previous ON public.account_renames USING btree (pre
 
 
 --
--- Name: account_renames_user; Type: INDEX; Schema: public; Owner: -
+-- Name: account_renames_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_renames_user ON public.account_renames USING btree (account_id, accepted_at DESC);
+CREATE INDEX account_renames_account ON public.account_renames USING btree (account_id, accepted_at DESC);
 
 
 --
--- Name: account_security_events_user; Type: INDEX; Schema: public; Owner: -
+-- Name: account_security_events_subject; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_security_events_user ON public.account_security_events USING btree (account_id, at DESC, id DESC);
+CREATE INDEX account_security_events_subject ON public.account_security_events USING btree (subject_account_id, at DESC, id DESC);
 
 
 --
@@ -5954,10 +6257,10 @@ CREATE INDEX auth_grants_expiry ON public.auth_grants USING btree (expires_at);
 
 
 --
--- Name: auth_grants_user; Type: INDEX; Schema: public; Owner: -
+-- Name: auth_grants_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX auth_grants_user ON public.auth_grants USING btree (account_id);
+CREATE INDEX auth_grants_account ON public.auth_grants USING btree (account_id);
 
 
 --
@@ -6003,45 +6306,87 @@ CREATE INDEX calendar_alarms_event ON public.calendar_alarms USING btree (event_
 
 
 --
--- Name: calendar_event_reminders_user; Type: INDEX; Schema: public; Owner: -
+-- Name: calendar_event_reminders_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_event_reminders_user ON public.calendar_event_reminders USING btree (account_id);
-
-
---
--- Name: calendar_events_author_address; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX calendar_events_author_address ON public.calendar_events USING btree (author_address_id);
+CREATE INDEX calendar_event_reminders_account ON public.calendar_event_reminders USING btree (account_id);
 
 
 --
--- Name: calendar_events_author_user; Type: INDEX; Schema: public; Owner: -
+-- Name: calendar_events_shared_event; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_events_author_user ON public.calendar_events USING btree (author_account_id);
-
-
---
--- Name: calendar_events_uid; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX calendar_events_uid ON public.calendar_events USING btree (calendar_id, uid, COALESCE(recurrence_id, '-infinity'::timestamp with time zone));
+CREATE INDEX calendar_events_shared_event ON public.calendar_events USING btree (shared_event_id);
 
 
 --
--- Name: calendar_events_window; Type: INDEX; Schema: public; Owner: -
+-- Name: calendar_event_invitees_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_events_window ON public.calendar_events USING btree (calendar_id, start_utc, range_end_utc);
+CREATE INDEX calendar_event_invitees_account ON public.calendar_event_invitees USING btree (invitee_account_id);
 
 
 --
--- Name: calendar_members_user; Type: INDEX; Schema: public; Owner: -
+-- Name: calendar_invitations_pending; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_members_user ON public.calendar_members USING btree (account_id);
+CREATE INDEX calendar_invitations_pending ON public.calendar_invitations USING btree (invitee_account_id) WHERE (state = 'pending'::text);
+
+
+--
+-- Name: calendar_links_calendar; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_links_calendar ON public.calendar_links USING btree (calendar_id);
+
+
+--
+-- Name: calendar_member_shares_account; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_member_shares_account ON public.calendar_member_shares USING btree (account_id);
+
+
+--
+-- Name: calendar_member_tombstones_account; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_member_tombstones_account ON public.calendar_member_tombstones USING btree (account_id);
+
+
+--
+-- Name: calendar_shared_events_author_account; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_shared_events_author_account ON public.calendar_shared_events USING btree (author_account_id);
+
+
+--
+-- Name: calendar_shared_events_author_address; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_shared_events_author_address ON public.calendar_shared_events USING btree (author_address_id);
+
+
+--
+-- Name: calendar_shared_events_uid; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_shared_events_uid ON public.calendar_shared_events USING btree (uid);
+
+
+--
+-- Name: calendar_shared_events_window; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_shared_events_window ON public.calendar_shared_events USING btree (start_utc, range_end_utc);
+
+
+--
+-- Name: calendar_members_account; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_members_account ON public.calendar_members USING btree (account_id);
 
 
 --
@@ -6049,13 +6394,6 @@ CREATE INDEX calendar_members_user ON public.calendar_members USING btree (accou
 --
 
 CREATE INDEX calendars_owner ON public.calendars USING btree (owner_account_id);
-
-
---
--- Name: chat_anonymous_rate_expiry_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX chat_anonymous_rate_expiry_idx ON public.chat_anonymous_rate_counters USING btree (expires_at);
 
 
 --
@@ -6129,10 +6467,10 @@ CREATE INDEX chat_group_nonces_expires_at ON public.chat_group_nonces USING btre
 
 
 --
--- Name: chat_link_tokens_user; Type: INDEX; Schema: public; Owner: -
+-- Name: chat_link_tokens_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX chat_link_tokens_user ON public.chat_link_tokens USING btree (account_id, expires_at);
+CREATE INDEX chat_link_tokens_account ON public.chat_link_tokens USING btree (account_id, expires_at);
 
 
 --
@@ -6451,17 +6789,10 @@ CREATE INDEX idx_chat_media_inbound_pending_recipient ON public.chat_media_feder
 
 
 --
--- Name: idx_chat_media_rate_expiry; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_chat_media_references_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_chat_media_rate_expiry ON public.chat_media_rate_counters USING btree (expires_at);
-
-
---
--- Name: idx_chat_media_references_user; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_chat_media_references_user ON public.chat_media_references USING btree (account_id);
+CREATE INDEX idx_chat_media_references_account ON public.chat_media_references USING btree (account_id);
 
 
 --
@@ -6472,10 +6803,10 @@ CREATE INDEX idx_chat_media_uploads_updated ON public.chat_media_uploads USING b
 
 
 --
--- Name: idx_chat_media_uploads_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_chat_media_uploads_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_chat_media_uploads_user ON public.chat_media_uploads USING btree (account_id);
+CREATE INDEX idx_chat_media_uploads_account ON public.chat_media_uploads USING btree (account_id);
 
 
 --
@@ -6563,10 +6894,10 @@ CREATE UNIQUE INDEX idx_mail_address_keys_one_primary ON public.mail_address_key
 
 
 --
--- Name: idx_mail_addresses_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_addresses_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_addresses_user ON public.mail_addresses USING btree (account_id);
+CREATE INDEX idx_mail_addresses_account ON public.mail_addresses USING btree (account_id);
 
 
 --
@@ -6591,24 +6922,24 @@ CREATE UNIQUE INDEX idx_mail_filter_runs_one ON public.mail_filter_runs USING bt
 
 
 --
--- Name: idx_mail_filters_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_filters_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_filters_user ON public.mail_filters USING btree (account_id, "position") WHERE enabled;
-
-
---
--- Name: idx_mail_folders_user; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_mail_folders_user ON public.mail_folders USING btree (account_id, parent_id, "position");
+CREATE INDEX idx_mail_filters_account ON public.mail_filters USING btree (account_id, "position") WHERE enabled;
 
 
 --
--- Name: idx_mail_group_key_shares_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_folders_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_group_key_shares_user ON public.mail_group_key_shares USING btree (account_id);
+CREATE INDEX idx_mail_folders_account ON public.mail_folders USING btree (account_id, parent_id, "position");
+
+
+--
+-- Name: idx_mail_group_key_shares_account; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_mail_group_key_shares_account ON public.mail_group_key_shares USING btree (account_id);
 
 
 --
@@ -6619,10 +6950,10 @@ CREATE UNIQUE INDEX idx_mail_group_keys_primary ON public.mail_group_keys USING 
 
 
 --
--- Name: idx_mail_group_members_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_group_members_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_group_members_user ON public.mail_group_members USING btree (account_id);
+CREATE INDEX idx_mail_group_members_account ON public.mail_group_members USING btree (account_id);
 
 
 --
@@ -6633,10 +6964,10 @@ CREATE INDEX idx_mail_group_objects_group ON public.mail_group_objects USING btr
 
 
 --
--- Name: idx_mail_labels_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_labels_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_labels_user ON public.mail_labels USING btree (account_id, "position");
+CREATE INDEX idx_mail_labels_account ON public.mail_labels USING btree (account_id, "position");
 
 
 --
@@ -6773,10 +7104,10 @@ CREATE INDEX idx_mail_messages_unwanted ON public.mail_messages USING btree (mai
 
 
 --
--- Name: idx_mail_sending_events_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_sending_events_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_sending_events_user ON public.mail_sending_events USING btree (account_id, kind, created_at);
+CREATE INDEX idx_mail_sending_events_account ON public.mail_sending_events USING btree (account_id, kind, created_at);
 
 
 --
@@ -6892,17 +7223,17 @@ CREATE INDEX mail_forwardings_forwardee ON public.mail_forwardings USING btree (
 
 
 --
--- Name: mail_forwardings_user; Type: INDEX; Schema: public; Owner: -
+-- Name: mail_forwardings_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX mail_forwardings_user ON public.mail_forwardings USING btree (account_id);
+CREATE INDEX mail_forwardings_account ON public.mail_forwardings USING btree (account_id);
 
 
 --
--- Name: mail_group_signing_shares_user; Type: INDEX; Schema: public; Owner: -
+-- Name: mail_group_signing_shares_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX mail_group_signing_shares_user ON public.mail_group_signing_shares USING btree (account_id);
+CREATE INDEX mail_group_signing_shares_account ON public.mail_group_signing_shares USING btree (account_id);
 
 
 --
@@ -6976,10 +7307,10 @@ CREATE UNIQUE INDEX organization_members_one_per_account ON public.organization_
 
 
 --
--- Name: pass_pin_failures_user; Type: INDEX; Schema: public; Owner: -
+-- Name: pass_pin_failures_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX pass_pin_failures_user ON public.pass_pin_failures USING btree (account_id);
+CREATE INDEX pass_pin_failures_account ON public.pass_pin_failures USING btree (account_id);
 
 
 --
@@ -7001,6 +7332,13 @@ CREATE INDEX drive_public_link_reports_share ON public.drive_public_link_reports
 --
 
 CREATE INDEX drive_public_shares_file_target_idx ON public.drive_public_shares USING btree (target_id) WHERE (share_type = 'file'::text);
+
+
+--
+-- Name: rate_counters_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX rate_counters_expiry ON public.rate_counters USING btree (expires_at);
 
 
 --
@@ -7039,10 +7377,10 @@ CREATE UNIQUE INDEX drive_uploads_revision_id_key ON public.drive_uploads USING 
 
 
 --
--- Name: account_security_keys_user; Type: INDEX; Schema: public; Owner: -
+-- Name: account_security_keys_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_security_keys_user ON public.account_security_keys USING btree (account_id);
+CREATE INDEX account_security_keys_account ON public.account_security_keys USING btree (account_id);
 
 
 --
@@ -7056,7 +7394,7 @@ CREATE INDEX accounts_closing_due ON public.accounts USING btree (closes_at) WHE
 -- Name: accounts_one_break_glass; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX accounts_one_break_glass ON public.accounts USING btree ((true)) WHERE is_break_glass;
+CREATE UNIQUE INDEX accounts_one_break_glass ON public.accounts USING btree ((true)) WHERE (role = 'breakGlassAdmin'::text);
 
 
 --
@@ -7092,6 +7430,13 @@ CREATE TRIGGER drive_files_not_in_albums BEFORE INSERT OR UPDATE OF collection_i
 --
 
 CREATE TRIGGER mail_message_labels_changed AFTER INSERT OR DELETE ON public.mail_message_labels FOR EACH ROW EXECUTE FUNCTION public.mail_message_labels_mark_change();
+
+
+--
+-- Name: account_devices account_devices_released; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER account_devices_released AFTER DELETE ON public.account_devices FOR EACH ROW EXECUTE FUNCTION public.kutup_account_device_released();
 
 
 --
@@ -7202,19 +7547,19 @@ ALTER TABLE ONLY public.account_roots
 
 
 --
--- Name: account_security_events account_security_events_admin_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_security_events account_security_events_actor_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_security_events
-    ADD CONSTRAINT account_security_events_admin_account_id_fkey FOREIGN KEY (admin_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
+    ADD CONSTRAINT account_security_events_actor_account_id_fkey FOREIGN KEY (actor_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: account_security_events account_security_events_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_security_events account_security_events_subject_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_security_events
-    ADD CONSTRAINT account_security_events_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+    ADD CONSTRAINT account_security_events_subject_account_id_fkey FOREIGN KEY (subject_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7338,27 +7683,163 @@ ALTER TABLE ONLY public.calendar_event_reminders
 
 
 --
--- Name: calendar_events calendar_events_author_address_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.calendar_events
-    ADD CONSTRAINT calendar_events_author_address_id_fkey FOREIGN KEY (author_address_id) REFERENCES public.mail_addresses(id) ON DELETE SET NULL;
-
-
---
--- Name: calendar_events calendar_events_author_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.calendar_events
-    ADD CONSTRAINT calendar_events_author_account_id_fkey FOREIGN KEY (author_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
-
-
---
 -- Name: calendar_events calendar_events_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendar_events
     ADD CONSTRAINT calendar_events_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.calendars(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_event_attendees calendar_event_attendees_shared_event_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_attendees
+    ADD CONSTRAINT calendar_event_attendees_shared_event_id_fkey FOREIGN KEY (shared_event_id) REFERENCES public.calendar_shared_events(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_event_invitees calendar_event_invitees_invitee_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_invitees
+    ADD CONSTRAINT calendar_event_invitees_invitee_account_id_fkey FOREIGN KEY (invitee_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_event_invitees calendar_event_invitees_invitee_address_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_invitees
+    ADD CONSTRAINT calendar_event_invitees_invitee_address_id_fkey FOREIGN KEY (invitee_address_id) REFERENCES public.mail_addresses(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_event_invitees calendar_event_invitees_shared_event_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_invitees
+    ADD CONSTRAINT calendar_event_invitees_shared_event_id_fkey FOREIGN KEY (shared_event_id) REFERENCES public.calendar_shared_events(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_events calendar_events_shared_event_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_events
+    ADD CONSTRAINT calendar_events_shared_event_id_fkey FOREIGN KEY (shared_event_id) REFERENCES public.calendar_shared_events(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_invitations calendar_invitations_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_invitations
+    ADD CONSTRAINT calendar_invitations_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.calendars(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_invitations calendar_invitations_invited_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_invitations
+    ADD CONSTRAINT calendar_invitations_invited_by_account_id_fkey FOREIGN KEY (invited_by_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_invitations calendar_invitations_invitee_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_invitations
+    ADD CONSTRAINT calendar_invitations_invitee_account_id_fkey FOREIGN KEY (invitee_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_keys calendar_keys_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_keys
+    ADD CONSTRAINT calendar_keys_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.calendars(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_link_passphrases calendar_link_passphrases_calendar_id_key_generation_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_link_passphrases
+    ADD CONSTRAINT calendar_link_passphrases_calendar_id_key_generation_fkey FOREIGN KEY (calendar_id, key_generation) REFERENCES public.calendar_keys(calendar_id, key_generation) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_link_passphrases calendar_link_passphrases_link_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_link_passphrases
+    ADD CONSTRAINT calendar_link_passphrases_link_id_fkey FOREIGN KEY (link_id) REFERENCES public.calendar_links(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_links calendar_links_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_links
+    ADD CONSTRAINT calendar_links_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.calendars(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_links calendar_links_created_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_links
+    ADD CONSTRAINT calendar_links_created_by_account_id_fkey FOREIGN KEY (created_by_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_member_shares calendar_member_shares_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_member_shares
+    ADD CONSTRAINT calendar_member_shares_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_member_shares calendar_member_shares_calendar_id_key_generation_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_member_shares
+    ADD CONSTRAINT calendar_member_shares_calendar_id_key_generation_fkey FOREIGN KEY (calendar_id, key_generation) REFERENCES public.calendar_keys(calendar_id, key_generation) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_member_tombstones calendar_member_tombstones_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_member_tombstones
+    ADD CONSTRAINT calendar_member_tombstones_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_shared_events calendar_shared_events_author_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_shared_events
+    ADD CONSTRAINT calendar_shared_events_author_account_id_fkey FOREIGN KEY (author_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
+
+
+--
+-- Name: calendar_shared_events calendar_shared_events_author_address_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_shared_events
+    ADD CONSTRAINT calendar_shared_events_author_address_id_fkey FOREIGN KEY (author_address_id) REFERENCES public.mail_addresses(id) ON DELETE SET NULL;
+
+
+--
+-- Name: calendar_shared_events calendar_shared_events_home_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_shared_events
+    ADD CONSTRAINT calendar_shared_events_home_calendar_id_fkey FOREIGN KEY (home_calendar_id) REFERENCES public.calendars(id) ON DELETE CASCADE;
 
 
 --
@@ -7642,6 +8123,14 @@ ALTER TABLE ONLY public.chat_link_tokens
 
 
 --
+-- Name: chat_link_tokens chat_link_tokens_issued_by_device_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chat_link_tokens
+    ADD CONSTRAINT chat_link_tokens_issued_by_device_fkey FOREIGN KEY (account_id, issued_by_device) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
+
+
+--
 -- Name: chat_mailbox chat_mailbox_recipient_account_id_recipient_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7882,6 +8371,14 @@ ALTER TABLE ONLY public.account_device_tickets
 
 
 --
+-- Name: account_device_releases account_device_releases_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_device_releases
+    ADD CONSTRAINT account_device_releases_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
 -- Name: account_devices account_devices_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7930,6 +8427,14 @@ ALTER TABLE ONLY public.drive_federated_incoming_file_shares
 
 
 --
+-- Name: drive_federated_incoming_file_shares drive_federated_incoming_file_shares_owner_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_incoming_file_shares
+    ADD CONSTRAINT drive_federated_incoming_file_shares_owner_fkey FOREIGN KEY (owner_server, owner_account_id) REFERENCES public.remote_account_renames(server, account_id);
+
+
+--
 -- Name: drive_federated_incoming_shares drive_federated_incoming_shares_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7938,11 +8443,27 @@ ALTER TABLE ONLY public.drive_federated_incoming_shares
 
 
 --
+-- Name: drive_federated_incoming_shares drive_federated_incoming_shares_owner_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_incoming_shares
+    ADD CONSTRAINT drive_federated_incoming_shares_owner_fkey FOREIGN KEY (owner_server, owner_account_id) REFERENCES public.remote_account_renames(server, account_id);
+
+
+--
 -- Name: drive_federated_outgoing_file_shares drive_federated_outgoing_file_shares_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.drive_federated_outgoing_file_shares
     ADD CONSTRAINT drive_federated_outgoing_file_shares_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_federated_outgoing_file_shares drive_federated_outgoing_file_shares_recipient_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_outgoing_file_shares
+    ADD CONSTRAINT drive_federated_outgoing_file_shares_recipient_fkey FOREIGN KEY (recipient_server, recipient_account_id) REFERENCES public.remote_account_renames(server, account_id);
 
 
 --
@@ -7959,6 +8480,14 @@ ALTER TABLE ONLY public.drive_federated_outgoing_file_shares
 
 ALTER TABLE ONLY public.drive_federated_outgoing_shares
     ADD CONSTRAINT drive_federated_outgoing_shares_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.drive_collections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_federated_outgoing_shares drive_federated_outgoing_shares_recipient_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_outgoing_shares
+    ADD CONSTRAINT drive_federated_outgoing_shares_recipient_fkey FOREIGN KEY (recipient_server, recipient_account_id) REFERENCES public.remote_account_renames(server, account_id);
 
 
 --
@@ -8570,14 +9099,6 @@ ALTER TABLE ONLY public.opaque_login_states
 
 
 --
--- Name: organization_access_requests organization_access_requests_organization_id_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.organization_access_requests
-    ADD CONSTRAINT organization_access_requests_organization_id_account_id_fkey FOREIGN KEY (organization_id, account_id) REFERENCES public.organization_members(organization_id, account_id) ON DELETE CASCADE;
-
-
---
 -- Name: organization_key_shares organization_key_shares_granted_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8650,11 +9171,11 @@ ALTER TABLE ONLY public.organization_members
 
 
 --
--- Name: organization_setting_overrides organization_setting_overrides_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: organization_entitlements organization_entitlements_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.organization_setting_overrides
-    ADD CONSTRAINT organization_setting_overrides_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.organization_entitlements
+    ADD CONSTRAINT organization_entitlements_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
 
 
 --
@@ -8834,11 +9355,11 @@ ALTER TABLE ONLY public.account_security_keys
 
 
 --
--- Name: account_setting_overrides account_setting_overrides_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_entitlements account_entitlements_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.account_setting_overrides
-    ADD CONSTRAINT account_setting_overrides_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.account_entitlements
+    ADD CONSTRAINT account_entitlements_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -9054,6 +9575,60 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 
 --
+-- Data for Name: calendar_event_attendees; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_event_invitees; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_invitations; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_keys; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_link_passphrases; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_links; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_member_shares; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_member_tombstones; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_shared_events; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
 -- Data for Name: calendar_members; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -9073,12 +9648,6 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 --
 -- Data for Name: chat_account_identities; Type: TABLE DATA; Schema: public; Owner: -
---
-
-
-
---
--- Data for Name: chat_anonymous_rate_counters; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9271,12 +9840,6 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 --
 -- Data for Name: chat_media_origin_delivery_operations; Type: TABLE DATA; Schema: public; Owner: -
---
-
-
-
---
--- Data for Name: chat_media_rate_counters; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9795,12 +10358,6 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: organization_access_requests; Type: TABLE DATA; Schema: public; Owner: -
---
-
-
-
---
 -- Data for Name: organization_keys; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -9819,7 +10376,7 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: organization_setting_overrides; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: organization_entitlements; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9868,6 +10425,12 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 --
 -- Data for Name: registration_codes; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: rate_counters; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9951,7 +10514,7 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: account_setting_overrides; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: account_entitlements; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 

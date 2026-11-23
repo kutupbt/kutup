@@ -27,7 +27,7 @@ pub async fn current<'e, E: sqlx::PgExecutor<'e>>(
 ) -> AppResult<Option<Uuid>> {
     Ok(sqlx::query_scalar(
         "SELECT n.account_id FROM account_names n JOIN accounts u ON u.id = n.account_id
-          WHERE n.folded = kutup_fold($1) AND n.state = 'current' AND u.is_active",
+          WHERE n.folded = kutup_fold($1) AND n.state = 'current' AND u.state = 'active'",
     )
     .bind(name)
     .fetch_optional(executor)
@@ -53,7 +53,8 @@ pub async fn chains(
                      AND lower(split_part(previous, '@', 2)) = lower($2))
                  OR (kutup_fold(split_part(current, '@', 1)) = kutup_fold($1)
                      AND lower(split_part(current, '@', 2)) = lower($2)))
-         SELECT r.incarnation_id, r.authority_public_key, r.sequence, r.current,
+         SELECT encode(r.incarnation_id, 'hex'), kutup_b64(r.authority_public_key), r.sequence,
+                r.current,
                 to_char(max(r.accepted_at) OVER (PARTITION BY r.incarnation_id),
                         'YYYY-MM-DD\"T\"HH24:MI:SS.US') AS latest,
                 r.statement,
@@ -61,7 +62,9 @@ pub async fn chains(
                   WHERE n.folded = kutup_fold(split_part(r.current, '@', 1))
                     AND n.incarnation_id = r.incarnation_id)
            FROM account_renames r JOIN named USING (incarnation_id)
-          WHERE ($3::text IS NULL OR r.incarnation_id = $3)
+          WHERE ($3::text IS NULL
+                 -- From the query string unchecked: not hex matches nothing.
+                 OR r.incarnation_id = CASE WHEN $3 ~ '^([0-9a-f]{2})*$' THEN decode($3, 'hex') END)
             -- To another server, an account that doesn't talk to other
             -- servers has no names (crate::federation_switch).
             AND (NOT $4 OR NOT EXISTS (SELECT 1 FROM accounts u
@@ -77,6 +80,9 @@ pub async fn chains(
     .await?;
     let mut chains: Vec<Value> = Vec::new();
     let mut last: Option<String> = None;
+    // Whose chain it is is in every statement (`accountId`, signed), so a
+    // peer keeps it by the account (remote_renames) without taking this
+    // server's word for it.
     for (incarnation_id, authority, _sequence, current, _latest, statement, state) in rows {
         if last.as_deref() != Some(incarnation_id.as_str()) {
             chains.push(json!({
@@ -202,7 +208,7 @@ pub async fn available(
     // Locked, so a held name taken back is not freed (the sweep, an
     // administrator) between this answer and the write that relies on it.
     let held: Option<(Option<Uuid>, Option<String>, String)> = sqlx::query_as(
-        "SELECT account_id, incarnation_id, state FROM account_names WHERE folded = $1 FOR UPDATE",
+        "SELECT account_id, encode(incarnation_id, 'hex'), state FROM account_names WHERE folded = $1 FOR UPDATE",
     )
     .bind(&folded)
     .fetch_optional(&mut *conn)
@@ -242,7 +248,7 @@ pub async fn claim(
 ) -> AppResult<()> {
     let inserted = sqlx::query(
         "INSERT INTO account_names (folded, name, account_id, incarnation_id, state)
-         VALUES (kutup_fold($1), $1, $2, NULLIF($3, ''), 'current')
+         VALUES (kutup_fold($1), $1, $2, decode(NULLIF($3, ''), 'hex'), 'current')
          ON CONFLICT DO NOTHING",
     )
     .bind(name)
@@ -264,7 +270,7 @@ pub async fn set_incarnation(
     incarnation: &str,
 ) -> AppResult<()> {
     sqlx::query(
-        "UPDATE account_names SET incarnation_id = $2
+        "UPDATE account_names SET incarnation_id = decode($2, 'hex')
           WHERE account_id = $1 AND state = 'current'",
     )
     .bind(user_id)
@@ -379,7 +385,7 @@ mod tests {
         }
     }
 
-    /// Every lookup of an account by name goes through `kutup_current_user`
+    /// Every lookup of an account by name goes through `kutup_current_account`
     /// (any spelling, current names only): a query comparing `username`
     /// itself would miss a variant, or find a name the account left.
     #[test]
@@ -416,13 +422,13 @@ mod tests {
         );
         assert!(
             found.is_empty(),
-            "use kutup_current_user($n) instead: {found:?}"
+            "use kutup_current_account($n) instead: {found:?}"
         );
     }
 
     /// The resolver finds the account whose current name is typed, in any
     /// spelling, and no other: not another account's, not a held name's
-    /// (`kutup_current_user`'s parameter once shared the name of a column of
+    /// (`kutup_current_account`'s parameter once shared the name of a column of
     /// `account_names`, and the lookup compared every row with its own name).
     #[tokio::test]
     async fn live_the_resolver_finds_only_the_named_current_account() {
@@ -443,17 +449,12 @@ mod tests {
             format!("old_a{tag}"),
         );
         for (id, name) in [(a, &name_a), (b, &name_b)] {
-            sqlx::query(
-                "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                    public_key, account_authority_public_key,
-                    account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-                 VALUES ($1, $2, '', '', '', '', '', '', '')",
-            )
-            .bind(id)
-            .bind(name)
-            .execute(&pool)
-            .await
-            .unwrap();
+            sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+                .bind(id)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap();
         }
         for (name, user_id, state, free) in [
             (&name_a, a, "current", None),
@@ -520,10 +521,9 @@ mod tests {
         let (current, held) = (format!("now{tag}"), format!("was{tag}"));
         let incarnation = "a".repeat(64);
         sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', $3, '')",
+            "INSERT INTO accounts (id, username, account_incarnation_id, identity_suite,
+                 drive_key_binding_epoch, master_key_generation)
+             VALUES ($1, $2, decode($3, 'hex'), 2, 1, 1)",
         )
         .bind(user_id)
         .bind(&current)
@@ -537,7 +537,7 @@ mod tests {
         ] {
             sqlx::query(
                 "INSERT INTO account_names (folded, name, account_id, incarnation_id, state, free_at)
-                 VALUES (kutup_fold($1), $1, $2, $3, $4, now() + $5::interval)",
+                 VALUES (kutup_fold($1), $1, $2, decode($3, 'hex'), $4, now() + $5::interval)",
             )
             .bind(name)
             .bind(user_id)
@@ -606,17 +606,12 @@ mod tests {
             format!("old_{tag}"),
             format!("gone{tag}"),
         );
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
-        )
-        .bind(user_id)
-        .bind(&current)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(user_id)
+            .bind(&current)
+            .execute(&pool)
+            .await
+            .unwrap();
         for (name, state, receive, free) in [
             (&current, "current", None, None),
             (&closing, "held", Some("-1 hour"), Some("+30 days")),

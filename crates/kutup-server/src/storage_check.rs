@@ -62,35 +62,6 @@ async fn round_trip(storage: &StorageService, key: &str) -> Result<Option<String
     Ok(None)
 }
 
-async fn version_ids(storage: &StorageService, key: &str) -> Result<Option<String>> {
-    let bytes = pattern(1024, 3);
-    let id = storage
-        .put_object_versioned(key, ByteStream::from(bytes.clone()), bytes.len() as i64)
-        .await?;
-    ensure!(
-        read(storage, key).await? == bytes,
-        "read back different bytes"
-    );
-    // How mail and held sends are read: by the version their upload
-    // returned where the store reads by version, otherwise by key.
-    let (body, _) = storage.get_stored(key, &id).await?;
-    ensure!(
-        body.collect().await.context("read body")?.to_vec() == bytes,
-        "read back different bytes by the upload's version"
-    );
-    // How thumbnails are removed: by the version their upload returned
-    // where the store can, otherwise as a plain object.
-    storage.delete_stored(key, &id).await?;
-    gone(storage, key).await?;
-    Ok(Some(if id.is_empty() {
-        "no version ids: reads and deletes by key".to_owned()
-    } else if storage.reads_versions() {
-        "reads by version id".to_owned()
-    } else {
-        "returns version ids but doesn't read by them (as R2): reads by key".to_owned()
-    }))
-}
-
 async fn listing(
     storage: &StorageService,
     prefix: &str,
@@ -178,9 +149,7 @@ async fn gone(storage: &StorageService, key: &str) -> Result<()> {
 }
 
 async fn delete_one(storage: &StorageService, key: &str) -> Result<Option<String>> {
-    // Twice over, so a versioned bucket has more than one version to remove.
     put(storage, key, &pattern(512, 30)).await?;
-    put(storage, key, &pattern(512, 31)).await?;
     storage.delete(key).await?;
     gone(storage, key).await?;
     Ok(None)
@@ -214,10 +183,6 @@ pub async fn run(storage: &StorageService) -> i32 {
     report.record(
         "store, read back and overwrite an object",
         round_trip(storage, &format!("{prefix}object")).await,
-    );
-    report.record(
-        "store an object, then delete what was stored",
-        version_ids(storage, &format!("{prefix}versioned")).await,
     );
     report.record(
         "list objects under a prefix",

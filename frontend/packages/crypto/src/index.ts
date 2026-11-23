@@ -262,8 +262,8 @@ async function sealAccountKeySet(
   // The purpose-separated account identity, from the identity root; Rust
   // owns the keys and envelopes.
   const accountIdentity = await deriveAccountIdentityKeys(roots.identityRoot)
-  const driveHpkePublicKey = fromBase64(accountIdentity.driveHpkePublicKey)
-  const driveHpkePrivateKey = fromBase64(accountIdentity.driveHpkePrivateKey)
+  const driveXwingPublicKey = fromBase64(accountIdentity.driveXwingPublicKey)
+  const driveXwingPrivateKey = fromBase64(accountIdentity.driveXwingPrivateKey)
   const recoveryKeyEnvelope = await sealAccountRecord(
     masterKey,
     recoveryKeyEntropy,
@@ -273,7 +273,7 @@ async function sealAccountKeySet(
   )
   return {
     recoveryKeyEnvelope,
-    publicKey: toBase64(driveHpkePublicKey),
+    publicKey: toBase64(driveXwingPublicKey),
     accountAuthorityPublicKey: accountIdentity.authorityPublicKey,
     accountAuthorityKeyId: accountIdentity.authorityKeyId,
     accountIncarnationId: accountIdentity.incarnationId,
@@ -282,7 +282,7 @@ async function sealAccountKeySet(
     accountRoots,
     mnemonic,
     masterKey,
-    privateKey: driveHpkePrivateKey,
+    privateKey: driveXwingPrivateKey,
     roots,
   }
 }
@@ -295,7 +295,7 @@ export async function driveKeysOf(
   identityRoot: IdentityRoot,
 ): Promise<{ publicKey: string; privateKey: Uint8Array }> {
   const identity = await deriveAccountIdentityKeys(identityRoot)
-  return { publicKey: identity.driveHpkePublicKey, privateKey: fromBase64(identity.driveHpkePrivateKey) }
+  return { publicKey: identity.driveXwingPublicKey, privateKey: fromBase64(identity.driveXwingPrivateKey) }
 }
 
 export interface LoginResult {

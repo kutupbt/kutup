@@ -44,8 +44,7 @@ pub struct Group {
 /// Someone a group's mail goes to: an active account with a primary key.
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct Receiver {
-    #[sqlx(rename = "account_id")]
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub address_id: Uuid,
     pub address: String,
     pub public_key: Vec<u8>,
@@ -88,7 +87,7 @@ pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receive
         "SELECT * FROM (
            SELECT DISTINCT ON (u.id) u.id AS account_id, a.id AS address_id, a.address, k.public_key
              FROM mail_group_members m
-             JOIN accounts u ON u.id = m.account_id AND u.is_active
+             JOIN accounts u ON u.id = m.account_id AND u.state = 'active'
              JOIN mail_addresses a ON a.account_id = u.id AND a.state = 'active'
                                   AND a.disabled_at IS NULL
              JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
@@ -109,7 +108,7 @@ pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receive
              JOIN mail_addresses a ON a.account_id = u.id AND a.state = 'active'
                                   AND a.disabled_at IS NULL
              JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-            WHERE u.is_admin AND u.is_active
+            WHERE u.role <> 'member' AND u.state = 'active'
             ORDER BY u.id, a.position, a.created_at
          ) r ORDER BY r.address",
     )
@@ -222,26 +221,25 @@ pub async fn store_list(
     for copy in &copies {
         let key = object_key(group.id, Uuid::new_v4());
         let size = i64::try_from(copy.data.len())?;
-        let version = state
+        state
             .storage
-            .put_object_versioned(&key, ByteStream::from(copy.data.clone()), size)
+            .upload(&key, ByteStream::from(copy.data.clone()), size)
             .await?;
-        written.0.push((key.clone(), version.clone()));
-        objects.push((key, version, size));
+        written.0.push(key.clone());
+        objects.push((key, size));
     }
     let pool = lock(tx, group.id).await?;
-    let total: i64 = objects.iter().map(|(_, _, size)| size).sum();
+    let total: i64 = objects.iter().map(|(_, size)| size).sum();
     if !pool.fits(total, 0) {
         return Ok(Stored::Full);
     }
     let mut delivered = 0;
-    for ((key, version, size), copy) in objects.iter().zip(&copies) {
+    for ((key, size), copy) in objects.iter().zip(&copies) {
         sqlx::query(
-            "INSERT INTO mail_group_objects (object_key, object_version, group_id, size_bytes)
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO mail_group_objects (object_key, group_id, size_bytes)
+             VALUES ($1, $2, $3)",
         )
         .bind(key)
-        .bind(version)
         .bind(group.id)
         .bind(size)
         .execute(&mut **tx)
@@ -251,7 +249,7 @@ pub async fn store_list(
                 tx,
                 NewMessage {
                     id: Uuid::new_v4(),
-                    user_id: Some(receiver.user_id),
+                    account_id: Some(receiver.account_id),
                     address_id: receiver.address_id,
                     thread_id: None,
                     direction: row.direction,
@@ -259,7 +257,6 @@ pub async fn store_list(
                     protection: row.protection,
                     seen: false,
                     object_key: key,
-                    object_version: version,
                     size: *size,
                     readable: row.readable,
                     bcc: &[],
@@ -279,7 +276,7 @@ pub async fn store_list(
     if delivered == 0 {
         // Every member had it already (a retried delivery): keep neither the
         // objects nor their records.
-        let keys: Vec<&str> = objects.iter().map(|(key, _, _)| key.as_str()).collect();
+        let keys: Vec<&str> = objects.iter().map(|(key, _)| key.as_str()).collect();
         sqlx::query("DELETE FROM mail_group_objects WHERE object_key = ANY($1)")
             .bind(&keys)
             .execute(&mut **tx)
@@ -297,12 +294,12 @@ pub async fn store_list(
 
 /// Objects written for a delivery, to remove when it does not commit.
 #[derive(Default)]
-pub struct Written(pub Vec<(String, String)>);
+pub struct Written(pub Vec<String>);
 
 impl Written {
     pub async fn remove(&self, state: &AppState) {
-        for (key, version) in &self.0 {
-            if let Err(error) = state.storage.delete_stored(key, version).await {
+        for key in &self.0 {
+            if let Err(error) = state.storage.delete(key).await {
                 tracing::warn!(error = %error, "mail: unrecorded group object left for the sweep");
             }
         }
@@ -363,9 +360,9 @@ async fn store_from_outside_inner(
     let row = ListRow {
         direction: "inbound",
         protection: if readable.pgp_encrypted {
-            "end_to_end"
+            "endToEnd"
         } else {
-            "zero_access"
+            "zeroAccess"
         },
         folder: if readable.spam { "spam" } else { "inbox" },
         readable: &readable,
@@ -421,9 +418,9 @@ async fn store_shared_inner(
     let row = ListRow {
         direction: "inbound",
         protection: if readable.pgp_encrypted {
-            "end_to_end"
+            "endToEnd"
         } else {
-            "zero_access"
+            "zeroAccess"
         },
         folder: if readable.spam { "spam" } else { "inbox" },
         readable: &readable,
@@ -467,11 +464,11 @@ pub async fn store_shared_copy(
     let id = Uuid::new_v4();
     let key = object_key(group.id, id);
     let size = i64::try_from(message.len())?;
-    let version = state
+    state
         .storage
-        .put_object_versioned(&key, ByteStream::from(message), size)
+        .upload(&key, ByteStream::from(message), size)
         .await?;
-    written.0.push((key.clone(), version.clone()));
+    written.0.push(key.clone());
     let pool = lock(tx, group.id).await?;
     if !pool.fits(size, 0) {
         return Ok(Stored::Full);
@@ -484,7 +481,7 @@ pub async fn store_shared_copy(
         tx,
         NewMessage {
             id,
-            user_id: None,
+            account_id: None,
             address_id,
             thread_id: None,
             direction: row.direction,
@@ -492,7 +489,6 @@ pub async fn store_shared_copy(
             protection: row.protection,
             seen: row.direction == "outbound",
             object_key: &key,
-            object_version: &version,
             size,
             readable: row.readable,
             bcc: &[],
@@ -518,15 +514,15 @@ pub async fn release_unreferenced(
     storage: &crate::storage::StorageService,
 ) -> anyhow::Result<u64> {
     let mut tx = pool.begin().await?;
-    let released: Vec<(String, String, Uuid, i64)> = sqlx::query_as(
+    let released: Vec<(String, Uuid, i64)> = sqlx::query_as(
         "DELETE FROM mail_group_objects o
           WHERE NOT EXISTS (SELECT 1 FROM mail_messages m WHERE m.object_key = o.object_key)
-         RETURNING object_key, object_version, group_id, size_bytes",
+         RETURNING object_key, group_id, size_bytes",
     )
     .fetch_all(&mut *tx)
     .await?;
     let mut refunds: BTreeMap<Uuid, i64> = BTreeMap::new();
-    for (_, _, group, size) in &released {
+    for (_, group, size) in &released {
         *refunds.entry(*group).or_default() += size;
     }
     for (group, size) in refunds {
@@ -538,8 +534,8 @@ pub async fn release_unreferenced(
         .await?;
     }
     tx.commit().await?;
-    for (key, version, _, _) in &released {
-        if let Err(error) = storage.delete_stored(key, version).await {
+    for (key, _, _) in &released {
+        if let Err(error) = storage.delete(key).await {
             tracing::warn!(error = %error, "mail: released group object left for the sweep");
         }
     }
@@ -589,7 +585,7 @@ mod tests {
     #[test]
     fn large_lists_are_stored_in_chunks() {
         let receiver = Receiver {
-            user_id: Uuid::nil(),
+            account_id: Uuid::nil(),
             address_id: Uuid::nil(),
             address: "a@kutup.test".into(),
             public_key: Vec::new(),

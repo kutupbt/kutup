@@ -215,10 +215,12 @@ pub trait ChatTransport {
         ))
     }
 
-    /// The `session` hash this device's manifest entry carries: its root
-    /// sign-in, as the server works it out
-    /// (`kutup_chat_proto::device_session_hash`).
-    async fn fetch_device_session(&self) -> Result<String> {
+    /// The `session` hash this device's manifest entry carries (its root
+    /// sign-in, as the server works it out:
+    /// `kutup_chat_proto::device_session_hash`), and the account's device
+    /// counter a re-registration's id follows
+    /// (`kutup_chat_proto::next_device_id`).
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
         Err(crate::ChatError::Transport(
             "transport does not implement device sessions".into(),
         ))

@@ -44,14 +44,14 @@ fn the_owner_closes_the_account_and_a_sign_in_keeps_it() {
 
     // Closing needs a reauth's grant, for this purpose.
     let wrong = reauth_grant(&c, &base, &user, "rename");
-    let r = bearer(c.post(format!("{base}/api/user/close")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/account/close")), &user.token)
         .json(&json!({ "grant": wrong }))
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
 
     let grant = reauth_grant(&c, &base, &user, "close");
-    let r = bearer(c.post(format!("{base}/api/user/close")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/account/close")), &user.token)
         .json(&json!({ "grant": grant }))
         .send()
         .unwrap();
@@ -60,7 +60,7 @@ fn the_owner_closes_the_account_and_a_sign_in_keeps_it() {
     assert!(closed["closesAt"].is_string(), "{closed}");
 
     // Every sign-in ended.
-    let r = bearer(c.get(format!("{base}/api/user/me")), &user.token)
+    let r = bearer(c.get(format!("{base}/api/v1/account")), &user.token)
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
@@ -75,7 +75,7 @@ fn the_owner_closes_the_account_and_a_sign_in_keeps_it() {
     let keep = answer["closing"]["grant"].as_str().unwrap().to_owned();
 
     let kept: Value = c
-        .post(format!("{base}/api/auth/keep"))
+        .post(format!("{base}/api/v1/auth/keep"))
         .header("x-kutup-client", "cli")
         .json(&json!({ "grant": keep }))
         .send()
@@ -85,7 +85,7 @@ fn the_owner_closes_the_account_and_a_sign_in_keeps_it() {
     let token = kept["accessToken"].as_str().expect("a session").to_owned();
     // Once only.
     let again = c
-        .post(format!("{base}/api/auth/keep"))
+        .post(format!("{base}/api/v1/auth/keep"))
         .header("x-kutup-client", "cli")
         .json(&json!({ "grant": keep }))
         .send()
@@ -114,7 +114,7 @@ fn a_legal_hold_stops_a_deletion_until_it_is_cleared() {
     };
     let user = register(&c, &base);
     let users = |c: &reqwest::blocking::Client| -> Value {
-        bearer(c.get(format!("{base}/api/admin/users")), &admin)
+        bearer(c.get(format!("{base}/api/v1/admin/accounts")), &admin)
             .send()
             .unwrap()
             .json()
@@ -128,7 +128,7 @@ fn a_legal_hold_stops_a_deletion_until_it_is_cleared() {
             .cloned()
             .expect("the account is listed")
     };
-    let hold = format!("{base}/api/admin/users/{}/legal-hold", user.id);
+    let hold = format!("{base}/api/v1/admin/accounts/{}/legal-hold", user.id);
 
     let r = bearer(c.put(&hold), &admin)
         .json(&json!({ "reference": "  " }))
@@ -146,7 +146,7 @@ fn a_legal_hold_stops_a_deletion_until_it_is_cleared() {
 
     // Held: no deletion.
     let r = bearer(
-        c.delete(format!("{base}/api/admin/users/{}", user.id)),
+        c.delete(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &admin,
     )
     .send()
@@ -157,7 +157,7 @@ fn a_legal_hold_stops_a_deletion_until_it_is_cleared() {
 
     // Closed by an admin, then kept again: the hold doesn't stop that.
     let r = bearer(
-        c.post(format!("{base}/api/admin/users/{}/close", user.id)),
+        c.post(format!("{base}/api/v1/admin/accounts/{}/close", user.id)),
         &admin,
     )
     .send()
@@ -165,28 +165,37 @@ fn a_legal_hold_stops_a_deletion_until_it_is_cleared() {
     assert_eq!(r.status(), StatusCode::OK);
     assert_eq!(row(&users(&c))["state"], "closing");
     // A closing account isn't suspended in passing.
-    let r = bearer(c.put(format!("{base}/api/admin/users/{}", user.id)), &admin)
-        .json(&json!({ "isActive": false }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
+        &admin,
+    )
+    .json(&json!({ "state": "suspended" }))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    let r = bearer(c.put(format!("{base}/api/admin/users/{}", user.id)), &admin)
-        .json(&json!({ "isActive": true }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
+        &admin,
+    )
+    .json(&json!({ "state": "active" }))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     assert_eq!(row(&users(&c))["state"], "active");
 
     // Suspended, with why.
-    let r = bearer(c.put(format!("{base}/api/admin/users/{}", user.id)), &admin)
-        .json(&json!({ "isActive": false, "suspendedReason": "operator_order" }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
+        &admin,
+    )
+    .json(&json!({ "state": "suspended", "suspendedReason": "operatorOrder" }))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let listed = row(&users(&c));
     assert_eq!(
         (listed["state"].as_str(), listed["suspendedReason"].as_str()),
-        (Some("suspended"), Some("operator_order"))
+        (Some("suspended"), Some("operatorOrder"))
     );
 
     // Cleared: the deletion goes ahead, and the destruction log has it.

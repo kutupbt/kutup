@@ -269,8 +269,8 @@ async fn reconcile_stalwart(state: &AppState, settings: &Settings) -> AppResult<
 
 /// The site setting holding the last fingerprint of Stalwart's objects
 /// outside Kutup's tag, and the one holding when it last changed.
-pub const UNTAGGED_FINGERPRINT: &str = "mail_domains_untagged_fingerprint";
-pub const UNTAGGED_CHANGED_AT: &str = "mail_domains_untagged_changed_at";
+pub const UNTAGGED_FINGERPRINT: &str = "mail.untagged_domains_fingerprint";
+pub const UNTAGGED_CHANGED_AT: &str = "mail.untagged_domains_changed_at";
 
 /// Alerts when `MAIL_DOMAIN`'s objects in Stalwart (anything outside Kutup's
 /// tag) change: the reconcile never touches them, so a change means someone

@@ -1,4 +1,4 @@
-//! `GET /api/user/storage`: what the caller's one storage pool holds, by app
+//! `GET /api/v1/account/storage`: what the caller's one storage pool holds, by app
 //! and by kind of stored bytes (docs/api.md). Sizes are the bytes the server
 //! stores and charges, all ciphertext; what the files are (images, documents,
 //! …) only the browser can tell, from the names it decrypts.
@@ -10,7 +10,7 @@ use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The caller's storage pool and what fills it.
@@ -88,19 +88,19 @@ pub struct ChatUsage {
 
 #[utoipa::path(
     get,
-    path = "/api/user/storage",
+    path = "/api/v1/account/storage",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The caller's storage, by app", body = StorageUsageResponse))
 )]
 pub async fn usage(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<StorageUsageResponse>> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    type Row = (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64);
+    let user_id = trusted_uuid(&user.account_id)?;
+    type Row = (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64);
     let row: Row = sqlx::query_as(
-        r#"SELECT u.storage_quota_bytes, u.storage_used_bytes,
+        r#"SELECT u.storage_used_bytes,
              COALESCE(f.live_bytes, 0)::bigint, COALESCE(f.live_count, 0)::bigint,
              COALESCE(f.trash_bytes, 0)::bigint, COALESCE(f.trash_count, 0)::bigint,
              COALESCE((SELECT SUM(size_bytes) FROM drive_file_versions WHERE author_account_id = u.id), 0)::bigint,
@@ -145,16 +145,19 @@ pub async fn usage(
     let (calendar_bytes, calendar_count): (i64, i64) = sqlx::query_as(
         "SELECT (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_account_id = $1), 0)
                + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e
-                             JOIN calendars c ON c.id = e.calendar_id WHERE c.owner_account_id = $1), 0))::bigint,
+                             JOIN calendars c ON c.id = e.calendar_id WHERE c.owner_account_id = $1), 0)
+               + COALESCE((SELECT SUM(se.bytes) FROM calendar_shared_events se
+                             JOIN calendars c ON c.id = se.home_calendar_id
+                            WHERE c.owner_account_id = $1), 0))::bigint,
                 (SELECT COUNT(*) FROM calendar_events e JOIN calendars c ON c.id = e.calendar_id
                   WHERE c.owner_account_id = $1)",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
-    let (quota, used, files, files_count, trash, trash_count, versions, thumbnails, assets) = (
-        row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8,
-    );
+    let quota = crate::storage_pool::quota(&state.pool, user_id).await?;
+    let (used, files, files_count, trash, trash_count, versions, thumbnails, assets) =
+        (row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7);
     Ok(Json(StorageUsageResponse {
         quota_bytes: quota,
         used_bytes: used,
@@ -169,9 +172,9 @@ pub async fn usage(
             assets_bytes: assets,
         },
         chat: ChatUsage {
-            media_bytes: row.9,
-            history_bytes: row.10,
-            history_media_bytes: row.11,
+            media_bytes: row.8,
+            history_bytes: row.9,
+            history_media_bytes: row.10,
         },
         contacts: ContactsUsage {
             bytes: contacts_bytes,
@@ -199,20 +202,20 @@ pub struct VersionAge {
     pub count: i64,
 }
 
-/// `GET /api/user/storage/versions` — what "Delete versions older than…"
+/// `GET /api/v1/account/storage/versions` — what "Delete versions older than…"
 /// would free, so the browser can show it for any age before asking.
 #[utoipa::path(
     get,
-    path = "/api/user/storage/versions",
+    path = "/api/v1/account/storage/versions",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Deletable versions by age", body = [VersionAge]))
 )]
 pub async fn version_ages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<VersionAge>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<(i32, bool, i64, i64)> = sqlx::query_as(&format!(
         "SELECT FLOOR(EXTRACT(EPOCH FROM now() - v.created_at) / 86400)::int AS age,
                 v.keep_forever, SUM(v.size_bytes)::bigint, COUNT(*)::bigint
@@ -260,13 +263,13 @@ pub struct PruneVersionsResponse {
 /// At most this many versions go per request, so one call stays short.
 const PRUNE_BATCH: i64 = 500;
 
-/// `POST /api/user/storage/versions/prune` — deletes for good the earlier
+/// `POST /api/v1/account/storage/versions/prune` — deletes for good the earlier
 /// versions the caller saved more than `olderThanDays` ago, never a file's
 /// newest, and kept-forever ones only when asked. In batches: repeat while
 /// `more`.
 #[utoipa::path(
     post,
-    path = "/api/user/storage/versions/prune",
+    path = "/api/v1/account/storage/versions/prune",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = PruneVersionsRequest,
@@ -274,17 +277,17 @@ const PRUNE_BATCH: i64 = 500;
 )]
 pub async fn prune_versions(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<PruneVersionsRequest>,
 ) -> AppResult<Json<PruneVersionsResponse>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if !(0..=36_500).contains(&req.older_than_days) {
         return Err(AppError::bad_request(
             "olderThanDays must be between 0 and 36500",
         ));
     }
-    let rows: Vec<(uuid::Uuid, String, i64)> = sqlx::query_as(&format!(
-        "SELECT v.id, v.storage_path, v.size_bytes
+    let rows: Vec<(uuid::Uuid, uuid::Uuid, i64)> = sqlx::query_as(&format!(
+        "SELECT v.id, v.file_id, v.size_bytes
            FROM drive_file_versions v
           WHERE v.author_account_id = $1
             AND v.created_at <= now() - make_interval(days => $2)
@@ -302,7 +305,8 @@ pub async fn prune_versions(
     .await?;
     let more = rows.len() as i64 > PRUNE_BATCH;
     let (mut deleted_count, mut freed_bytes) = (0, 0);
-    for (id, path, size) in rows.into_iter().take(PRUNE_BATCH as usize) {
+    for (id, file_id, size) in rows.into_iter().take(PRUNE_BATCH as usize) {
+        let path = crate::file_content::revision_path(file_id, id);
         match crate::jobs::remove_version(&state.pool, &state.storage, id, &path).await {
             Ok(true) => {
                 deleted_count += 1;

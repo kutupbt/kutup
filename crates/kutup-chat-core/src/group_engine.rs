@@ -969,7 +969,7 @@ impl Engine {
                 .await
             {
                 Ok(manifest) => manifest,
-                Err(ChatError::Transport(_)) => {
+                Err(error) if error.is_unreachable() => {
                     unconfirmed.push(account);
                     continue;
                 }
@@ -1159,8 +1159,11 @@ mod tests {
             unreachable!()
         }
         // The account's first device: no manifest yet.
-        async fn fetch_device_session(&self) -> Result<String> {
-            Ok("51".repeat(32))
+        async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
+            Ok(kutup_chat_proto::DeviceSessionResponseV1 {
+                session: "51".repeat(32),
+                next_device_id: 1,
+            })
         }
 
         async fn fetch_manifest(

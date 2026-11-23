@@ -197,7 +197,7 @@ function Workspace({
   const role = shareRole(folder, file, atlas.lists.find((l) => l.file.id === file.id)?.shared)
   // Owners and uploaders who may delete; editors of a file shared by itself too.
   const mayRename =
-    folder.source === 'file' ? folder.canUpload : folder.canManage || (folder.canDelete && file.uploaderUserId === session.userId)
+    folder.source === 'file' ? folder.canUpload : folder.canManage || (folder.canDelete && file.uploaderAccountId === session.accountId)
   const mayTrash = folder.source !== 'file' && mayRename
   const editable = !readOnly && list.doc !== null && list.status !== 'error' && atlas.me !== null
   const color = atlas.colorOf(file.id)

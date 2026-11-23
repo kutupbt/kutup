@@ -33,7 +33,7 @@ struct Vectors {
     /// The owner's key binding, which the sealed list binds.
     binding: String,
     authority_public_key: String,
-    drive_hpke_public_key: String,
+    drive_xwing_public_key: String,
     drive_signing_public_key: String,
     drive_key_binding: String,
     revision: u64,
@@ -231,9 +231,18 @@ fn rules() -> RuleVectors {
     let frank = acct("example.org", "7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d");
     let stranger = acct("kutup.dev", "8d40e3f1-5e70-4192-9d3e-4f5a6b7c8d9e");
     let chain = vec![
-        account_rename::sign(&dave_keys, 1, "dave@kutup.dev", "davey@kutup.dev", T).unwrap(),
         account_rename::sign(
             &dave_keys,
+            dave.id(),
+            1,
+            "dave@kutup.dev",
+            "davey@kutup.dev",
+            T,
+        )
+        .unwrap(),
+        account_rename::sign(
+            &dave_keys,
+            dave.id(),
             2,
             "davey@kutup.dev",
             "david@kutup.dev",
@@ -815,7 +824,7 @@ fn write_vectors() {
         account: account.into(),
         binding: BINDING.into(),
         authority_public_key: STANDARD.encode(identity.authority_public_key()),
-        drive_hpke_public_key: STANDARD.encode(identity.drive_hpke_public_key()),
+        drive_xwing_public_key: STANDARD.encode(identity.drive_xwing_public_key()),
         drive_signing_public_key: STANDARD.encode(identity.drive_signing_public_key()),
         drive_key_binding: STANDARD.encode(binding),
         revision: 7,
@@ -845,8 +854,8 @@ fn checked_in_vectors_hold() {
         v.authority_public_key
     );
     assert_eq!(
-        STANDARD.encode(identity.drive_hpke_public_key()),
-        v.drive_hpke_public_key
+        STANDARD.encode(identity.drive_xwing_public_key()),
+        v.drive_xwing_public_key
     );
     assert_eq!(
         STANDARD.encode(identity.drive_signing_public_key()),
@@ -862,7 +871,7 @@ fn checked_in_vectors_hold() {
         &key32(&v.authority_public_key),
         1,
         &STANDARD
-            .decode(&v.drive_hpke_public_key)
+            .decode(&v.drive_xwing_public_key)
             .unwrap()
             .try_into()
             .unwrap(),

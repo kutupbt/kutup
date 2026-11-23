@@ -76,7 +76,7 @@ interface Props {
 }
 
 /** Who the editor is when nobody is signed in (`live` false): one viewer. */
-const VIEWER = { deviceId: 1, tab: '0', userId: '00000000-0000-0000-0000-000000000000', account: '' }
+const VIEWER = { deviceId: 1, tab: '0', accountId: '00000000-0000-0000-0000-000000000000', account: '' }
 
 /** Where an office editing session started (docs/onlyoffice.md). */
 export interface SessionBase {
@@ -128,10 +128,10 @@ type ToBridge =
   | { type: 'oo-remote-op'; payload: string }
   /** `sender`: the peer's `account#deviceId` (see `peerKey`). */
   | { type: 'oo-remote-cursor'; sender: string; payload: string }
-  | { type: 'oo-peers'; list: { account: string; deviceId: number; tab?: string; userId: string; username?: string; color?: string }[]; ts: number }
+  | { type: 'oo-peers'; list: { account: string; deviceId: number; tab?: string; accountId: string; username?: string; color?: string }[]; ts: number }
   /** Device ids are per account, and the tabs of a browser share its device: the bridge tells peers apart by account, device and tab. */
-  | { type: 'oo-self'; deviceId: number; tab: string; userId: string; account: string }
-  | { type: 'oo-color-update'; userId: string; color: string | null }
+  | { type: 'oo-self'; deviceId: number; tab: string; accountId: string; account: string }
+  | { type: 'oo-color-update'; accountId: string; color: string | null }
   | { type: 'oo-theme'; theme: 'dark' | 'light' }
 
 interface InitPayload {
@@ -227,7 +227,7 @@ function OfficeEditorBase(
   if (live && !session) throw new Error('live editing needs a session')
   const username = session?.username ?? null
   const color = session?.color ?? null
-  const userId = session?.userId ?? null
+  const userId = session?.accountId ?? null
   const readOnly = viewOnly || !live
 
   useImperativeHandle(ref, () => ({
@@ -348,7 +348,7 @@ function OfficeEditorBase(
           } else {
             const device = deviceRef.current
             if (device && userId) {
-              send({ type: 'oo-self', deviceId: device.deviceId, tab: getOrCreateTabId(), userId, account: device.account })
+              send({ type: 'oo-self', deviceId: device.deviceId, tab: getOrCreateTabId(), accountId: userId, account: device.account })
             }
           }
           send({
@@ -431,7 +431,7 @@ function OfficeEditorBase(
     if (!iframe || !iframe.contentWindow) return
     if (!userId) return
     iframe.contentWindow.postMessage(
-      { type: 'oo-color-update', userId, color: color ?? null } satisfies ToBridge,
+      { type: 'oo-color-update', accountId: userId, color: color ?? null } satisfies ToBridge,
       officeOrigin(),
     )
   }, [userId, color])
@@ -487,7 +487,7 @@ function OfficeEditorBase(
       // OnlyOffice's connectState. Without this OO rejects remote
       // saveChanges from peers it never learned about, producing the
       // "second-direction sync stalls" bug user-reported on 2026-05-07.
-      function forwardPeers(list: { account: string; deviceId: number; tab?: string; userId: string; username?: string; color?: string }[], ts: number) {
+      function forwardPeers(list: { account: string; deviceId: number; tab?: string; accountId: string; username?: string; color?: string }[], ts: number) {
         const message = { type: 'oo-peers', list, ts } satisfies ToBridge
         peersRef.current = message
         const iframe = iframeRef.current
@@ -501,7 +501,7 @@ function OfficeEditorBase(
       const iframeForSelf = iframeRef.current
       if (iframeForSelf && iframeForSelf.contentWindow && did && userId) {
         iframeForSelf.contentWindow.postMessage(
-          { type: 'oo-self', deviceId: did, tab: getOrCreateTabId(), userId, account: device.account } satisfies ToBridge,
+          { type: 'oo-self', deviceId: did, tab: getOrCreateTabId(), accountId: userId, account: device.account } satisfies ToBridge,
           officeOrigin(),
         )
       }

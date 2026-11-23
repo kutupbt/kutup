@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -29,7 +29,7 @@ pub struct VersionRow {
     storage_path: String,
     seq_at_snapshot: i64,
     doc_key_id: i64,
-    author_user_id: String,
+    author_account_id: String,
     size_bytes: i64,
     label: Option<String>,
     keep_forever: bool,
@@ -57,7 +57,7 @@ pub struct VersionRow {
 
 pub(crate) type VersionTuple = (
     Uuid,
-    String,
+    Uuid,
     i64,
     i64,
     Uuid,
@@ -76,7 +76,7 @@ pub(crate) type VersionTuple = (
 pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     let (
         id,
-        path,
+        file_id,
         seq,
         dk,
         author,
@@ -99,10 +99,10 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     };
     VersionRow {
         id: id.to_string(),
-        storage_path: path,
+        storage_path: crate::file_content::revision_path(file_id, id),
         seq_at_snapshot: seq,
         doc_key_id: dk,
-        author_user_id: author.to_string(),
+        author_account_id: author.to_string(),
         size_bytes: size,
         label,
         keep_forever: keep,
@@ -115,10 +115,10 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     }
 }
 
-pub(crate) const VERSION_SELECT: &str = r#"SELECT id, storage_path, seq_at_snapshot,
+pub(crate) const VERSION_SELECT: &str = r#"SELECT id, file_id, seq_at_snapshot,
        doc_key_id, author_account_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
        remote_author_server, remote_author_account_id, parent_version_id,
-       revision_content_envelope
+       kutup_b64(revision_content_envelope)
 FROM drive_file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -128,11 +128,11 @@ pub struct PatchVersionRequest {
     keep_forever: Option<bool>,
 }
 
-/// `GET /api/files/{fileId}/versions` — mirrors `List`.
+/// `GET /api/v1/drive/files/{fileId}/versions` — mirrors `List`.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/versions",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions",
+    tag = "drive",
     operation_id = "listFileVersions",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
@@ -140,10 +140,10 @@ pub struct PatchVersionRequest {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(file_id): Path<String>,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
@@ -157,11 +157,11 @@ pub async fn list(
     Ok(Json(out).into_response())
 }
 
-/// `GET /api/files/{fileId}/versions/{vid}/download` — mirrors `Download`.
+/// `GET /api/v1/drive/files/{fileId}/versions/{vid}/download` — mirrors `Download`.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/versions/{vid}/download",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions/{vid}/download",
+    tag = "drive",
     operation_id = "downloadFileVersion",
     security(("BearerAuth" = [])),
     params(
@@ -176,27 +176,29 @@ pub async fn list(
 )]
 pub async fn download(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, vid)): Path<(String, String)>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
     if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let row: Option<(String, i64, i64, i64, Option<String>)> = sqlx::query_as(
-        "SELECT storage_path, size_bytes, doc_key_id, seq_at_snapshot, revision_content_envelope
+    let row: Option<(i64, i64, i64, Option<String>)> = sqlx::query_as(
+        "SELECT size_bytes, doc_key_id, seq_at_snapshot,
+                kutup_b64(revision_content_envelope)
          FROM drive_file_versions WHERE id = $1 AND file_id = $2",
     )
     .bind(vid)
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, size, doc_key_id, seq, revision_content)) = row else {
+    let Some((size, doc_key_id, seq, revision_content)) = row else {
         return Err(AppError::not_found("not found"));
     };
+    let path = crate::file_content::revision_path(fid, vid);
 
     let mut extra = crate::file_content::revision_headers(vid, revision_content.as_deref());
     extra.extend([
@@ -219,11 +221,11 @@ pub async fn download(
     .await
 }
 
-/// `PATCH /api/files/{fileId}/versions/{vid}` — mirrors `Patch`.
+/// `PATCH /api/v1/drive/files/{fileId}/versions/{vid}` — mirrors `Patch`.
 #[utoipa::path(
     patch,
-    path = "/api/files/{fileId}/versions/{vid}",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions/{vid}",
+    tag = "drive",
     operation_id = "patchFileVersion",
     security(("BearerAuth" = [])),
     params(
@@ -235,11 +237,11 @@ pub async fn download(
 )]
 pub async fn patch(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, vid)): Path<(String, String)>,
     Json(req): Json<PatchVersionRequest>,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
     // Naming or pinning a version changes what retention keeps: an editor's call.
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
@@ -292,7 +294,7 @@ pub async fn patch(
 pub(crate) const NEWEST_VERSION: &str =
     "SELECT n.id FROM drive_file_versions n WHERE n.file_id = v.file_id AND n.kind = v.kind ORDER BY n.created_at DESC, n.id DESC LIMIT 1";
 
-/// `DELETE /api/files/{fileId}/versions/{vid}` — deletes one earlier version
+/// `DELETE /api/v1/drive/files/{fileId}/versions/{vid}` — deletes one earlier version
 /// for good and frees its storage. The file's owner or the version's author
 /// may; the newest version cannot go. `original` as the version deletes the
 /// file's first upload, once a whole-file version has replaced it (the
@@ -300,8 +302,8 @@ pub(crate) const NEWEST_VERSION: &str =
 /// that opens with the old key stays (docs/plans/pass-parity.md).
 #[utoipa::path(
     delete,
-    path = "/api/files/{fileId}/versions/{vid}",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions/{vid}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(
         ("fileId" = String, Path, description = "File id"),
@@ -316,17 +318,17 @@ pub(crate) const NEWEST_VERSION: &str =
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, vid)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     if vid == crate::handlers::files::ORIGINAL {
         return delete_original(&state, user_id, fid).await;
     }
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
-    type Row = (String, Uuid, Uuid, bool);
+    type Row = (Uuid, Uuid, bool);
     let row: Option<Row> = sqlx::query_as(&format!(
-        "SELECT v.storage_path, v.author_account_id, c.owner_account_id,
+        "SELECT v.author_account_id, c.owner_account_id,
                 v.id = ({NEWEST_VERSION})
            FROM drive_file_versions v
            JOIN drive_files f ON f.id = v.file_id
@@ -337,9 +339,10 @@ pub async fn delete(
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, author, owner, newest)) = row else {
+    let Some((author, owner, newest)) = row else {
         return Err(AppError::not_found("not found"));
     };
+    let path = crate::file_content::revision_path(fid, vid);
     if user_id != author && user_id != owner {
         if can_access_file(&state.pool, user_id, fid).await? {
             return Err(AppError::forbidden(
@@ -365,9 +368,9 @@ pub async fn delete(
 /// charge and the object.
 async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResult<Response> {
     let mut tx = state.pool.begin().await?;
-    type Row = (String, i64, Uuid, Uuid, bool, bool);
+    type Row = (Uuid, i64, Uuid, Uuid, bool, bool);
     let row: Option<Row> = sqlx::query_as(
-        "SELECT f.storage_path, f.encrypted_size_bytes, f.uploader_account_id, c.owner_account_id,
+        "SELECT f.content_revision_id, f.encrypted_size_bytes, f.uploader_account_id, c.owner_account_id,
                 f.original_pruned,
                 EXISTS (SELECT 1 FROM drive_file_versions v WHERE v.file_id = f.id AND v.kind = 'file')
            FROM drive_files f
@@ -378,9 +381,10 @@ async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResul
     .bind(fid)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((path, size, uploader, owner, pruned, replaced)) = row else {
+    let Some((revision, size, uploader, owner, pruned, replaced)) = row else {
         return Err(AppError::not_found("not found"));
     };
+    let path = crate::file_content::revision_path(fid, revision);
     if user_id != uploader && user_id != owner {
         if can_access_file(&state.pool, user_id, fid).await? {
             return Err(AppError::forbidden(
@@ -411,11 +415,11 @@ async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResul
 /// The longest version name, in characters.
 const MAX_LABEL_CHARS: usize = 200;
 
-/// `POST /api/files/{fileId}/versions` — store a version (multipart).
+/// `POST /api/v1/drive/files/{fileId}/versions` — store a version (multipart).
 #[utoipa::path(
     post,
-    path = "/api/files/{fileId}/versions",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions",
+    tag = "drive",
     operation_id = "createFileVersion",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
@@ -426,17 +430,17 @@ const MAX_LABEL_CHARS: usize = 200;
     ),
     responses(
         (status = 201, description = "The stored version", body = VersionRow),
-        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use. `code: revision_conflict`: `metadataRevision` is not the file's current + 1 (`metadataRevision` and `metadataEnvelope` give the current one)"),
+        (status = 409, description = "`code: versionConflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use. `code: revisionConflict`: `metadataRevision` is not the file's current + 1 (`metadataRevision` and `metadataEnvelope` give the current one)"),
         (status = 413, description = "Storage quota exceeded, or larger than `driveVersionMaxBytes`")
     )
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(file_id): Path<String>,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
@@ -623,7 +627,7 @@ pub(crate) async fn store_version(
     // Its metadata is the file's next revision (the row is locked above).
     {
         let (current, current_envelope): (i64, Option<String>) = sqlx::query_as(
-            "SELECT metadata_revision, metadata_envelope FROM drive_files WHERE id = $1",
+            "SELECT metadata_revision, kutup_b64(metadata_envelope) FROM drive_files WHERE id = $1",
         )
         .bind(fid)
         .fetch_one(&mut *tx)
@@ -664,21 +668,20 @@ pub(crate) async fn store_version(
     // Stamped when stored, not when the transaction began: a save that waited
     // for the lock above is newer than the one it waited for.
     let created: VersionTuple = sqlx::query_as(
-        r#"INSERT INTO drive_file_versions (id, file_id, storage_path, seq_at_snapshot,
+        r#"INSERT INTO drive_file_versions (id, file_id, seq_at_snapshot,
                                       doc_key_id, author_account_id, size_bytes, label, keep_forever, kind,
                                       key_generation, remote_author_server,
                                       remote_author_account_id, parent_version_id, created_at,
                                       blob_suite, revision_content_envelope)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $14, $13, clock_timestamp(),
-                   $15, $16)
-           RETURNING id, storage_path, seq_at_snapshot, doc_key_id,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $13, $12, clock_timestamp(),
+                   $14, kutup_unb64($15))
+           RETURNING id, file_id, seq_at_snapshot, doc_key_id,
                      author_account_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
                      remote_author_server, remote_author_account_id, parent_version_id,
-                     revision_content_envelope"#,
+                     kutup_b64(revision_content_envelope)"#,
     )
     .bind(version_id)
     .bind(fid)
-    .bind(&storage_path)
     .bind(seq_at_snapshot)
     .bind(doc_key_id)
     .bind(payer)
@@ -700,7 +703,7 @@ pub(crate) async fn store_version(
     // records the new one (docs/plans/drive-unique-names.md).
     sqlx::query(
         "UPDATE drive_files SET updated_at = NOW(), content_hash = NULL,
-                          metadata_envelope = $2, metadata_revision = $3
+                          metadata_envelope = kutup_unb64($2), metadata_revision = $3
          WHERE id = $1",
     )
     .bind(fid)
@@ -767,7 +770,7 @@ pub(crate) async fn current_whole_version(
     .await
 }
 
-/// `409 version_conflict` (naming the current version) unless the file still
+/// `409 versionConflict` (naming the current version) unless the file still
 /// holds what a save was based on.
 pub(crate) fn check_based_on(
     based_on: Option<Option<Uuid>>,
@@ -779,7 +782,7 @@ pub(crate) fn check_based_on(
             |id| id.to_string(),
         );
         return Err(AppError::conflict("the file changed since")
-            .with_details(serde_json::json!({ "code": "version_conflict", "current": current })));
+            .with_details(serde_json::json!({ "code": "versionConflict", "current": current })));
     }
     Ok(())
 }

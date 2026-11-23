@@ -111,7 +111,7 @@ pub async fn lock_place(tx: &mut Transaction<'_, Postgres>, place: Place) -> App
 }
 
 /// Refuses `name_hash` in `place` when a file or folder other than `except`
-/// holds it outside the trash: `409` with `code = name_taken` and what holds
+/// holds it outside the trash: `409` with `code = nameTaken` and what holds
 /// it (kind, id, and a file's content hash, so the client can tell an
 /// identical file from a different one). Call after `lock_place`.
 pub async fn ensure_name_free(
@@ -124,11 +124,11 @@ pub async fn ensure_name_free(
     let holder: Option<(String, Uuid, Option<String>)> = match place {
         Place::Folder(folder) => {
             sqlx::query_as(
-                "SELECT 'file', id, content_hash FROM drive_files
-                  WHERE collection_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND id <> $3
+                "SELECT 'file', id, encode(content_hash, 'hex') FROM drive_files
+                  WHERE collection_id = $1 AND name_hash = decode($2, 'hex') AND deleted_at IS NULL AND id <> $3
                  UNION ALL
                  SELECT 'folder', id, NULL FROM drive_collections
-                  WHERE parent_collection_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND id <> $3
+                  WHERE parent_collection_id = $1 AND name_hash = decode($2, 'hex') AND deleted_at IS NULL AND id <> $3
                  LIMIT 1",
             )
             .bind(folder)
@@ -140,7 +140,7 @@ pub async fn ensure_name_free(
         Place::TopLevel(owner) => {
             sqlx::query_as(
                 "SELECT 'folder', id, NULL FROM drive_collections
-                  WHERE owner_account_id = $1 AND parent_collection_id IS NULL AND name_hash = $2
+                  WHERE owner_account_id = $1 AND parent_collection_id IS NULL AND name_hash = decode($2, 'hex')
                     AND deleted_at IS NULL AND id <> $3 AND kind = 'folder'
                  LIMIT 1",
             )
@@ -160,7 +160,7 @@ pub async fn ensure_name_free(
 /// The 409 for a name already held.
 pub fn name_taken(kind: &str, id: Uuid, content_hash: Option<&str>) -> AppError {
     AppError::conflict("an item with this name is already here").with_details(json!({
-        "code": "name_taken",
+        "code": "nameTaken",
         "holder": { "kind": kind, "id": id.to_string(), "contentHash": content_hash },
     }))
 }
@@ -174,7 +174,7 @@ pub fn map_unique_violation(error: sqlx::Error) -> AppError {
                 || constraint.ends_with("_unique_top_level_name")
             {
                 return AppError::conflict("an item with this name is already here")
-                    .with_details(json!({ "code": "name_taken" }));
+                    .with_details(json!({ "code": "nameTaken" }));
             }
         }
     }

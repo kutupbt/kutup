@@ -1,7 +1,7 @@
 // Saves that commit a file's next metadata in the same request (a whole-file
 // version, a note's saved state; docs/plans/drive-block-format.md §2): the
 // next revision is sealed on top of the file's metadata as last known, and
-// when someone else's landed first (`409 revision_conflict`), on top of
+// when someone else's landed first (`409 revisionConflict`), on top of
 // theirs, once.
 
 import { openFileMetadataV1, renameFileRecordV1, type FileMetadataV2 } from '@kutup/crypto'

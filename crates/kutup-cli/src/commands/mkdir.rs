@@ -10,7 +10,7 @@ pub fn run(profile: &str, json: bool, name: &str, parent: Option<&str>) -> Resul
     let (mut req, _) = crate::collection_crypto::create_owned(
         name,
         parent.map(String::from),
-        &ctx.session.user_id,
+        &ctx.session.account_id,
         &ctx.session,
     )
     .context("encrypt collection")?;

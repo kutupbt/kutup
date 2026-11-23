@@ -40,6 +40,13 @@ use serde::Serialize;
 
 pub use types::*;
 
+/// What every request says it is (docs/plans/api-surface.md §1.2): the
+/// `cli` client type and this build's version.
+pub const CLIENT_HEADER_VALUE: &str = concat!("cli/", env!("CARGO_PKG_VERSION"));
+
+/// The update hint a too-old CLI prints.
+pub const UPDATE_URL: &str = "https://github.com/kutupbt/kutup/releases";
+
 /// Typed HTTP error, carried through anyhow chains so `main` can map exit
 /// codes and commands can match on `status` instead of string-parsing.
 #[derive(Debug, thiserror::Error)]
@@ -59,10 +66,10 @@ pub struct ApiError {
     /// uploader (it may go on with it), false for the folder's owner (who
     /// may only cancel it).
     pub yours: Option<bool>,
-    /// A `409 name_taken`: what holds the name in that place
+    /// A `409 nameTaken`: what holds the name in that place
     /// (docs/plans/drive-unique-names.md).
     pub name_taken: Option<NameHolder>,
-    /// A `409 version_conflict`: the version the file holds now, which a
+    /// A `409 versionConflict`: the version the file holds now, which a
     /// conditional save (`basedOn`) did not start from: a version id, or
     /// `original` (docs/plans/pass.md, "Saving without overwriting").
     pub version_conflict: Option<String>,
@@ -84,7 +91,7 @@ impl ApiError {
         let name_taken = parsed
             .as_ref()
             .filter(|v| {
-                status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("name_taken")
+                status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("nameTaken")
             })
             .map(|v| {
                 let holder = v.get("holder");
@@ -103,7 +110,7 @@ impl ApiError {
         let version_conflict = parsed
             .as_ref()
             .filter(|v| {
-                status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("version_conflict")
+                status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("versionConflict")
             })
             .and_then(|v| v.get("current")?.as_str().map(str::to_string));
         let code = parsed
@@ -114,8 +121,22 @@ impl ApiError {
             .and_then(|v| v.get("uploadId")?.as_str().map(str::to_string));
         let idle_seconds = parsed.as_ref().and_then(|v| v.get("idleSeconds")?.as_i64());
         let yours = parsed.as_ref().and_then(|v| v.get("yours")?.as_bool());
-        let message = parsed
-            .and_then(|v| v.get("error")?.as_str().map(str::to_string))
+        // Too old for this server: say what it needs and where to get it.
+        let too_old = parsed
+            .as_ref()
+            .filter(|_| code.as_deref() == Some("clientTooOld"))
+            .map(|v| {
+                let minimum = v
+                    .get("minimum")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("a newer version");
+                format!(
+                    "this server needs kutup {minimum} or newer (this is {}); update: {UPDATE_URL}",
+                    env!("CARGO_PKG_VERSION")
+                )
+            });
+        let message = too_old
+            .or_else(|| parsed.and_then(|v| v.get("error")?.as_str().map(str::to_string)))
             .unwrap_or_else(|| {
                 let trimmed = body.trim().to_string();
                 if trimmed.is_empty() {
@@ -134,6 +155,68 @@ impl ApiError {
             name_taken,
             version_conflict,
         }
+    }
+}
+
+/// The server's instance id in a health answer (docs/plans/api-surface.md §5).
+pub fn instance_id_of(health: &serde_json::Value) -> Option<String> {
+    health
+        .get("instanceId")?
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+/// Whether `version` (`major.minor.patch[-pre]`) is below `minimum`, by
+/// semver's precedence (pre-release identifiers compared one by one,
+/// numeric ones as numbers); an unreadable one is not (the server's own
+/// check decides then).
+pub(crate) fn version_below(version: &str, minimum: &str) -> bool {
+    use std::cmp::Ordering;
+    fn parse(v: &str) -> Option<([u64; 3], Option<&str>)> {
+        let (core, pre) = match v.split_once('-') {
+            Some((core, pre)) => (core, Some(pre)),
+            None => (v, None),
+        };
+        let mut out = [0u64; 3];
+        let mut parts = core.split('.');
+        for slot in &mut out {
+            *slot = parts.next()?.parse().ok()?;
+        }
+        parts.next().is_none().then_some((out, pre))
+    }
+    fn pre_order(a: &str, b: &str) -> Ordering {
+        let (mut left, mut right) = (a.split('.'), b.split('.'));
+        loop {
+            match (left.next(), right.next()) {
+                (None, None) => return Ordering::Equal,
+                (None, Some(_)) => return Ordering::Less,
+                (Some(_), None) => return Ordering::Greater,
+                (Some(x), Some(y)) => {
+                    let order = match (x.parse::<u64>(), y.parse::<u64>()) {
+                        (Ok(x), Ok(y)) => x.cmp(&y),
+                        (Ok(_), Err(_)) => Ordering::Less,
+                        (Err(_), Ok(_)) => Ordering::Greater,
+                        (Err(_), Err(_)) => x.cmp(y),
+                    };
+                    if order != Ordering::Equal {
+                        return order;
+                    }
+                }
+            }
+        }
+    }
+    match (parse(version), parse(minimum)) {
+        (Some((a, a_pre)), Some((b, b_pre))) => {
+            let order = a.cmp(&b).then_with(|| match (a_pre, b_pre) {
+                (None, None) => Ordering::Equal,
+                (None, Some(_)) => Ordering::Greater,
+                (Some(_), None) => Ordering::Less,
+                (Some(x), Some(y)) => pre_order(x, y),
+            });
+            order == Ordering::Less
+        }
+        _ => false,
     }
 }
 
@@ -179,7 +262,7 @@ impl Client {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             "x-kutup-client",
-            reqwest::header::HeaderValue::from_static("cli"),
+            reqwest::header::HeaderValue::from_static(CLIENT_HEADER_VALUE),
         );
         let http = crate::tls::client_builder()
             .default_headers(headers.clone())
@@ -227,7 +310,7 @@ impl Client {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/api{}", self.base, path)
+        format!("{}/api/v1{}", self.base, path)
     }
 
     fn auth(&self, rb: RequestBuilder) -> RequestBuilder {
@@ -281,6 +364,41 @@ impl Client {
         Ok(self.request(Method::DELETE, path).send()?)
     }
 
+    /// The server's health answer: what it serves and the oldest clients it
+    /// accepts. `kutup login` reads it first, so a too-old CLI says so before
+    /// asking for a password.
+    pub fn check_version(&self) -> Result<()> {
+        let health = self.health()?;
+        let Some(minimum) = health
+            .get("minimumClients")
+            .and_then(|m| m.get("cli"))
+            .and_then(|m| m.as_str())
+        else {
+            return Ok(());
+        };
+        if version_below(env!("CARGO_PKG_VERSION"), minimum) {
+            let body = serde_json::json!({
+                "error": "client too old", "code": "clientTooOld", "minimum": minimum,
+            });
+            return Err(anyhow::Error::new(ApiError::from_parts(
+                426,
+                "Upgrade Required",
+                body.to_string(),
+            )));
+        }
+        Ok(())
+    }
+
+    /// `GET /api/health`: anonymous and unversioned; `null` when the
+    /// server answers anything but success.
+    pub fn health(&self) -> Result<serde_json::Value> {
+        let resp = self.http.get(format!("{}/api/health", self.base)).send()?;
+        if !resp.status().is_success() {
+            return Ok(serde_json::Value::Null);
+        }
+        Ok(resp.json().unwrap_or_default())
+    }
+
     // --- Auth ---
 
     /// Creates the account; sign-up answers the session, as a sign-in does.
@@ -327,15 +445,15 @@ impl Client {
 
     // --- User ---
 
-    pub fn me(&self) -> Result<UserMe> {
-        let resp = self.get("/user/me")?;
+    pub fn me(&self) -> Result<AccountMe> {
+        let resp = self.get("/account")?;
         decode_json(resp)
     }
 
     // --- 2FA (TOTP) ---
 
     pub fn setup_totp(&self) -> Result<SetupTotpResponse> {
-        let resp = self.post_json("/user/2fa/setup", &serde_json::json!({}))?;
+        let resp = self.post_json("/account/2fa/setup", &serde_json::json!({}))?;
         decode_json(resp)
     }
 
@@ -344,7 +462,7 @@ impl Client {
     /// codes proving the factor it has (empty otherwise).
     pub fn verify_totp(&self, code: &str, grant: &str, recovery_code: &str) -> Result<()> {
         let resp = self.post_json(
-            "/user/2fa/verify",
+            "/account/2fa/verify",
             &serde_json::json!({ "code": code, "grant": grant, "recoveryCode": recovery_code }),
         )?;
         check_ok(resp)
@@ -354,7 +472,7 @@ impl Client {
     /// grant (the password proved again), so a stolen session cannot.
     pub fn disable_totp(&self, code: &str, grant: &str) -> Result<()> {
         let resp = self
-            .request(Method::DELETE, "/user/2fa")
+            .request(Method::DELETE, "/account/2fa")
             .header(CONTENT_TYPE, "application/json")
             .json(&serde_json::json!({ "code": code, "grant": grant }))
             .send()?;
@@ -369,7 +487,7 @@ impl Client {
     }
 
     pub fn list_collections(&self) -> Result<Vec<Collection>> {
-        let resp = self.get("/collections/")?;
+        let resp = self.get("/drive/collections/")?;
         decode_json(resp)
     }
 
@@ -377,17 +495,17 @@ impl Client {
         &self,
         req: &CreateCollectionRequest,
     ) -> Result<CreateCollectionResponse> {
-        let resp = self.post_json("/collections/", req)?;
+        let resp = self.post_json("/drive/collections/", req)?;
         decode_json(resp)
     }
 
     pub fn rename_collection(&self, id: &str, req: &RenameCollectionRequest) -> Result<()> {
-        let resp = self.put_json(&format!("/collections/{id}"), req)?;
+        let resp = self.put_json(&format!("/drive/collections/{id}"), req)?;
         check_ok(resp)
     }
 
     pub fn delete_collection(&self, id: &str) -> Result<()> {
-        let resp = self.delete(&format!("/collections/{id}"))?;
+        let resp = self.delete(&format!("/drive/collections/{id}"))?;
         check_ok(resp)
     }
 
@@ -397,19 +515,19 @@ impl Client {
         } else {
             serde_json::json!({ "color": color })
         };
-        let resp = self.patch_json(&format!("/collections/{id}/color"), &body)?;
+        let resp = self.patch_json(&format!("/drive/collections/{id}/color"), &body)?;
         check_ok(resp)
     }
 
     // --- Files ---
 
     pub fn list_files(&self, collection_id: &str) -> Result<Vec<File>> {
-        let resp = self.get(&format!("/collections/{collection_id}/files"))?;
+        let resp = self.get(&format!("/drive/collections/{collection_id}/files"))?;
         decode_json(resp)
     }
 
     pub fn delete_file(&self, file_id: &str) -> Result<()> {
-        let resp = self.delete(&format!("/files/{file_id}"))?;
+        let resp = self.delete(&format!("/drive/files/{file_id}"))?;
         check_ok(resp)
     }
 
@@ -418,7 +536,7 @@ impl Client {
         file_id: &str,
         req: &UpdateFileMetadataRequest,
     ) -> Result<()> {
-        let resp = self.put_json(&format!("/files/{file_id}"), req)?;
+        let resp = self.put_json(&format!("/drive/files/{file_id}"), req)?;
         check_ok(resp)
     }
 
@@ -426,7 +544,7 @@ impl Client {
     /// (docs/plans/drive-unique-names.md).
     pub fn set_content_hash(&self, file_id: &str, content_hash: &str) -> Result<()> {
         let resp = self.put_json(
-            &format!("/files/{file_id}/content-hash"),
+            &format!("/drive/files/{file_id}/content-hash"),
             &serde_json::json!({ "contentHash": content_hash }),
         )?;
         check_ok(resp)
@@ -441,7 +559,7 @@ impl Client {
         hashes: &[String],
     ) -> Result<Vec<String>> {
         let path = match collection_id {
-            Some(id) => format!("/collections/{id}/available-hashes"),
+            Some(id) => format!("/drive/collections/{id}/available-hashes"),
             None => "/drive/top-level-available-hashes".to_string(),
         };
         let resp = self.post_json(&path, &serde_json::json!({ "hashes": hashes }))?;
@@ -477,7 +595,27 @@ pub(crate) fn check_ok(resp: Response) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{path_segment, ApiError};
+    use super::{path_segment, version_below, ApiError};
+
+    #[test]
+    fn a_too_old_cli_says_what_it_needs() {
+        let e = ApiError::from_parts(
+            426,
+            "Upgrade Required",
+            r#"{"error":"client too old","code":"clientTooOld","clientType":"cli","minimum":"9.0.0"}"#.into(),
+        );
+        assert_eq!(e.code.as_deref(), Some("clientTooOld"));
+        assert!(
+            e.message.contains("needs kutup 9.0.0 or newer"),
+            "{}",
+            e.message
+        );
+        assert!(version_below("0.0.9", "0.0.14"));
+        assert!(!version_below("0.0.14", "0.0.14"));
+        assert!(version_below("0.0.14-rc1", "0.0.14"));
+        assert!(version_below("0.0.14-rc.2", "0.0.14-rc.10"));
+        assert!(!version_below("junk", "0.0.14"));
+    }
 
     #[test]
     fn path_segment_encodes_reserved_chars() {
@@ -502,7 +640,7 @@ mod tests {
         let e = ApiError::from_parts(
             409,
             "Conflict",
-            r#"{"error":"the file changed since","code":"version_conflict","current":"original"}"#
+            r#"{"error":"the file changed since","code":"versionConflict","current":"original"}"#
                 .into(),
         );
         assert_eq!(e.version_conflict.as_deref(), Some("original"));

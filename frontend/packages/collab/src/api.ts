@@ -7,7 +7,7 @@ export interface VersionRow {
   storagePath: string
   seqAtSnapshot: number
   docKeyId: number
-  authorUserId: string
+  authorAccountId: string
   sizeBytes: number
   label: string | null
   keepForever: boolean
@@ -16,7 +16,7 @@ export interface VersionRow {
   kind: 'file' | 'yjs'
   /** The generation of the file key it was sealed under (docs/plans/drive-move.md). */
   keyGeneration: number
-  /** Saved by someone on another server (`user@server`); the owner is `authorUserId` then. */
+  /** Saved by someone on another server (`user@server`); the owner is `authorAccountId` then. */
   remoteAuthor?: string
   /** A whole-file version: the version it replaced (`null`: the original upload, or not recorded). */
   parentVersionId?: string | null
@@ -30,11 +30,11 @@ export interface VersionRow {
 }
 
 /**
- * Where a file's collaboration calls go, under the API: `/files/:id` here;
+ * Where a file's collaboration calls go, under the API: `/drive/files/:id` here;
  * for a file on another server, its route through this server
  * (docs/plans/collab-federation.md), which takes the same suffixes.
  */
-export const localBase = (fileId: string) => `/files/${fileId}`
+export const localBase = (fileId: string) => `/drive/files/${fileId}`
 
 /**
  * The newest version holding collaboration state (`kind` `yjs`), from a
@@ -55,7 +55,7 @@ export async function listVersions(fileId: string, base = localBase(fileId)): Pr
 export function getVersionDownloadUrl(fileId: string, vid: string, base = localBase(fileId)): string {
   // Includes /api prefix because this URL is consumed directly (e.g. anchor href),
   // not via the axios instance which adds the baseURL itself.
-  return `/api${base}/versions/${vid}/download`
+  return `/api/v1${base}/versions/${vid}/download`
 }
 
 export async function patchVersion(
@@ -120,7 +120,7 @@ export interface NewVersion {
   metadata?: { metadataEnvelope: string; metadataRevision: number }
 }
 
-/** The current metadata a `409 revision_conflict` carries (null when it carries none). */
+/** The current metadata a `409 revisionConflict` carries (null when it carries none). */
 function currentMetadataOf(body: { metadataRevision?: unknown; metadataEnvelope?: unknown } | undefined): CurrentMetadata | null {
   if (!body) return null
   const { metadataRevision, metadataEnvelope } = body
@@ -174,10 +174,10 @@ export async function createVersion(
     const body = axios.isAxiosError(err)
       ? (err.response?.data as { code?: string; current?: string; metadataRevision?: unknown; metadataEnvelope?: unknown } | undefined)
       : undefined
-    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'version_conflict' && body.current) {
+    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'versionConflict' && body.current) {
       throw new VersionConflictError(body.current)
     }
-    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'revision_conflict') {
+    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'revisionConflict') {
       throw new MetadataConflictError(currentMetadataOf(body))
     }
     throw err

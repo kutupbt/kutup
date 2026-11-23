@@ -1,4 +1,4 @@
-//! Live e2e for `GET /api/drive/files`: every file in the folders an
+//! Live e2e for `GET /api/v1/drive/files`: every file in the folders an
 //! account owns or has been given, in one request, and nothing else.
 //!
 //! Gated on `KUTUP_LIVE_SERVER`:
@@ -12,7 +12,7 @@ mod common;
 use common::*;
 
 fn all_files(c: &Client, base: &str, user: &User) -> Vec<String> {
-    let rows: Vec<Value> = bearer(c.get(format!("{base}/api/drive/files")), &user.token)
+    let rows: Vec<Value> = bearer(c.get(format!("{base}/api/v1/drive/files")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -44,7 +44,7 @@ fn one_listing_of_every_readable_folder() {
             .is_success());
     }
     let r = bearer(
-        c.delete(format!("{base}/api/files/{}", trashed.id)),
+        c.delete(format!("{base}/api/v1/drive/files/{}", trashed.id)),
         &owner.token,
     )
     .send()
@@ -66,7 +66,7 @@ fn one_listing_of_every_readable_folder() {
     assert_eq!(seen, expected);
 
     // Each row is what the folder's own listing gives.
-    let rows: Vec<Value> = bearer(c.get(format!("{base}/api/drive/files")), &owner.token)
+    let rows: Vec<Value> = bearer(c.get(format!("{base}/api/v1/drive/files")), &owner.token)
         .send()
         .unwrap()
         .json()
@@ -78,6 +78,6 @@ fn one_listing_of_every_readable_folder() {
     // The friend sees only their own; a stranger nothing.
     assert_eq!(all_files(&c, &base, &friend), vec![shared_file.id.clone()]);
     assert!(all_files(&c, &base, &stranger).is_empty());
-    let r = c.get(format!("{base}/api/drive/files")).send().unwrap();
+    let r = c.get(format!("{base}/api/v1/drive/files")).send().unwrap();
     assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED);
 }

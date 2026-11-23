@@ -53,7 +53,7 @@ function FileSharesUpkeep() {
 function DriveUploadPanel() {
   const session = useRequiredSession()
   const { resumeOne } = useUploadActions()
-  return <UploadPanel resume={{ owner: session.userId, onResume: resumeOne }} />
+  return <UploadPanel resume={{ owner: session.accountId, onResume: resumeOne }} />
 }
 
 /** Everything behind the session: the Drive shell and its pages. */

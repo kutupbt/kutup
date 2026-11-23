@@ -31,12 +31,12 @@ export class NotifyTabs {
     })
     this.release = release
     void navigator.locks
-      ?.request(`kutup-chat-notifier:${account}`, () => {
+      ?.request(`kutup.chat.notifier:${account}`, () => {
         this.notifier = true
         return held
       })
       .catch(() => undefined)
-    this.channel = new BroadcastChannel(`kutup-chat-focus:${account}`)
+    this.channel = new BroadcastChannel(`kutup.chat.focus:${account}`)
     this.channel.onmessage = (event: MessageEvent<{ tab?: unknown; state?: FocusState }>) => {
       const { tab, state } = event.data ?? {}
       if (typeof tab === 'string' && state && typeof state.focused === 'boolean') {

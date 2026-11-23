@@ -15,7 +15,7 @@ test('Spreadsheet: two saves make two versions; restoring one reopens the editor
   ] as const) {
     await write(tab, 'Spreadsheet', text, at)
     await tab.page.keyboard.press('Enter')
-    const saved = tab.page.waitForResponse((response) => response.request().method() !== 'GET' && /\/api\/files\/[^/]+(\/versions)?/.test(new URL(response.url()).pathname) && response.ok())
+    const saved = tab.page.waitForResponse((response) => response.request().method() !== 'GET' && /\/api\/v1\/drive\/files\/[^/]+(\/versions)?/.test(new URL(response.url()).pathname) && response.ok())
     await save.click()
     await saved
   }

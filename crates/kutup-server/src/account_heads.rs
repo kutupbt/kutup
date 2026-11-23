@@ -3,11 +3,11 @@
 //! Every write of a listed value (a contact, a group-list entry, a mail folder, label or filter
 //! name, the identity pins, a Pass vault secret) also writes the account's
 //! next head, in its transaction: the head's sequence must be the current
-//! one plus one (`409 head_conflict`), and once the account has a head, a
-//! listed write without one is refused (`409 head_required`). The server
+//! one plus one (`409 headConflict`), and once the account has a head, a
+//! listed write without one is refused (`409 headRequired`). The server
 //! never opens a head: each is an account record of the account (its key
 //! binding), whose header says its sequence and the digest of the head before
-//! it, which must be the newest head kept (`409 head_conflict`). It keeps the newest
+//! it, which must be the newest head kept (`409 headConflict`). It keeps the newest
 //! [`RETENTION`] + 1 (so a device anchored [`RETENTION`] heads back still gets
 //! its whole segment, anchor included).
 //!
@@ -32,12 +32,12 @@ use crate::error::{AppError, AppResult};
 /// than this many heads. The server keeps one more (the anchor's own head).
 pub const RETENTION: i64 = kutup_crypto::account_head::RETENTION as i64;
 
-/// The most heads one `GET /api/account/heads` answers; the rest by `next`.
+/// The most heads one `GET /api/v1/account/heads` answers; the rest by `next`.
 pub const PAGE: i64 = 200;
 
 /// A listed write's account, locked for its transaction ([`lock`]).
 pub struct Locked {
-    user_id: Uuid,
+    account_id: Uuid,
     incarnation_id: String,
     /// The account's key binding, which every head it keeps names.
     binding: String,
@@ -78,8 +78,8 @@ pub async fn lock(
     session: Uuid,
 ) -> AppResult<Locked> {
     let account: Option<(String, Option<String>, i32)> = sqlx::query_as(
-        "SELECT account_incarnation_id, key_binding, master_key_generation FROM accounts
-          WHERE id = $1 AND is_active FOR UPDATE",
+        "SELECT COALESCE(encode(account_incarnation_id, 'hex'), ''), key_binding::text, master_key_generation FROM accounts
+          WHERE id = $1 AND state = 'active' FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut **tx)
@@ -108,7 +108,7 @@ pub async fn lock(
                 .with_details(json!({ "code": "setupRequired" }))
         })?;
     Ok(Locked {
-        user_id,
+        account_id: user_id,
         incarnation_id,
         binding,
         master_key_generation: u32::try_from(master_key_generation)
@@ -182,19 +182,19 @@ impl NextHead {
 
 fn head_conflict(current: Option<i64>) -> AppError {
     AppError::conflict("the account head moved: read it again")
-        .with_details(json!({ "code": "head_conflict", "sequence": current }))
+        .with_details(json!({ "code": "headConflict", "sequence": current }))
 }
 
 fn head_required() -> AppError {
     AppError::conflict("this account keeps a head: the write needs the next one")
-        .with_details(json!({ "code": "head_required" }))
+        .with_details(json!({ "code": "headRequired" }))
 }
 
 /// Last in a listed write's transaction, after [`lock`]: makes `next` the
 /// account's head.
 /// - No head yet and none given: nothing (the chain is not started).
-/// - A head kept and none given: `head_required`.
-/// - Given: its sequence must follow the current one, else `head_conflict`
+/// - A head kept and none given: `headRequired`.
+/// - Given: its sequence must follow the current one, else `headConflict`
 ///   (also with no head yet: a chain starts only with [`start`], on its
 ///   basis); older heads past the window go.
 pub async fn advance(
@@ -202,7 +202,7 @@ pub async fn advance(
     locked: &Locked,
     next: Option<&NextHead>,
 ) -> AppResult<()> {
-    let user_id = locked.user_id;
+    let user_id = locked.account_id;
     // The newest head (the account row, locked by `lock`, already orders the
     // account's listed writes; the primary key below is the second guard).
     let current: Option<(i64, Vec<u8>)> = sqlx::query_as(
@@ -241,9 +241,9 @@ async fn insert(
 ) -> AppResult<()> {
     let inserted = sqlx::query(
         "INSERT INTO account_heads (account_id, sequence, sealed, incarnation_id)
-         VALUES ($1, $2, $3, $4)",
+         VALUES ($1, $2, $3, decode($4, 'hex'))",
     )
-    .bind(locked.user_id)
+    .bind(locked.account_id)
     .bind(next.sequence)
     .bind(&next.sealed)
     .bind(&locked.incarnation_id)
@@ -259,7 +259,7 @@ async fn insert(
     }
     // RETENTION + 1 kept: from `next - RETENTION` to `next`.
     sqlx::query("DELETE FROM account_heads WHERE account_id = $1 AND sequence < $2")
-        .bind(locked.user_id)
+        .bind(locked.account_id)
         .bind(next.sequence - RETENTION)
         .execute(&mut **tx)
         .await?;
@@ -427,10 +427,12 @@ async fn values(
         }
         Scope::MailNames => {
             let rows: Vec<(String, String)> = sqlx::query_as(
-                "SELECT 'folder:' || id, name_sealed FROM mail_folders
+                "SELECT 'folder:' || id, kutup_b64(name_sealed) FROM mail_folders
                   WHERE account_id = $1 AND name_sealed IS NOT NULL
-                 UNION ALL SELECT 'label:' || id, name_sealed FROM mail_labels WHERE account_id = $1
-                 UNION ALL SELECT 'filter:' || id, name_sealed FROM mail_filters WHERE account_id = $1",
+                 UNION ALL SELECT 'label:' || id, kutup_b64(name_sealed) FROM mail_labels
+                  WHERE account_id = $1
+                 UNION ALL SELECT 'filter:' || id, kutup_b64(name_sealed) FROM mail_filters
+                  WHERE account_id = $1",
             )
             .bind(user_id)
             .fetch_all(&mut *conn)
@@ -494,7 +496,7 @@ pub async fn index(
 }
 
 /// Starts the account's chain: `next` (sequence 1), made on `basis` (as the
-/// index gave it). Under [`lock`]: `409 head_conflict` when a head exists or
+/// index gave it). Under [`lock`]: `409 headConflict` when a head exists or
 /// the basis moved (a listed write landed since).
 pub async fn start(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -506,10 +508,10 @@ pub async fn start(
         return Err(AppError::bad_request("a chain starts at sequence 1"));
     }
     next.check(locked)?;
-    if latest(&mut **tx, locked.user_id).await?.is_some() {
+    if latest(&mut **tx, locked.account_id).await?.is_some() {
         return Err(head_conflict(None));
     }
-    if basis(&mut *tx, locked.user_id).await? != expected {
+    if basis(&mut *tx, locked.account_id).await? != expected {
         return Err(head_conflict(None));
     }
     insert(tx, locked, next, None).await
@@ -564,10 +566,9 @@ mod tests {
         let user_id = Uuid::new_v4();
         let incarnation = "cd".repeat(32);
         sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', $3, '')",
+            "INSERT INTO accounts (id, username, account_incarnation_id, identity_suite,
+                 drive_key_binding_epoch, master_key_generation)
+             VALUES ($1, $2, decode($3, 'hex'), 2, 1, 1)",
         )
         .bind(user_id)
         .bind(format!("heads{}", &user_id.simple().to_string()[..12]))
@@ -576,7 +577,7 @@ mod tests {
         .await
         .unwrap();
         let locked = Locked {
-            user_id,
+            account_id: user_id,
             incarnation_id: incarnation.clone(),
             binding: BINDING.into(),
             master_key_generation: 1,

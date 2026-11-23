@@ -1,8 +1,10 @@
 #!/bin/sh
 # seaweedfs-init.sh
 # Wait for SeaweedFS S3 to be ready, create the bucket, apply lifecycle.
-# Kutup needs no bucket versioning: every file version is an object of its
-# own, and deletes are final either way (docs/self-hosting.md).
+# Kutup needs no bucket versioning: every key holds one revision of
+# something and is never overwritten, so a plain delete is final. The
+# lifecycle rule only cleans up after a bucket someone versioned anyway
+# (docs/self-hosting.md).
 
 set -e
 

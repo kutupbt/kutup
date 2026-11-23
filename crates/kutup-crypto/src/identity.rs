@@ -20,7 +20,7 @@ use crate::error::{CryptoError, Result};
 
 const ACCOUNT_IDENTITY_SALT: &[u8] = crate::labels::ACCOUNT_IDENTITY_V1;
 const SELF_AUTHORITY_INFO: &[u8] = crate::labels::ACCOUNT_IDENTITY_SELF_AUTHORITY_V1;
-const DRIVE_HPKE_INFO: &[u8] = crate::labels::ACCOUNT_IDENTITY_DRIVE_HPKE_XWING_V1;
+const DRIVE_XWING_INFO: &[u8] = crate::labels::ACCOUNT_IDENTITY_DRIVE_HPKE_XWING_V1;
 const DRIVE_SIGNING_INFO: &[u8] = crate::labels::ACCOUNT_IDENTITY_DRIVE_SHARE_SIGNING_ED25519_V1;
 const INCARNATION_DOMAIN: &[u8] = crate::labels::ACCOUNT_INCARNATION_V1;
 
@@ -31,8 +31,8 @@ pub const IDENTITY_SUITE: u16 = 2;
 /// Complete account identity derived locally from the identity root.
 pub struct AccountIdentityKeysV1 {
     authority: SigningKey,
-    drive_hpke_public: [u8; hpke_xwing::PUBLIC_KEY_LEN],
-    drive_hpke_private: Zeroizing<[u8; hpke_xwing::SEED_LEN]>,
+    drive_xwing_public: [u8; hpke_xwing::PUBLIC_KEY_LEN],
+    drive_xwing_private: Zeroizing<[u8; hpke_xwing::SEED_LEN]>,
     drive_signing: SigningKey,
 }
 
@@ -44,19 +44,19 @@ impl AccountIdentityKeysV1 {
         let mut signing_seed = Zeroizing::new([0u8; 32]);
         hkdf.expand(SELF_AUTHORITY_INFO, authority_seed.as_mut_slice())
             .map_err(|_| CryptoError::Backend("account authority HKDF expand".into()))?;
-        hkdf.expand(DRIVE_HPKE_INFO, hpke_seed.as_mut_slice())
+        hkdf.expand(DRIVE_XWING_INFO, hpke_seed.as_mut_slice())
             .map_err(|_| CryptoError::Backend("Drive HPKE HKDF expand".into()))?;
         hkdf.expand(DRIVE_SIGNING_INFO, signing_seed.as_mut_slice())
             .map_err(|_| CryptoError::Backend("Drive signing HKDF expand".into()))?;
 
         let authority = SigningKey::from_seed(Suite::V1, &authority_seed);
-        let drive_hpke_public = hpke_xwing::public_key(&hpke_seed);
+        let drive_xwing_public = hpke_xwing::public_key(&hpke_seed);
         let drive_signing = SigningKey::from_seed(Suite::V1, &signing_seed);
 
         Ok(Self {
             authority,
-            drive_hpke_public,
-            drive_hpke_private: hpke_seed,
+            drive_xwing_public,
+            drive_xwing_private: hpke_seed,
             drive_signing,
         })
     }
@@ -81,13 +81,13 @@ impl AccountIdentityKeysV1 {
     }
 
     /// The 1216-byte X-Wing encapsulation key.
-    pub fn drive_hpke_public_key(&self) -> [u8; hpke_xwing::PUBLIC_KEY_LEN] {
-        self.drive_hpke_public
+    pub fn drive_xwing_public_key(&self) -> [u8; hpke_xwing::PUBLIC_KEY_LEN] {
+        self.drive_xwing_public
     }
 
     /// The 32-byte X-Wing seed.
-    pub fn drive_hpke_private_key(&self) -> &[u8; hpke_xwing::SEED_LEN] {
-        &self.drive_hpke_private
+    pub fn drive_xwing_private_key(&self) -> &[u8; hpke_xwing::SEED_LEN] {
+        &self.drive_xwing_private
     }
 
     pub fn drive_signing_key(&self) -> &SigningKey {
@@ -121,8 +121,8 @@ mod tests {
         assert_eq!(first.authority_public_key(), second.authority_public_key());
         assert_eq!(first.incarnation_id(), second.incarnation_id());
         assert_eq!(
-            first.drive_hpke_public_key(),
-            second.drive_hpke_public_key()
+            first.drive_xwing_public_key(),
+            second.drive_xwing_public_key()
         );
         assert_eq!(
             first.drive_signing_public_key(),
@@ -133,7 +133,7 @@ mod tests {
             first.drive_signing_public_key()
         );
         assert_ne!(
-            first.drive_hpke_private_key().as_slice(),
+            first.drive_xwing_private_key().as_slice(),
             first.drive_signing_key().seed().as_slice()
         );
     }

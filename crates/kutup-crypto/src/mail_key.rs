@@ -414,14 +414,14 @@ pub(crate) fn seal_group_secret(
     group_id: &str,
     bound: &[u8],
     member: &GroupShareMember<'_>,
-    member_hpke_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
+    member_xwing_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>> {
     let group_id = crate::drive_object::parse_canonical_uuid(group_id, "group")?;
     let incarnation =
         crate::named_share::parse_hex_32(member.incarnation_id, "member incarnation")?;
     let aad = group_share_aad(domain, &group_id, bound, member.account, &incarnation);
     let (encapsulated, ciphertext) =
-        crate::primitives::hpke_seal(Suite::V1, member_hpke_public_key, domain, &aad, secret)
+        crate::primitives::hpke_seal(Suite::V1, member_xwing_public_key, domain, &aad, secret)
             .map(|sealed| (sealed.encapsulated, sealed.ciphertext))
             .map_err(|error| CryptoError::Backend(format!("group share HPKE seal: {error}")))?;
     if encapsulated.len() != crate::hpke_xwing::ENCAPSULATED_KEY_LEN {
@@ -476,7 +476,7 @@ pub fn seal_group_key_share(
     group_secret_key: &[u8],
     group_id: &str,
     member: &GroupShareMember<'_>,
-    member_hpke_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
+    member_xwing_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>> {
     let group_fingerprint = secret_key_fingerprint(group_secret_key)?;
     seal_group_secret(
@@ -485,7 +485,7 @@ pub fn seal_group_key_share(
         group_id,
         &group_fingerprint,
         member,
-        member_hpke_public_key,
+        member_xwing_public_key,
     )
 }
 

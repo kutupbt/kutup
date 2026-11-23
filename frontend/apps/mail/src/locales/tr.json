@@ -1137,7 +1137,7 @@
       "unverified": "Doğrulama bekliyor"
     },
     "kind": {
-      "end_to_end": "Uçtan uca şifreli",
+      "endToEnd": "Uçtan uca şifreli",
       "outside": "Uçtan uca şifreli değil"
     },
     "notice": {

@@ -59,7 +59,7 @@ export function useMailActions(group?: string) {
   function move(messages: Movable[], destination: Destination, after?: () => void) {
     const listed = destination === 'spam' ? messages.filter(fromList) : []
     const action = settings.data?.spamAction ?? 'ask'
-    if (listed.length === 0 || action === 'just_spam') return moveNow(messages, destination, after)
+    if (listed.length === 0 || action === 'justSpam') return moveNow(messages, destination, after)
     const go = (unsubscribe: boolean) => {
       moveNow(messages, destination, after)
       if (unsubscribe) {
@@ -70,12 +70,12 @@ export function useMailActions(group?: string) {
         })
       }
     }
-    if (action === 'spam_and_unsubscribe') return go(true)
+    if (action === 'spamAndUnsubscribe') return go(true)
     askSpamUnsubscribe({
       count: messages.length,
       conversations: messages.some((m) => m.conversation),
       onChoice: (unsubscribe, remember) => {
-        if (remember) updateSettings.mutate({ spamAction: unsubscribe ? 'spam_and_unsubscribe' : 'just_spam' })
+        if (remember) updateSettings.mutate({ spamAction: unsubscribe ? 'spamAndUnsubscribe' : 'justSpam' })
         go(unsubscribe)
       },
     })

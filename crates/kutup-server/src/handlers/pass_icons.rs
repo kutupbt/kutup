@@ -7,8 +7,8 @@
 //! default) and none (`pass_settings`). The browser never asks a website
 //! itself, so the Pass page loads no outside images.
 //!
-//! - `GET/PUT /api/pass/settings`: that choice.
-//! - `POST /api/pass/icon`: one domain's icon, refused unless the account
+//! - `GET/PUT /api/v1/pass/settings`: that choice.
+//! - `POST /api/v1/pass/icon`: one domain's icon, refused unless the account
 //!   chose Kutup. The domain travels in the body, so it stays out of access
 //!   logs; icons are kept in memory only, never written down, and per
 //!   account: a quick answer must not tell one account that another has
@@ -38,7 +38,7 @@ use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::public_fetch;
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
@@ -107,8 +107,8 @@ pub struct PassSettings {
     pub site_icons: SiteIcons,
 }
 
-async fn site_icons(state: &AppState, user: &AuthUser) -> AppResult<SiteIcons> {
-    let user_id = trusted_uuid(&user.user_id)?;
+async fn site_icons(state: &AppState, user: &AuthAccount) -> AppResult<SiteIcons> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let stored: Option<String> =
         sqlx::query_scalar("SELECT site_icons FROM pass_settings WHERE account_id = $1")
             .bind(user_id)
@@ -117,27 +117,27 @@ async fn site_icons(state: &AppState, user: &AuthUser) -> AppResult<SiteIcons> {
     Ok(stored.map_or(SiteIcons::Kutup, |value| SiteIcons::parse(&value)))
 }
 
-/// `GET /api/pass/settings` — the account's Kutup Pass settings.
+/// `GET /api/v1/pass/settings` — the account's Kutup Pass settings.
 #[utoipa::path(
     get,
-    path = "/api/pass/settings",
+    path = "/api/v1/pass/settings",
     tag = "pass",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The settings", body = PassSettings))
 )]
 pub async fn get_settings(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<PassSettings>> {
     Ok(Json(PassSettings {
         site_icons: site_icons(&state, &user).await?,
     }))
 }
 
-/// `PUT /api/pass/settings` — changes them.
+/// `PUT /api/v1/pass/settings` — changes them.
 #[utoipa::path(
     put,
-    path = "/api/pass/settings",
+    path = "/api/v1/pass/settings",
     tag = "pass",
     security(("BearerAuth" = [])),
     request_body = PassSettings,
@@ -148,11 +148,11 @@ pub async fn get_settings(
 )]
 pub async fn put_settings(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<PassSettings>, JsonRejection>,
 ) -> AppResult<StatusCode> {
     let Json(settings) = body.map_err(|_| AppError::bad_request("invalid settings"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     sqlx::query(
         "INSERT INTO pass_settings (account_id, site_icons) VALUES ($1, $2)
          ON CONFLICT (account_id) DO UPDATE SET site_icons = $2, updated_at = NOW()",
@@ -171,10 +171,10 @@ pub struct IconRequest {
     pub domain: String,
 }
 
-/// `POST /api/pass/icon` — one website's icon, through Kutup.
+/// `POST /api/v1/pass/icon` — one website's icon, through Kutup.
 #[utoipa::path(
     post,
-    path = "/api/pass/icon",
+    path = "/api/v1/pass/icon",
     tag = "pass",
     security(("BearerAuth" = [])),
     request_body = IconRequest,
@@ -188,11 +188,11 @@ pub struct IconRequest {
 )]
 pub async fn icon(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<IconRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(request) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    if !PASS_ICONS.allow(&user.user_id) {
+    if !PASS_ICONS.allow(&user.account_id) {
         return Err(AppError::too_many_requests(
             "too many icons; try again shortly",
         ));
@@ -202,10 +202,10 @@ pub async fn icon(
     if site_icons(&state, &user).await? != SiteIcons::Kutup {
         return Err(AppError::forbidden("siteIconsNotKutup"));
     }
-    let key = cache_key(&user.user_id, &domain);
+    let key = cache_key(&user.account_id, &domain);
     let found = match cached(&key) {
         Some(found) => found,
-        None => fetch_once(&key, &user.user_id, &domain).await?,
+        None => fetch_once(&key, &user.account_id, &domain).await?,
     };
     let Some(icon) = found else {
         return Err(AppError::not_found("no icon"));

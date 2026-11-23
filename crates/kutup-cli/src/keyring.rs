@@ -44,9 +44,9 @@ impl Keyring {
     ) -> Result<Keyring> {
         Self::load_from(
             client,
-            &format!("/collections/{}/epochs", col.id),
+            &format!("/drive/collections/{}/epochs", col.id),
             &col.id,
-            &col.owner_user_id,
+            &col.owner_account_id,
             col.key_epoch,
             Some(&col.epoch_statement_hash),
             current_key,
@@ -68,7 +68,7 @@ impl Keyring {
         client: &Client,
         history_path: &str,
         collection_id: &str,
-        owner_user_id: &str,
+        owner_account_id: &str,
         key_epoch: u32,
         statement_hash: Option<&str>,
         current_key: &[u8],
@@ -97,7 +97,7 @@ impl Keyring {
         let keys = collection_keyring::unlock(
             current_key,
             collection_id,
-            owner_user_id,
+            owner_account_id,
             &authority()?,
             &chain,
         )

@@ -484,19 +484,19 @@ pub(crate) fn make_bar(progress: &Progress, plain_total: i64, name: &str) -> Pro
 /// Creates a sub-collection under `parent_id` (used by `upload -r` and the
 /// sync engine), its name kept unique under the parent's hash key. Returns
 /// `(collection_id, collection_key)`; a taken name is the server's
-/// `name_taken` (`ApiError::name_taken`).
+/// `nameTaken` (`ApiError::name_taken`).
 pub fn create_sub_collection(
     client: &Client,
     name: &str,
     parent_id: &str,
     parent_hash_key: &[u8; 32],
-    owner_user_id: &str,
+    owner_account_id: &str,
     session: &crate::session::Session,
 ) -> Result<(String, [u8; 32])> {
     let (mut request, collection_key) = crate::collection_crypto::create_owned(
         name,
         Some(parent_id.to_string()),
-        owner_user_id,
+        owner_account_id,
         session,
     )?;
     request.name_hash = Some(crate::names::name_hash(parent_hash_key, name)?);

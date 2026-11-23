@@ -2,7 +2,7 @@
 // slice 3, "The commit, as Proton's"). A block-format upload lands as an
 // uploaded revision; the file's next metadata, committing to that revision
 // and its manifest's digest (known only after the last block), makes it
-// current: `POST /api/files/{id}/revisions/{revisionId}/commit`.
+// current: `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`.
 
 import { manifestSignerOf, type ManifestSigner } from '@kutup/crypto'
 import api from '@kutup/session/client'
@@ -13,7 +13,7 @@ import { getSession } from '@kutup/session/store'
 export async function manifestSigner(): Promise<ManifestSigner> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  return manifestSignerOf(session.roots.identityRoot, session.userId)
+  return manifestSignerOf(session.roots.identityRoot, session.accountId)
 }
 
 /** The file's next metadata, sealed at `metadataRevision`. */
@@ -32,7 +32,7 @@ export function conflictCode(error: unknown): string | null {
 
 /** The file's row as it is now, from its folder's listing (there is no route for one file). */
 export async function currentFileRow(collectionId: string, fileId: string): Promise<FileRow> {
-  const { data } = await api.get<FileRow[]>(`/collections/${collectionId}/files`)
+  const { data } = await api.get<FileRow[]>(`/drive/collections/${collectionId}/files`)
   const row = data.find((candidate) => candidate.id === fileId)
   if (!row) throw new Error('the file is no longer in its folder')
   return row
@@ -58,14 +58,14 @@ export interface CommitOptions {
 }
 
 /**
- * Makes an uploaded revision current. A `409 revision_conflict` (someone
+ * Makes an uploaded revision current. A `409 revisionConflict` (someone
  * else's commit or rename landed meanwhile) re-reads the file and seals the
  * metadata again on top of it, once; `alreadyCommitted` (an interrupted
  * commit that took effect) is success. Anything else is thrown.
  */
 export async function commitRevision(opts: CommitOptions): Promise<void> {
   const post = (sealed: SealedMetadata) =>
-    api.post(`/files/${opts.fileId}/revisions/${opts.revisionId}/commit`, {
+    api.post(`/drive/files/${opts.fileId}/revisions/${opts.revisionId}/commit`, {
       ...sealed,
       revisionContentEnvelope: opts.revisionContentEnvelope,
       ...(opts.nameHash ? { nameHash: opts.nameHash } : {}),
@@ -76,7 +76,7 @@ export async function commitRevision(opts: CommitOptions): Promise<void> {
   } catch (error) {
     const code = conflictCode(error)
     if (code === 'alreadyCommitted') return
-    if (code !== 'revision_conflict' || !opts.collectionId) throw error
+    if (code !== 'revisionConflict' || !opts.collectionId) throw error
   }
   const row = await currentFileRow(opts.collectionId, opts.fileId)
   try {

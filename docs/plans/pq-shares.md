@@ -60,18 +60,18 @@ Instead:
   public key is derived from it. The old label goes, with no second key beside
   it.
 - **Private key at rest.** `users.drive_private_key_envelope`
-  (`AccountRecordPurpose::DriveHpkePrivateKey`, `Exact(32)`) keeps its shape
+  (`AccountRecordPurpose::DriveXwingPrivateKey`, `Exact(32)`) keeps its shape
   and now holds the seed. Sign-in and session forks carry 32 bytes as before.
-- **Public key.** `users.public_key` holds the 1216-byte key, base64 at 1624
+- **Public key.** `accounts.drive_xwing_public_key` holds the 1216-byte key, base64 at 1624
   characters. Nothing caps that column.
 - **Drive key binding** (`drive_key_binding.rs`). The suite becomes **2**
   ("X-Wing + Ed25519"), and the signed message carries the 1216-byte key. Its
   layout is otherwise unchanged: domain, AccountRef, incarnation, authority key,
   suite, HPKE key, signing key.
 - **Chat account manifest** (`AccountManifestV1.drive`). This gets a new
-  `AccountIdentitySuiteId::XWingEd25519V2` with a 1216-byte `hpkePublicKey`, and
-  the server still requires it to equal `users.public_key`. Clients pin it in
-  `manifest_trust.drive_hpke_public_key` (chat-core SQLite and IndexedDB).
+  `AccountIdentitySuiteId::XWingEd25519V2` with a 1216-byte `xwingPublicKey`, and
+  the server still requires it to equal `accounts.drive_xwing_public_key`. Clients pin it in
+  `manifest_trust.drive_xwing_public_key` (chat-core SQLite and IndexedDB).
   - Rule: within one incarnation the key changes only through the one-way
     suite upgrade below (a higher suite, consecutive manifests, the same
     authority). An account never holds both keys at once.
@@ -124,7 +124,7 @@ Everything is derived again from the master key.
 1. **Client, at its next sign-in.** A client that finds its account on suite
    1 derives the X-Wing seed and public key. It then signs a suite-2 binding
    with the **unchanged** authority key.
-2. **Server: `POST /api/account/identity-suite`.** The body carries the new
+2. **Server: `POST /api/v1/account/identity-suite`.** The body carries the new
    public key, the suite-2 binding and the new wrapped private key (the
    seed). The server checks that:
    - the binding verifies under the account's current authority key, at
@@ -168,7 +168,7 @@ manifest trust, and refuse a lower one as a rollback.
 ## Federation
 
 - **Keys crossing servers.** The 1216-byte key crosses servers in
-  `AccountLookupResponse.drive_hpke_public_key` (`/api/fed/drive/users/…`,
+  `AccountLookupResponse.drive_xwing_public_key` (`/api/fed/v2/drive/users/…`,
   `/accounts/…`) and in the Chat manifests.
 - **Envelopes crossing servers.** Named, file and profile-key envelopes cross
   as opaque base64. Only their size limits move.

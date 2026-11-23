@@ -104,10 +104,7 @@ services:
       # SeaweedFS master — probed for real storage capacity + usage (admin dashboard).
       SEAWEEDFS_MASTER_URL: ${SEAWEEDFS_MASTER_URL:-http://seaweedfs-master:9333}
       STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
-      # Days a trashed item stays restorable before the sweeper purges it. 0 disables the sweep.
-      TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-30}
       CHAT_MAILBOX_RETENTION_DAYS: ${CHAT_MAILBOX_RETENTION_DAYS:-30}
-      CHAT_SEND_RETENTION_DAYS: ${CHAT_SEND_RETENTION_DAYS:-30}
       CHAT_DEVICE_EXPIRY_DAYS: ${CHAT_DEVICE_EXPIRY_DAYS:-90}
       # Per-IP/account rate limits + per-account login lockout (blank → server defaults).
       RATE_LIMIT_LOGIN_PER_MIN: ${RATE_LIMIT_LOGIN_PER_MIN:-}

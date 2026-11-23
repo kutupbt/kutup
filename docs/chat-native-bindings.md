@@ -27,7 +27,7 @@ Rust owns:
 Swift/Kotlin owns:
 
 - An authenticated `ChatHttpClient` implemented with URLSession or OkHttp.
-  Its base URL is the selected server's `/api`; Rust supplies relative paths
+  Its base URL is the selected server's `/api/v1`; Rust supplies relative paths
   beginning with `/chat`. The adapter applies bearer authentication, the
   existing single-flight refresh policy, JSON content type, cancellation, and
   the normal TLS policy.

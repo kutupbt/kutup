@@ -113,7 +113,9 @@ async fn recompute_for(
     .execute(&mut *conn)
     .await?;
     let event: Option<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT calendar_id, shared_signed, calendar_signed FROM calendar_events WHERE id = $1",
+        "SELECT e.calendar_id, se.shared_signed, e.calendar_signed FROM calendar_events e
+           JOIN calendar_shared_events se ON se.id = e.shared_event_id
+          WHERE e.id = $1",
     )
     .bind(event_id)
     .fetch_optional(&mut *conn)
@@ -331,9 +333,10 @@ async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> any
     // others' late. The outer `fire_at` bounds hold for the version locked:
     // a row another server moved on meanwhile is skipped, never sent again.
     let columns = "a.account_id, a.event_id, a.reminder, a.action, a.occurrence_start, a.fire_at,
-                e.shared_signed, e.calendar_signed, m.default_reminders_timed,
+                se.shared_signed, e.calendar_signed, m.default_reminders_timed,
                 m.default_reminders_all_day, r.reminders, s.zone";
     let joins = "JOIN calendar_events e ON e.id = a.event_id
+           JOIN calendar_shared_events se ON se.id = e.shared_event_id
            JOIN calendar_members m ON m.calendar_id = e.calendar_id AND m.account_id = a.account_id
            LEFT JOIN calendar_event_reminders r ON r.event_id = a.event_id AND r.account_id = a.account_id
            LEFT JOIN calendar_account_settings s ON s.account_id = a.account_id";

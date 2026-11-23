@@ -16,7 +16,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One root record, checked.
@@ -64,6 +64,15 @@ pub fn checked_first(values: &[String], binding: &str) -> AppResult<Vec<Root>> {
         });
     }
     Ok(roots)
+}
+
+/// The roots' purposes as stored (`account_roots.purpose`), for `= ANY($n)`:
+/// the keyring shares the table but is not a root.
+pub fn purpose_codes() -> Vec<i16> {
+    PURPOSES
+        .iter()
+        .map(|purpose| purpose.as_u16() as i16)
+        .collect()
 }
 
 /// Stores `roots` for `user_id` (its first: an account that has none).
@@ -128,10 +137,11 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let rows: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT envelope FROM account_roots WHERE account_id = $1 AND purpose BETWEEN 22 AND 26
+        "SELECT envelope FROM account_roots WHERE account_id = $1 AND purpose = ANY($2)
           ORDER BY purpose, object DESC",
     )
     .bind(user_id)
+    .bind(purpose_codes())
     .fetch_all(executor)
     .await?;
     Ok(rows
@@ -140,7 +150,7 @@ where
         .collect())
 }
 
-/// The account's master-key keyring (purpose 27, canonical base64): each
+/// The account's master-key keyring (canonical base64): each
 /// previous master key sealed under the one after it, newest first
 /// (docs/plans/mk-rotation-exercise.md). Empty before a first rotation.
 pub async fn load_keyring<'e, E>(executor: E, user_id: Uuid) -> AppResult<Vec<String>>
@@ -148,10 +158,11 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let rows: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT envelope FROM account_roots WHERE account_id = $1 AND purpose = 27
+        "SELECT envelope FROM account_roots WHERE account_id = $1 AND purpose = $2
           ORDER BY object DESC",
     )
     .bind(user_id)
+    .bind(AccountRecordPurpose::MasterKeyKeyring.as_u16() as i16)
     .fetch_all(executor)
     .await?;
     Ok(rows
@@ -177,7 +188,8 @@ pub async fn account_keys(pool: &sqlx::PgPool, user_id: Uuid) -> AppResult<Accou
         .execute(&mut *tx)
         .await?;
     let (authority, generation): (String, i32) = sqlx::query_as(
-        "SELECT account_authority_public_key, master_key_generation FROM accounts WHERE id = $1",
+        "SELECT kutup_b64(account_authority_public_key), master_key_generation FROM accounts
+         WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -210,17 +222,17 @@ pub struct AccountRootsResponse {
     master_keyring: Vec<String>,
 }
 
-/// `GET /api/account/roots` — the caller's own root records and master-key
+/// `GET /api/v1/account/roots` — the caller's own root records and master-key
 /// keyring, for a client that holds the master key but not the roots.
 #[utoipa::path(
     get,
-    path = "/api/account/roots",
+    path = "/api/v1/account/roots",
     tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, body = AccountRootsResponse))
 )]
-pub async fn get(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+pub async fn get(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let keys = account_keys(&state.pool, user_id).await?;
     Ok(Json(AccountRootsResponse {
         account_roots: keys.account_roots,
@@ -305,17 +317,12 @@ mod tests {
             .await
             .unwrap();
         let user = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
-        )
-        .bind(user)
-        .bind(format!("roots{}", &user.simple().to_string()[..12]))
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(user)
+            .bind(format!("roots{}", &user.simple().to_string()[..12]))
+            .execute(&pool)
+            .await
+            .unwrap();
         let roots = checked_first(&first(), BINDING).unwrap();
         let mut tx = pool.begin().await.unwrap();
         store(&mut tx, user, &roots).await.unwrap();

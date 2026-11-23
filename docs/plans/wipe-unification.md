@@ -15,7 +15,9 @@ The wipe already bundles:
 - the Drive block format (#321);
 - one Chat identity per account (#320,
   [`account-identity-key.md`](account-identity-key.md));
-- removing the X25519 suite-1 upgrade path;
+- removing the X25519 suite-1 upgrade path (done 2026-11-19, on
+  `wipe/api-pass`: suite 1 is refused on parse, the manifest's Drive key is
+  X-Wing only, and a Drive key never changes inside an incarnation);
 - the migration squash;
 - removing MLS.
 
@@ -566,7 +568,7 @@ This matches both references:
 
 Four defects remain:
 1. **Derived and also stored.** The Drive X-Wing private key is derivable from
-   the MK and also stored as account-envelope purpose 3 (`DriveHpkePrivateKey`),
+   the MK and also stored as account-envelope purpose 3 (`DriveXwingPrivateKey`),
    with no check that the two agree. One of them should go.
 2. **No MK generation in records.** Rotating the MK is a roadmap item
    ([`account-identity-key.md`](account-identity-key.md), "Device removal": a lost device keeps the MK). Every MK-derived record

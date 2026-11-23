@@ -22,7 +22,7 @@ pub struct TrashResponse {
 pub struct TrashFolder {
     pub id: String,
     #[serde(default)]
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     #[serde(default)]
     pub name_envelope: String,
     #[serde(default)]
@@ -68,7 +68,7 @@ pub struct TrashFile {
     #[serde(default)]
     pub metadata_revision: u64,
     #[serde(default)]
-    pub collection_owner_user_id: String,
+    pub collection_owner_account_id: String,
     #[serde(default)]
     pub collection_owner_key_envelope: String,
     #[serde(default)]
@@ -105,15 +105,15 @@ pub struct RestoreRequest {
 impl Client {
     /// Lists the caller's trash roots (folders + files), newest first.
     pub fn list_trash(&self) -> Result<TrashResponse> {
-        let resp = self.request(Method::GET, "/trash").send()?;
+        let resp = self.request(Method::GET, "/drive/trash").send()?;
         super::decode_json(resp)
     }
 
     /// Restores one trashed root to where it was; with `rename`, under the
     /// new name it carries (when its own is taken there, or a folder comes
-    /// back at the top level: `409` `name_taken` / `nameNeeded`).
+    /// back at the top level: `409` `nameTaken` / `nameNeeded`).
     pub fn restore_trash(&self, id: &str, rename: Option<&RestoreRequest>) -> Result<()> {
-        let mut request = self.request(Method::POST, &format!("/trash/{id}/restore"));
+        let mut request = self.request(Method::POST, &format!("/drive/trash/{id}/restore"));
         if let Some(rename) = rename {
             request = request.json(rename);
         }
@@ -123,14 +123,14 @@ impl Client {
     /// Permanently destroys one trashed root (releases quota). Irreversible.
     pub fn purge_trash(&self, id: &str) -> Result<()> {
         let resp = self
-            .request(Method::DELETE, &format!("/trash/{id}"))
+            .request(Method::DELETE, &format!("/drive/trash/{id}"))
             .send()?;
         super::check_ok(resp)
     }
 
     /// Permanently destroys everything in the trash. Irreversible.
     pub fn empty_trash(&self) -> Result<()> {
-        let resp = self.request(Method::DELETE, "/trash").send()?;
+        let resp = self.request(Method::DELETE, "/drive/trash").send()?;
         super::check_ok(resp)
     }
 }
@@ -145,7 +145,7 @@ mod tests {
     fn deserializes_server_shape() {
         let body = r##"{
             "folders": [{
-                "id": "f0", "ownerUserId": "u1", "nameEnvelope": "ne",
+                "id": "f0", "ownerAccountId": "u1", "nameEnvelope": "ne",
                 "ownerKeyEnvelope": "oke", "keyEpoch": 1, "nameRevision": 1,
                 "epochStatement": "es", "epochStatementHash": "esh",
                 "color": "#ef4444", "items": 3, "deletedAt": "2026-07-01T10:00:00Z"
@@ -154,7 +154,7 @@ mod tests {
                 "id": "a1", "collectionId": "c1",
                 "metadataEnvelope": "me", "fileKeyEnvelope": "fke",
                 "keyEpoch": 1, "keyGeneration": 2, "metadataRevision": 1,
-                "collectionOwnerUserId": "u1", "collectionOwnerKeyEnvelope": "oke",
+                "collectionOwnerAccountId": "u1", "collectionOwnerKeyEnvelope": "oke",
                 "collectionKeyEpoch": 1, "collectionEpochStatement": "es",
                 "collectionEpochStatementHash": "esh",
                 "deletedAt": "2026-07-02T11:30:00Z"

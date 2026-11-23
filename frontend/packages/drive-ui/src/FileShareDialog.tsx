@@ -180,7 +180,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   const setRole = useSetFileRole()
   const people = usePeople()
   // Someone, or a link, about to be removed (either moves the file to a new key).
-  const [pending, setPending] = useState<{ userId?: string; linkId?: string; federatedId?: string; name: string } | null>(null)
+  const [pending, setPending] = useState<{ accountId?: string; linkId?: string; federatedId?: string; name: string } | null>(null)
   // A removal that would also take people not yet upgraded: asked again.
   const [upgrade, setUpgrade] = useState<{ removal: Removal; error: MembersPendingUpgrade } | null>(null)
   const createLink = useCreateFileLink()
@@ -223,7 +223,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   function confirm() {
     if (!pending) return
     removeNow({
-      removed: pending.userId ? [pending.userId] : [],
+      removed: pending.accountId ? [pending.accountId] : [],
       removedLinks: pending.linkId ? [pending.linkId] : [],
       removedFederated: pending.federatedId ? [pending.federatedId] : [],
     })
@@ -265,20 +265,20 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
             const behind = m.keyGeneration < access.data.keyGeneration ? t('fileShare.updating') : null
             return (
               <Row
-                key={m.userId}
+                key={m.accountId}
                 icon={person.profile ? <PersonAvatar {...person} /> : <User className="size-4" aria-hidden />}
                 name={person.name}
                 detail={[person.profile ? m.account : null, owner ? null : permission, behind].filter(Boolean).join(' · ')}
                 control={
                   <>
-                    <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                    <VerifyPersonButton account={m.account} claimed={{ driveXwingPublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
                     {owner ? (
                       <RoleMenu
                         name={person.name}
                         canEdit={m.canEdit}
                         busy={busy}
                         onRole={(canEdit) => changeRole(m, person.name, canEdit)}
-                        onRemove={() => setPending({ userId: m.userId, name: person.name })}
+                        onRemove={() => setPending({ accountId: m.accountId, name: person.name })}
                       />
                     ) : null}
                   </>

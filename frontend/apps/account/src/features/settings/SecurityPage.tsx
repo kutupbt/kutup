@@ -319,7 +319,7 @@ export function SecurityPage() {
         title={t('settings.security.twoFactor')}
         description={t('settings.security.twoFactorDescription')}
         actions={
-          session.totpEnabled ? (
+          session.twoFactor === 'on' ? (
             <Badge variant="ok">{t('settings.security.on')}</Badge>
           ) : (
             <Badge variant="neutral">{t('settings.security.off')}</Badge>
@@ -330,7 +330,7 @@ export function SecurityPage() {
           <CardContent className="p-5">
             {shownCodes ? (
               <RecoveryCodesShown codes={shownCodes} onDone={() => setShownCodes(null)} />
-            ) : session.totpEnabled ? (
+            ) : session.twoFactor === 'on' ? (
               <Disable />
             ) : (
               <Enrol onCodes={setShownCodes} />
@@ -339,7 +339,7 @@ export function SecurityPage() {
         </Card>
       </Section>
 
-      {session.totpEnabled && !shownCodes ? (
+      {session.twoFactor === 'on' && !shownCodes ? (
         <Section title={t('settings.security.recoveryCodes')} description={t('settings.security.recoveryCodesDescription')}>
           <Card>
             <CardContent className="p-5">

@@ -24,7 +24,7 @@ export function useAccountHeadState(): {
 } {
   const session = useSession()
   // The account, not every change to the session (a quota, a colour).
-  const account = session ? `${session.userId}:${session.envelopeBinding}` : null
+  const account = session ? `${session.accountId}:${session.envelopeBinding}` : null
   const [client, setClient] = useState<AccountHeadClient | null>(null)
   const [state, setState] = useState<HeadBannerState>(null)
 

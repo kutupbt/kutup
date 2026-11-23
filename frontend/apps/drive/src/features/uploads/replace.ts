@@ -73,7 +73,7 @@ function cannotResume(error: unknown): boolean {
  * history. It goes up over tus like a new file — resumable after a reload,
  * at any size — and its next metadata (new size, SHA-256, photo details)
  * and the folder's content hash land with it (docs/api.md, "POST
- * /api/uploads with versionOf"). A file changed meanwhile, or another open
+ * /api/v1/drive/uploads with versionOf"). A file changed meanwhile, or another open
  * replacement of it, is not retried: the caller asks the person. This
  * account's own open replacement of the same local file is gone on with;
  * one idle for an hour is offered to cancel; anything else is running
@@ -86,7 +86,7 @@ export async function replaceContent(folder: Folder, listed: DriveFile, file: Fi
   if (!holder.fileKey || !holder.name) throw new Error('file is not open')
   const sha256 = opts.sha256 ?? (await hashBlob(file, opts.signal))
   const media = await readMedia(file, opts.signal)
-  const owner = getSession()?.userId
+  const owner = getSession()?.accountId
   try {
     const done = await streamVersionUpload({
       file,
@@ -155,11 +155,11 @@ export async function replaceContent(folder: Folder, listed: DriveFile, file: Fi
 
 /** Cancel this account's open upload `uploadId` of a new version of `fileId` (tus DELETE). */
 export async function cancelVersionUpload(fileId: string, uploadId: string): Promise<void> {
-  await api.delete(`/uploads/${encodeURIComponent(uploadId)}`, { headers: { 'Tus-Resumable': '1.0.0' } }).catch((error: unknown) => {
+  await api.delete(`/drive/uploads/${encodeURIComponent(uploadId)}`, { headers: { 'Tus-Resumable': '1.0.0' } }).catch((error: unknown) => {
     // One the server already let go is fine.
     if ((error as { response?: { status?: number } }).response?.status !== 404) throw error
   })
-  const owner = getSession()?.userId
+  const owner = getSession()?.accountId
   const remembered = owner ? (await pendingUploads.list(owner)).find((p) => p.fileId === fileId && uploadIdOf(p.uploadUrl) === uploadId) : undefined
   if (remembered) await pendingUploads.remove(fileId)
 }

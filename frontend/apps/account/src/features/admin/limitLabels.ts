@@ -15,6 +15,7 @@ export const SETTING_LABELS: Record<SettingSection, string> = {
   backups: 'admin.settings.backupLimits',
   mail: 'admin.settings.mailLimits',
   accountRecords: 'admin.settings.accountRecordsLimits',
+  sessions: 'admin.settings.sessionsLimits',
 }
 
 type TFunction = ReturnType<typeof useTranslation>['t']

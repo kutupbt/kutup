@@ -2,7 +2,7 @@
 //! Part 2 A): each job this process runs registers with its interval, and
 //! records its last successful pass in `job_heartbeats`.
 //! `/api/health/ready` reports a job that has not succeeded within twice its
-//! interval plus `health_job_grace_seconds`.
+//! interval plus `server.health.job_grace_seconds`.
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};

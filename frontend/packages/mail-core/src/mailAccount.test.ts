@@ -15,7 +15,7 @@ const session = {
   masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)),
   roots: testRoots(0),
   privateKey: new Uint8Array(32),
-  userId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70',
+  accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70',
   envelopeBinding: 'binding',
   username: 'ada.lovelace',
 }

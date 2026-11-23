@@ -4,13 +4,13 @@
 //! new device's ephemeral key from its link code. The server relays that
 //! message once, between two sessions of one account, and keeps nothing.
 //!
-//! - `POST /api/chat/link-tokens` (device-authenticated): a token.
-//! - `POST /api/chat/provisioning/ticket` (signed in): a ticket for the socket
+//! - `POST /api/v1/chat/link-tokens` (device-authenticated): a token.
+//! - `POST /api/v1/chat/provisioning/ticket` (signed in): a ticket for the socket
 //!   (a browser can't send headers on a WebSocket), as Chat's socket tickets.
-//! - `GET /api/chat/provisioning?ticket=` (WebSocket): `{type: address}`, then
+//! - `GET /api/v1/chat/provisioning?ticket=` (WebSocket): `{type: address}`, then
 //!   at most one `{type: envelope}`; pings every 30 s; closed with 1000 after
 //!   the envelope and 4408 when the link token's lifetime ends.
-//! - `PUT /api/chat/provisioning/{address}` (device-authenticated): the
+//! - `PUT /api/v1/chat/provisioning/{address}` (device-authenticated): the
 //!   envelope, to a socket of the same account; any other address is `404`.
 
 use kutup_crypto::primitives::{hash, Suite};
@@ -38,7 +38,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::chat_identity::authenticated_device;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::site_settings::{
     CHAT_LINK_TOKENS_PER_ACCOUNT, CHAT_LINK_TOKEN_SECONDS, CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT,
     CHAT_PROVISIONING_TICKET_SECONDS, CHAT_PROVISION_BODY_BYTES,
@@ -81,12 +81,12 @@ fn rate_limited() -> AppError {
         .with_details(serde_json::json!({ "code": "rateLimited" }))
 }
 
-/// `POST /api/chat/link-tokens` (device-authenticated): one single-use token
+/// `POST /api/v1/chat/link-tokens` (device-authenticated): one single-use token
 /// for one new device, lasting `chatLinkTokenSeconds`; at most
 /// `chatLinkTokensPerAccount` unused at once (`409 linkTokenLimit`).
 #[utoipa::path(
     post,
-    path = "/api/chat/link-tokens",
+    path = "/api/v1/chat/link-tokens",
     tag = "chat",
     operation_id = "createChatLinkToken",
     responses(
@@ -99,12 +99,12 @@ fn rate_limited() -> AppError {
 )]
 pub async fn create_link_token(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     let device_id = authenticated_device(&state.pool, &headers, user_id).await?;
-    if !ratelimit::CHAT_LINK_TOKENS.allow(&auth.user_id) {
+    if !ratelimit::CHAT_LINK_TOKENS.allow(&auth.account_id) {
         return Err(rate_limited());
     }
     let lifetime = CHAT_LINK_TOKEN_SECONDS.load(&state.pool).await?;
@@ -160,15 +160,15 @@ pub async fn create_link_token(
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvisioningTicketResponse {
-    /// For `GET /api/chat/provisioning?ticket=`, once, within a minute.
+    /// For `GET /api/v1/chat/provisioning?ticket=`, once, within a minute.
     pub ticket: String,
 }
 
-/// `POST /api/chat/provisioning/ticket` (signed in; the device to be linked
+/// `POST /api/v1/chat/provisioning/ticket` (signed in; the device to be linked
 /// has no Chat credential yet): a ticket for the provisioning socket.
 #[utoipa::path(
     post,
-    path = "/api/chat/provisioning/ticket",
+    path = "/api/v1/chat/provisioning/ticket",
     tag = "chat",
     operation_id = "createChatProvisioningTicket",
     responses(
@@ -177,8 +177,11 @@ pub struct ProvisioningTicketResponse {
     ),
     security(("bearerAuth" = []))
 )]
-pub async fn create_ticket(State(state): State<AppState>, auth: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+pub async fn create_ticket(
+    State(state): State<AppState>,
+    auth: AuthAccount,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&auth.account_id)?;
     let lifetime = CHAT_PROVISIONING_TICKET_SECONDS.load(&state.pool).await?;
     let most = CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT
         .load_for(&state.pool, user_id)
@@ -228,7 +231,7 @@ pub struct SocketQuery {
     ticket: String,
 }
 
-/// `GET /api/chat/provisioning?ticket=` (WebSocket): the new device's
+/// `GET /api/v1/chat/provisioning?ticket=` (WebSocket): the new device's
 /// provisioning socket.
 pub async fn socket(
     State(state): State<AppState>,
@@ -336,13 +339,13 @@ async fn serve(
         .remove(&address);
 }
 
-/// `PUT /api/chat/provisioning/{address}` (device-authenticated): relay one
+/// `PUT /api/v1/chat/provisioning/{address}` (device-authenticated): relay one
 /// provisioning envelope to a socket of the caller's account. "No such
 /// socket" and "another account's socket" are the same `404`, so addresses
 /// can't be probed.
 #[utoipa::path(
     put,
-    path = "/api/chat/provisioning/{address}",
+    path = "/api/v1/chat/provisioning/{address}",
     tag = "chat",
     operation_id = "relayChatProvisioning",
     params(("address" = String, Path, description = "The socket's address (base64url)")),
@@ -358,14 +361,14 @@ async fn serve(
 )]
 pub async fn relay(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Path(address): Path<String>,
     Json(request): Json<ProvisioningRelayRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     authenticated_device(&state.pool, &headers, user_id).await?;
-    if !ratelimit::CHAT_PROVISIONING_RELAYS.allow(&auth.user_id) {
+    if !ratelimit::CHAT_PROVISIONING_RELAYS.allow(&auth.account_id) {
         return Err(rate_limited());
     }
     let most = CHAT_PROVISION_BODY_BYTES.load(&state.pool).await?;

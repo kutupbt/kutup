@@ -38,7 +38,7 @@ export function NewUserPage() {
     handleSubmit,
     setValue,
     getValues,
-    formState: { errors },
+    formState: { errors, dirtyFields },
   } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
     defaultValues: { username: '', tempPassword: generateTempPassword(), storageQuotaGib: 10 },
@@ -55,7 +55,8 @@ export function NewUserPage() {
       {
         username: values.username.trim(),
         tempPassword: values.tempPassword,
-        storageQuotaBytes: gibToBytes(values.storageQuotaGib),
+        // Its own quota only when changed here; else it follows the site's (0).
+        storageQuotaBytes: dirtyFields.storageQuotaGib ? gibToBytes(values.storageQuotaGib) : 0,
       },
       { onSuccess: () => setCreated({ username: values.username.trim(), tempPassword: values.tempPassword }) },
     )

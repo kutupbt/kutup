@@ -36,8 +36,8 @@ export function SelectionBar({ photos, album, onClear }: { photos: Photo[]; albu
   // Only your own photos go in albums (others' are theirs to share).
   const own = photos.filter((p) => p.folder.source === 'owned')
   // In an album: its owner takes out any photo, a member those they put in.
-  const removable = album ? photos.filter((p) => album.owned || p.addedBy === session.userId) : []
-  const trashablePhotos = photos.filter((p) => mayTrash(p, session.userId))
+  const removable = album ? photos.filter((p) => album.owned || p.addedBy === session.accountId) : []
+  const trashablePhotos = photos.filter((p) => mayTrash(p, session.accountId))
   // A live photo's video goes with its still.
   const trashable = trashablePhotos.flatMap(filesOf)
   const only = photos.length === 1 ? photos[0] : null
@@ -180,7 +180,7 @@ export function SelectionBar({ photos, album, onClear }: { photos: Photo[]; albu
         onOpenChange={setConfirming}
         title={t('selection.trashTitle', { count: trashablePhotos.length })}
         description={t('selection.trashDescription', { count: trashablePhotos.length })}
-        warning={photos.some((p) => !mayTrash(p, session.userId)) ? t('selection.trashSome', { count: photos.filter((p) => !mayTrash(p, session.userId)).length }) : undefined}
+        warning={photos.some((p) => !mayTrash(p, session.accountId)) ? t('selection.trashSome', { count: photos.filter((p) => !mayTrash(p, session.accountId)).length }) : undefined}
         warningVariant="warn"
         submit={t('selection.trash')}
         pending={trash.isPending}

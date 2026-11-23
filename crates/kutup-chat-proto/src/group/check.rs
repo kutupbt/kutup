@@ -21,7 +21,7 @@ use super::{
     MAX_GROUP_MEMBERS, MAX_SEALED_BAN_LIST_BYTES, MAX_SEALED_ENTRY_BYTES,
 };
 
-/// What a server allows (its `chat_group_max_members` site setting), at
+/// What a server allows (its `chat.group_max_members` site setting), at
 /// most [`MAX_GROUP_MEMBERS`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GroupLimits {

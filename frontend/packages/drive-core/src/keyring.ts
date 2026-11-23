@@ -19,7 +19,7 @@ import { claimRevisionAuthor, versionAuthor } from './revisionAuthors'
 /** What finding a folder's keys needs: its current key and where its history is. */
 export type KeyringFolder = Pick<
   Folder,
-  'id' | 'source' | 'remoteShareId' | 'key' | 'keyEpoch' | 'ownerUserId' | 'ownerAuthorityPublicKey' | 'epochStatementHash'
+  'id' | 'source' | 'remoteShareId' | 'key' | 'keyEpoch' | 'ownerAccountId' | 'ownerAuthorityPublicKey' | 'epochStatementHash'
 >
 
 const keyrings = new Map<string, Promise<Uint8Array[]>>()
@@ -28,8 +28,8 @@ async function history(folder: KeyringFolder): Promise<EpochLinkV1[]> {
   const location = folderLocation(folder)
   const { data } = await api.get<EpochLinkV1[]>(
     location.kind === 'local'
-      ? `/collections/${location.collectionId}/epochs`
-      : `/drive/federation/shares/${location.shareId}/epochs`,
+      ? `/drive/collections/${location.collectionId}/epochs`
+      : `/drive/federation/folder-shares/${location.shareId}/epochs`,
   )
   return data
 }
@@ -45,7 +45,7 @@ function keyring(folder: KeyringFolder): Promise<Uint8Array[]> {
       if (chain.length !== folder.keyEpoch || chain.at(-1)?.epochStatementHash !== folder.epochStatementHash) {
         throw new Error('folder key history does not end at the current epoch')
       }
-      return unlockCollectionKeyring(key, folder.id, folder.ownerUserId, folder.ownerAuthorityPublicKey, chain)
+      return unlockCollectionKeyring(key, folder.id, folder.ownerAccountId, folder.ownerAuthorityPublicKey, chain)
     })
     pending.catch(() => keyrings.delete(cacheKey))
     keyrings.set(cacheKey, pending)
@@ -113,8 +113,8 @@ export async function currentContentOf(file: DriveFile): Promise<{ fileKey: Uint
   if (!file.content) throw new Error('file is not open')
   const generation = file.contentKeyGeneration
   // Still the original upload: its uploader wrote it.
-  if (file.content.revisionId === file.originalRevisionId && file.uploaderUserId) {
-    claimRevisionAuthor(file.id, file.content.revisionId, { accountId: file.uploaderUserId })
+  if (file.content.revisionId === file.originalRevisionId && file.uploaderAccountId) {
+    claimRevisionAuthor(file.id, file.content.revisionId, { accountId: file.uploaderAccountId })
   }
   return {
     fileKey: await fileKeyAt(file, generation),
@@ -135,7 +135,7 @@ export async function versionContentOf(
     keyGeneration: number
     revisionContentEnvelope: string | null
     /** Who the history says saved it: its signer must be the same account (`manifestSigners`). */
-    authorUserId?: string | null
+    authorAccountId?: string | null
     remoteAuthor?: string | null
   },
 ): Promise<{ fileKey: Uint8Array; expected: DriveObjectExpected }> {
@@ -167,14 +167,14 @@ export function relayedVersion(saved: RelayedState): { id: string; keyGeneration
 }
 
 /**
- * The file's original upload (`/files/{id}/original`), which no listing
+ * The file's original upload (`/drive/files/{id}/original`), which no listing
  * names: the revision its sealed metadata names (`originalRevisionId`), and
  * nothing else the server might serve, opened against the sealed record
  * served with it.
  */
 export async function originalContentOf(file: DriveFile): Promise<{ fileKey: Uint8Array; expected: DriveObjectToOpen }> {
   if (!file.originalRevisionId) throw new Error("the file's metadata names no original upload")
-  claimRevisionAuthor(file.id, file.originalRevisionId, file.uploaderUserId ? { accountId: file.uploaderUserId } : null)
+  claimRevisionAuthor(file.id, file.originalRevisionId, file.uploaderAccountId ? { accountId: file.uploaderAccountId } : null)
   return {
     fileKey: await fileKeyAt(file, file.originalKeyGeneration),
     expected: { fileId: file.id, generation: file.originalKeyGeneration, revisionId: file.originalRevisionId, served: true },

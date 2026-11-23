@@ -26,7 +26,7 @@ export function serverAddressOf(account: AccountRef, fresh = false): Promise<str
   let pending = byId.get(key)
   if (!pending) {
     pending = api
-      .get<{ server: string; accountId: string; account: string }>(`/users/by-id/${encodeURIComponent(account.accountId)}`, {
+      .get<{ server: string; accountId: string; account: string }>(`/accounts/${encodeURIComponent(account.accountId)}`, {
         params: { server: account.server },
       })
       // The answer must be for the account asked about, an address on its server.

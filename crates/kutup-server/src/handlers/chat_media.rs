@@ -33,7 +33,7 @@ use super::tus::{
     header_str, parse_upload_metadata, require_tus_resumable, tus_text, MIN_PART_SIZE, TUS_VERSION,
 };
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::storage::{CompletedPart, MultipartUpload};
 use crate::AppState;
 
@@ -77,42 +77,29 @@ pub(crate) fn delivery_offer_digest(offer: &ChatMediaDeliveryOfferV1) -> AppResu
 
 pub(crate) async fn consume_media_rate(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    scope_type: &'static str,
+    scope: crate::ratelimit::counters::Scope,
     scope_digest: &[u8; 32],
     budget: crate::ratelimit::Limit,
 ) -> AppResult<()> {
+    use crate::ratelimit::counters::Scope;
     let (limit, window_seconds) = crate::ratelimit::budget(budget);
-    debug_assert!(matches!(
-        scope_type,
-        "capability_minute" | "capability_day" | "recipient" | "federation_origin"
-    ));
-    let count: i64 = sqlx::query_scalar(
-        "INSERT INTO chat_media_rate_counters
-             (scope_type, scope_digest, window_start, count, expires_at)
-         VALUES (
-             $1, $2,
-             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3),
-             1,
-             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3)
-               + make_interval(secs => $3 * 2)
-         )
-         ON CONFLICT (scope_type, scope_digest, window_start)
-         DO UPDATE SET count = chat_media_rate_counters.count + 1
-         RETURNING count",
-    )
-    .bind(scope_type)
-    .bind(scope_digest.as_slice())
-    .bind(window_seconds)
-    .fetch_one(&mut **transaction)
-    .await?;
+    let metric = match scope {
+        Scope::MediaCapabilityMinute => "chat_media_capability_minute",
+        Scope::MediaCapabilityDay => "chat_media_capability_day",
+        Scope::MediaRecipient => "chat_media_recipient",
+        Scope::MediaFederationOrigin => "chat_media_federation_origin",
+        other => {
+            return Err(AppError::internal(format!(
+                "{} is not a Chat-media rate scope",
+                other.as_str()
+            )))
+        }
+    };
+    let count =
+        crate::ratelimit::counters::add(transaction, scope, scope_digest, 1, window_seconds)
+            .await?;
     if count > limit {
-        crate::telemetry::rate_limit_rejection(match scope_type {
-            "capability_minute" => "chat_media_capability_minute",
-            "capability_day" => "chat_media_capability_day",
-            "recipient" => "chat_media_recipient",
-            "federation_origin" => "chat_media_federation_origin",
-            _ => "chat_media_unknown",
-        });
+        crate::telemetry::rate_limit_rejection(metric);
         return Err(AppError::too_many_requests(
             "Chat-media delivery rate limit exceeded",
         ));
@@ -257,13 +244,13 @@ async fn hash_stored_object(
 #[tracing::instrument(name = "chat_media.create_upload", skip_all)]
 pub async fn create_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     headers: HeaderMap,
 ) -> Response {
     if let Some(response) = require_tus_resumable(&headers) {
         return response;
     }
-    let user_id = match trusted_uuid(&user.user_id) {
+    let user_id = match trusted_uuid(&user.account_id) {
         Ok(value) => value,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -380,7 +367,10 @@ pub async fn create_upload(
         StatusCode::CREATED,
         [
             ("Tus-Resumable", TUS_VERSION.to_string()),
-            ("Location", format!("/api/chat/media/uploads/{upload_id}")),
+            (
+                "Location",
+                format!("/api/v1/chat/media/uploads/{upload_id}"),
+            ),
             ("Upload-Offset", "0".into()),
             ("Content-Type", "application/json".into()),
         ],
@@ -391,14 +381,15 @@ pub async fn create_upload(
 
 pub async fn head_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(response) = require_tus_resumable(&headers) {
         return response;
     }
-    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
+    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.account_id))
+    else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
     let row: Option<(i64, i64)> = match sqlx::query_as(
@@ -433,7 +424,7 @@ pub async fn head_upload(
 #[tracing::instrument(name = "chat_media.patch_upload", skip_all)]
 pub async fn patch_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -444,7 +435,8 @@ pub async fn patch_upload(
     if header_str(&headers, "Content-Type") != "application/offset+octet-stream" {
         return tus_text(StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalid Content-Type");
     }
-    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
+    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.account_id))
+    else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
     let client_offset = match header_str(&headers, "Upload-Offset").parse::<i64>() {
@@ -611,7 +603,7 @@ pub async fn patch_upload(
     let inserted = sqlx::query(
         "INSERT INTO chat_media_objects
          (attachment_id,origin_account_id,origin_server,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash,storage_path)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+         VALUES ($1,$2,$3,$4,$5,decode($6,'hex'),$7,$8)",
     )
     .bind(attachment_id)
     .bind(user_id)
@@ -682,14 +674,15 @@ pub async fn patch_upload(
 
 pub async fn delete_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(response) = require_tus_resumable(&headers) {
         return response;
     }
-    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
+    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.account_id))
+    else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
     let row: Option<(String, String)> = match sqlx::query_as(
@@ -736,10 +729,10 @@ pub async fn delete_upload(
 #[tracing::instrument(name = "chat_media.deliver_local", skip_all)]
 pub async fn deliver_local(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(offer): Json<ChatMediaDeliveryOfferV1>,
 ) -> AppResult<Json<ChatMediaOfferResponseV1>> {
-    let origin_user_id = trusted_uuid(&user.user_id)?;
+    let origin_user_id = trusted_uuid(&user.account_id)?;
     let local_domain = state.config.chat_server_name.as_str();
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     offer
@@ -791,7 +784,7 @@ pub async fn deliver_local(
         .execute(&mut *transaction)
         .await?;
     let existing_operation: Option<(String, Uuid)> = sqlx::query_as(
-        "SELECT offer_digest,storage_reference_id
+        "SELECT encode(offer_digest,'hex'),storage_reference_id
          FROM chat_media_origin_delivery_operations
          WHERE origin_account_id=$1 AND operation_id=$2",
     )
@@ -812,7 +805,7 @@ pub async fn deliver_local(
         }));
     }
     let recipient_user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND is_active=true")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND state = 'active'")
             .bind(recipient)
             .fetch_optional(&mut *transaction)
             .await?;
@@ -831,7 +824,7 @@ pub async fn deliver_local(
     }
     type ObjectRow = (Uuid, i16, i64, String, Vec<u8>);
     let object: Option<ObjectRow> = sqlx::query_as(
-        "SELECT origin_account_id,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
+        "SELECT origin_account_id,suite,ciphertext_bytes,encode(ciphertext_sha256,'hex'),retrieval_token_hash
          FROM chat_media_objects WHERE attachment_id=$1",
     )
     .bind(attachment_id)
@@ -859,14 +852,14 @@ pub async fn deliver_local(
     // digests and never metric labels containing identities.
     consume_media_rate(
         &mut transaction,
-        "capability_minute",
+        crate::ratelimit::counters::Scope::MediaCapabilityMinute,
         &presented_capability_hash,
         crate::ratelimit::Limit::MediaCapabilityMinute,
     )
     .await?;
     consume_media_rate(
         &mut transaction,
-        "capability_day",
+        crate::ratelimit::counters::Scope::MediaCapabilityDay,
         &presented_capability_hash,
         crate::ratelimit::Limit::MediaCapabilityDay,
     )
@@ -882,7 +875,7 @@ pub async fn deliver_local(
     .into();
     consume_media_rate(
         &mut transaction,
-        "recipient",
+        crate::ratelimit::counters::Scope::MediaRecipient,
         &recipient_rate_digest,
         crate::ratelimit::Limit::MediaRecipient,
     )
@@ -930,7 +923,7 @@ pub async fn deliver_local(
         "INSERT INTO chat_media_origin_delivery_operations
          (origin_account_id,operation_id,recipient_account_id,attachment_id,ciphertext_bytes,
           ciphertext_sha256,offer_digest,storage_reference_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+         VALUES ($1,$2,$3,$4,$5,decode($6,'hex'),decode($7,'hex'),$8)",
     )
     .bind(origin_user_id)
     .bind(operation_id)
@@ -962,11 +955,11 @@ pub async fn deliver_local(
 #[tracing::instrument(name = "chat_media.download", skip_all)]
 pub async fn download_object(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let row: Option<(String, i64)> = sqlx::query_as(
@@ -1011,10 +1004,10 @@ pub async fn download_object(
 /// per-recipient reference lifecycle and this endpoint fails closed.
 pub async fn discard_origin_object(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let mut tx = state.pool.begin().await?;
@@ -1076,14 +1069,14 @@ pub async fn discard_origin_object(
 /// the object and never reveals a sender or plaintext media metadata.
 pub async fn reference_info(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
 ) -> AppResult<Json<ChatMediaReferenceInfo>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let row: Option<(Uuid, i64, String)> = sqlx::query_as(
-        "SELECT r.id,o.ciphertext_bytes,o.ciphertext_sha256
+        "SELECT r.id,o.ciphertext_bytes,encode(o.ciphertext_sha256,'hex')
          FROM chat_media_references r JOIN chat_media_objects o ON o.attachment_id=r.attachment_id
          WHERE r.account_id=$1 AND r.attachment_id=$2",
     )
@@ -1108,10 +1101,10 @@ pub async fn reference_info(
 #[tracing::instrument(name = "chat_media.clear_reference", skip_all)]
 pub async fn clear_reference(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let mut tx = state.pool.begin().await?;
@@ -1188,14 +1181,11 @@ pub async fn clear_reference(
 
 pub async fn storage_summary(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<ChatMediaStorageSummary>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let (quota, used): (i64, i64) =
-        sqlx::query_as("SELECT storage_quota_bytes,storage_used_bytes FROM accounts WHERE id=$1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+        crate::storage_pool::quota_and_used(&state.pool, user_id).await?;
     let drive: i64 = sqlx::query_scalar(
         "SELECT
           (SELECT COALESCE(SUM((CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)),0)::bigint FROM drive_files WHERE uploader_account_id=$1) +

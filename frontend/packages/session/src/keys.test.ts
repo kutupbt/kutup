@@ -4,7 +4,7 @@ import { decodeKeys, encodeKeys, type SessionKeys } from './keys'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const base: SessionKeys = {
-  userId: 'u1',
+  accountId: 'u1',
   masterKey: new Uint8Array(32).fill(1), masterKeys: firstMasterKeys(new Uint8Array(32).fill(1)),
   roots: testRoots(1),
   privateKey: new Uint8Array(32).fill(2),

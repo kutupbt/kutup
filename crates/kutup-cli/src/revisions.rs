@@ -158,7 +158,7 @@ pub struct CommitUpload<'a> {
 pub const MAX_COMMIT_RENAMES: usize = 3;
 
 /// Commits an uploaded revision; the name it was committed under. A `409
-/// revision_conflict` reads the file again and seals on top of it, once
+/// revisionConflict` reads the file again and seals on top of it, once
 /// (a version keeps a name changed meanwhile); `alreadyCommitted` is
 /// success; a new file's taken name moves to the next free one. Anything
 /// else is returned as it came: the caller settles the upload.
@@ -170,7 +170,7 @@ pub fn commit_upload(server: &impl Commits, opts: &CommitUpload<'_>) -> Result<S
         match commit_once(server, opts, &draft, name_hash.clone()) {
             Ok(name) => return Ok(name),
             Err(error) => {
-                let taken = conflict_code(&error) == Some("name_taken");
+                let taken = conflict_code(&error) == Some("nameTaken");
                 let renamable = matches!(opts.base, Base::NewFile) && renames < MAX_COMMIT_RENAMES;
                 let Some(free_name) = opts.free_name.filter(|_| taken && renamable) else {
                     return Err(error);
@@ -232,7 +232,7 @@ fn commit_once(
     };
     match conflict_code(&error) {
         Some("alreadyCommitted") => return Ok(draft.name.clone()),
-        Some("revision_conflict") => {}
+        Some("revisionConflict") => {}
         _ => return Err(error),
     }
     let Base::Version { collection_id, .. } = &opts.base else {
@@ -316,7 +316,7 @@ pub struct Target<'a> {
 /// request, committing the file's next metadata with it: `change` turns the
 /// file's metadata into the next (a whole file's new content and size, or a
 /// note's state naming `stateRevisionId`). When someone else's metadata
-/// landed first (`409 revision_conflict`), `change` is applied to theirs and
+/// landed first (`409 revisionConflict`), `change` is applied to theirs and
 /// the save sent again, once. Returns the version's row.
 pub fn save_version(
     client: &Client,
@@ -360,7 +360,7 @@ pub fn save_version(
         client.create_version(&file.id, sealed.bytes.clone(), &request)
     };
     match attempt(file) {
-        Err(error) if conflict_code(&error) == Some("revision_conflict") => {
+        Err(error) if conflict_code(&error) == Some("revisionConflict") => {
             attempt(&current_row(client, &file.collection_id, &file.id)?)
         }
         other => other,
@@ -604,7 +604,7 @@ mod tests {
             [1; 32],
         );
         let fake = Fake {
-            answers: RefCell::new(vec![Some("name_taken"), Some("name_taken"), None]),
+            answers: RefCell::new(vec![Some("nameTaken"), Some("nameTaken"), None]),
             sent: RefCell::new(Vec::new()),
             row: row(&key, 1, "a.txt"),
         };
@@ -666,7 +666,7 @@ mod tests {
             );
             (result, fake.sent.into_inner())
         };
-        let (result, sent) = commit(vec![Some("revision_conflict"), None]);
+        let (result, sent) = commit(vec![Some("revisionConflict"), None]);
         assert_eq!(result.unwrap(), "renamed.txt");
         assert_eq!(sent[0].metadata_revision, 3);
         assert_eq!(sent[1].metadata_revision, 5);
@@ -677,7 +677,7 @@ mod tests {
             Some("77777777-7777-4777-8777-777777777777")
         );
         // Once only.
-        let (result, sent) = commit(vec![Some("revision_conflict"), Some("revision_conflict")]);
+        let (result, sent) = commit(vec![Some("revisionConflict"), Some("revisionConflict")]);
         assert!(result.is_err());
         assert_eq!(sent.len(), 2);
         // An interrupted commit that took effect.

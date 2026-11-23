@@ -56,8 +56,8 @@ assert.deepEqual(
     authorityPublicKey: 'eYfen0GgcbJ7PEdEgpsPFRSB9Mi55ZfV+O7e6/P1Kfw=',
     authorityKeyId: '19c53cf8e1cf6790e78bd859ad391db080cc5b3fec885eb345e76b664ce694d3',
     incarnationId: '52d7989c9e0b29849cda0fad9f8fabcdd48b7512626889c3f2c79943777b6879',
-    driveHpkePublicKey: '+cBVrhuiBqGFRLgUvYAa/Lgir2BEK+ER/Cs/FghMcIQ6iwRalwqcQTVPjUW3vwtKTFh9agBnqjaN1ulXo5dITiy4o7PIZQyFJ6VifgiNjQc6Cni0bLPL66UDKpZQG8isTsPDFHdwyMgqOtM6hjZ0PZh0YjyxNMCkJ4EBl9weqFfLABDC25qeQ0ZdRabEtlLO6pWA0MVsDjm8gaWO3xxhjAwOx7K8RvuKm6KjAAvIuKw0SmSO20weDFNzxIyEF7QJKtKCjTwL1DAvu5kSv0l/6kld8Pd0x7xSn5ONg0Jq2JUSVAplohEE7onPSaKs2RIRFACSSCMxjQdMYCM42dk/2ux66bFnZEPKtgiaQyvCjec7wPatF2tFLJqu0JkIhoxFZhYf7ScGz+gmIVdCSKYkKIVVLTdaQ0VFRMVFVARabmu+y+FfjKwD7AyTiYCoh2wlHFwWlSKVUZgHpfBHyhABSKtK1zCfSIJy5PEza0Z3grPMvnVQAIsCsEctmmGuORU9LIB/VVeEIdG6HJhDK+R4ladkc9muK2U9nIACbSCU+pnNh2tVKwCG85Cv/6UdATMWIatk/sR6raJX3OCpQKRIssmK6Qi3NZEZeaUr1hy3tuyTi9BafmJpi9kxuviACQoOJpEUBQsCQgspcCtBCYXJ+0qKdHWmvAVfR6xGghiTBcacwAYDDzievtkc/zyjGUoAuhrMOkVINBWV6IMtPKsWLhhSxMeXFph+aNmzAGO6LUgomTuHYMcp5JxaX0q2DBUoj/lgiNcUR6gpBBB+WIgmiYQ1guVwqqZqd4cCPQMV8dCdqczExGxFIDEL1wAwgtka1DkmgyQm15bAr2WfJYA7+aKxQQUhxXtBxWsXWMobk2Rid+mLNQahfvgDrpA0c6mLTQc9OepiqCYZ4Xp6VOp2L3kFCiEwu/odX2SXzzKc2iohssAcfgBBizt/Z4W1hud0rAJ/QUC4E5htCbE2BQjGcvccf0aS2LDApsQGQWdYfjRyy8y9oZwS7vatZ1SImNur15U8BCS4WhHNw6uitIuvvWDD1CG9ceUOASMmUvzIapIczno6AMp0Zsk28xSXp/CfrGA0ZKs1YGhYq5KjarHBT2Kw5ONfB3bLkll1EAVcDCwm7Lu059utmuDO2CBUGoc3HzixZLhrZmKjwSNDLhO8Q1kqbMQsw/gZzCGoxAoZlOK/EueySvNeGzkbo1QBs5oWSoBfhUFNySmrLiQaDzBDmLIsxRKQibedu1nFXWEV0KlSZKsSZ3hns3okLpsJ+FhcXmBD/5ihInEtJkyHo6d8+Ganw0KkfHQURjxqHqy4Q+MvLyq/z4YdK5fIkoGir9pKp9yJwAgQnSGva5wI/Ei3ZPi+O2BjZgtXN3LFjIVP+5dofrMotdYx3GI8piTINnzLe6aggCgSBnRMp0NMMVmWslJHqRNQNJcdT2RtdFhxJ0qEd1o3vSZp3KYy3gKagpqOP/YdYfFZYhmvAYeABHcrQ5yVRIcSHZVv7+SXbqLLeZCFPYw+8+F+SmlRkjSNGVG8XUCK0v/Cdj4OriQKjLu5oVhE3gchf+XCbYJgXPLv1lJNyYidOLY+8Rlukf/Iw6XqdZwvEYf8y+83c3EFubqhEw==',
-    driveHpkePrivateKey: '3AcU81D8HUFAQ1oF/fBU9D0KS9NMVyS92HQhJvaGusg=',
+    driveXwingPublicKey: '+cBVrhuiBqGFRLgUvYAa/Lgir2BEK+ER/Cs/FghMcIQ6iwRalwqcQTVPjUW3vwtKTFh9agBnqjaN1ulXo5dITiy4o7PIZQyFJ6VifgiNjQc6Cni0bLPL66UDKpZQG8isTsPDFHdwyMgqOtM6hjZ0PZh0YjyxNMCkJ4EBl9weqFfLABDC25qeQ0ZdRabEtlLO6pWA0MVsDjm8gaWO3xxhjAwOx7K8RvuKm6KjAAvIuKw0SmSO20weDFNzxIyEF7QJKtKCjTwL1DAvu5kSv0l/6kld8Pd0x7xSn5ONg0Jq2JUSVAplohEE7onPSaKs2RIRFACSSCMxjQdMYCM42dk/2ux66bFnZEPKtgiaQyvCjec7wPatF2tFLJqu0JkIhoxFZhYf7ScGz+gmIVdCSKYkKIVVLTdaQ0VFRMVFVARabmu+y+FfjKwD7AyTiYCoh2wlHFwWlSKVUZgHpfBHyhABSKtK1zCfSIJy5PEza0Z3grPMvnVQAIsCsEctmmGuORU9LIB/VVeEIdG6HJhDK+R4ladkc9muK2U9nIACbSCU+pnNh2tVKwCG85Cv/6UdATMWIatk/sR6raJX3OCpQKRIssmK6Qi3NZEZeaUr1hy3tuyTi9BafmJpi9kxuviACQoOJpEUBQsCQgspcCtBCYXJ+0qKdHWmvAVfR6xGghiTBcacwAYDDzievtkc/zyjGUoAuhrMOkVINBWV6IMtPKsWLhhSxMeXFph+aNmzAGO6LUgomTuHYMcp5JxaX0q2DBUoj/lgiNcUR6gpBBB+WIgmiYQ1guVwqqZqd4cCPQMV8dCdqczExGxFIDEL1wAwgtka1DkmgyQm15bAr2WfJYA7+aKxQQUhxXtBxWsXWMobk2Rid+mLNQahfvgDrpA0c6mLTQc9OepiqCYZ4Xp6VOp2L3kFCiEwu/odX2SXzzKc2iohssAcfgBBizt/Z4W1hud0rAJ/QUC4E5htCbE2BQjGcvccf0aS2LDApsQGQWdYfjRyy8y9oZwS7vatZ1SImNur15U8BCS4WhHNw6uitIuvvWDD1CG9ceUOASMmUvzIapIczno6AMp0Zsk28xSXp/CfrGA0ZKs1YGhYq5KjarHBT2Kw5ONfB3bLkll1EAVcDCwm7Lu059utmuDO2CBUGoc3HzixZLhrZmKjwSNDLhO8Q1kqbMQsw/gZzCGoxAoZlOK/EueySvNeGzkbo1QBs5oWSoBfhUFNySmrLiQaDzBDmLIsxRKQibedu1nFXWEV0KlSZKsSZ3hns3okLpsJ+FhcXmBD/5ihInEtJkyHo6d8+Ganw0KkfHQURjxqHqy4Q+MvLyq/z4YdK5fIkoGir9pKp9yJwAgQnSGva5wI/Ei3ZPi+O2BjZgtXN3LFjIVP+5dofrMotdYx3GI8piTINnzLe6aggCgSBnRMp0NMMVmWslJHqRNQNJcdT2RtdFhxJ0qEd1o3vSZp3KYy3gKagpqOP/YdYfFZYhmvAYeABHcrQ5yVRIcSHZVv7+SXbqLLeZCFPYw+8+F+SmlRkjSNGVG8XUCK0v/Cdj4OriQKjLu5oVhE3gchf+XCbYJgXPLv1lJNyYidOLY+8Rlukf/Iw6XqdZwvEYf8y+83c3EFubqhEw==',
+    driveXwingPrivateKey: '3AcU81D8HUFAQ1oF/fBU9D0KS9NMVyS92HQhJvaGusg=',
     driveSigningPublicKey: 'q7EjHuex0qgzED93MUSVrAKqBU7mfJY48zjVt8xsp1c=',
   },
 )
@@ -139,14 +139,15 @@ assert.throws(() => guardKeys.openSeen(pinEntry, pinSealed))
 assert.throws(() => chainPins.sealPin(pinEntry, '01', 'ab'.repeat(32)))
 assert.throws(() => chainPins.sealPin(pinEntry, '1', 'AB'.repeat(32)))
 
-// The account roots' record vectors (purposes 22-26) open through
+// The account roots' record vectors (purposes 4, 10, 19, 20 and 5) open through
 // openAccountRoots, the only path that hands them to JavaScript, to the
 // vectors' plaintexts; the authority they must give is the identity root's.
 {
   const records = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-record-v1.json`, 'utf8'))
   const byPurpose = new Map(records.purposes.map((p) => [p.purpose, p]))
-  const rootPurposes = [22, 23, 24, 25, 26]
-  const authority = crypto.deriveAccountIdentityKeys(byPurpose.get(22).plaintext).authorityPublicKey
+  // Identity, Drive, group pseudonym and call-link roots, then the object-id key.
+  const rootPurposes = [4, 10, 19, 20, 5]
+  const authority = crypto.deriveAccountIdentityKeys(byPurpose.get(4).plaintext).authorityPublicKey
   const opened = crypto.openAccountRoots(
     masterKeySet(records.key),
     records.binding,
@@ -168,7 +169,8 @@ assert.throws(() => chainPins.sealPin(pinEntry, '1', 'AB'.repeat(32)))
 // every refused one is refused here as in Rust (malformed ones by inspect;
 // the rest, for the purposes the generic API opens, by open).
 const envelopeVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-record-v1.json`, 'utf8'))
-const genericPurposes = new Set([1, 2, 4])
+// The password and recovery wraps and the Chat backup root.
+const genericPurposes = new Set([1, 2, 13])
 for (const p of envelopeVectors.purposes) {
   assert.deepEqual(crypto.inspectAccountRecord(p.envelope), { purpose: p.purpose, generation: 1 })
   if (genericPurposes.has(p.purpose)) {
@@ -268,24 +270,24 @@ assert.throws(
 // root's generation in the revision slot; only their typed exports seal them.
 {
   const v = vectors.driveOwnerKeys
-  const folderArgs = [v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerUserId, v.collectionEpoch]
-  const linkArgs = [v.driveRoot, v.driveRootGeneration, v.linkId, v.ownerUserId]
+  const folderArgs = [v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerAccountId, v.collectionEpoch]
+  const linkArgs = [v.driveRoot, v.driveRootGeneration, v.linkId, v.ownerAccountId]
   assert.equal(crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, ...folderArgs), v.collectionKey)
   assert.equal(crypto.openOwnerLinkKey(v.linkKeyEnvelope, ...linkArgs), v.linkKey)
   assert.equal(crypto.openOwnerCollectionKey(crypto.sealOwnerCollectionKey(v.collectionKey, ...folderArgs), ...folderArgs), v.collectionKey)
   assert.equal(crypto.openOwnerLinkKey(crypto.sealOwnerLinkKey(v.linkKey, ...linkArgs), ...linkArgs), v.linkKey)
   // The same root at another generation, or another epoch: refused.
-  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, 1, v.collectionId, v.ownerUserId, v.collectionEpoch))
-  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerUserId, v.collectionEpoch + 1))
-  assert.throws(() => crypto.openOwnerLinkKey(v.linkKeyEnvelope, v.driveRoot, 0, v.linkId, v.ownerUserId), /never 0/)
+  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, 1, v.collectionId, v.ownerAccountId, v.collectionEpoch))
+  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerAccountId, v.collectionEpoch + 1))
+  assert.throws(() => crypto.openOwnerLinkKey(v.linkKeyEnvelope, v.driveRoot, 0, v.linkId, v.ownerAccountId), /never 0/)
   // The generic export refuses both purposes.
   for (const purpose of [1, 9]) {
     assert.throws(
-      () => crypto.sealDriveEnvelope(v.collectionKey, v.driveRoot, purpose, 1, 1n, v.collectionId, v.ownerUserId),
+      () => crypto.sealDriveEnvelope(v.collectionKey, v.driveRoot, purpose, 1, 1n, v.collectionId, v.ownerAccountId),
       /typed export/,
     )
     assert.throws(
-      () => crypto.openDriveEnvelope(v.collectionKeyEnvelope, v.driveRoot, purpose, v.collectionEpoch, BigInt(v.driveRootGeneration), v.collectionId, v.ownerUserId),
+      () => crypto.openDriveEnvelope(v.collectionKeyEnvelope, v.driveRoot, purpose, v.collectionEpoch, BigInt(v.driveRootGeneration), v.collectionId, v.ownerAccountId),
       /typed export/,
     )
   }
@@ -359,7 +361,7 @@ const recipientIdentity = crypto.deriveAccountIdentityKeys(
 const namedShareEnvelope = crypto.sealNamedShareEnvelope(
   collectionKey,
   Buffer.alloc(32, 1).toString('base64'),
-  recipientIdentity.driveHpkePublicKey,
+  recipientIdentity.driveXwingPublicKey,
   '11111111-1111-4111-8111-111111111111',
   3,
   ALICE,
@@ -371,7 +373,7 @@ assert.equal(
   crypto.openNamedShareEnvelope(
     namedShareEnvelope,
     senderIdentity.driveSigningPublicKey,
-    recipientIdentity.driveHpkePrivateKey,
+    recipientIdentity.driveXwingPrivateKey,
     '11111111-1111-4111-8111-111111111111',
     3,
     ALICE,
@@ -385,7 +387,7 @@ assert.throws(
   () => crypto.openNamedShareEnvelope(
     namedShareEnvelope,
     senderIdentity.driveSigningPublicKey,
-    recipientIdentity.driveHpkePrivateKey,
+    recipientIdentity.driveXwingPrivateKey,
     '11111111-1111-4111-8111-111111111111',
     4,
     ALICE,
@@ -424,7 +426,7 @@ assert.throws(() => crypto.openChatAttachmentLedger(
 // Not an id of the scope's form.
 assert.throws(() => crypto.sealChatAttachmentLedger(ledgerPlaintext, masterKeySet(ledgerMaster), ledgerBinding, '22222222-2222-4222-8222-222222222222', 1))
 // The generic account-record path refuses the purpose.
-assert.throws(() => crypto.openAccountRecord(ledgerEnvelope, ledgerMaster, 14, ledgerBinding))
+assert.throws(() => crypto.openAccountRecord(ledgerEnvelope, ledgerMaster, 17, ledgerBinding))
 
 const backupRoot = Buffer.alloc(32, 0x55).toString('base64')
 const backupId = '44444444-4444-4444-8444-444444444444'
@@ -648,21 +650,21 @@ const ringChain = ring.chain.map((link) => ({
   previousKeyEnvelope: link.previousKeyEnvelope ?? undefined,
 }))
 assert.deepEqual(
-  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, ringChain),
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, ringChain),
   ring.keys,
 )
 assert.throws(() =>
-  crypto.unlockCollectionKeyring(ring.keys[1], ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, ringChain),
+  crypto.unlockCollectionKeyring(ring.keys[1], ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, ringChain),
 )
 assert.throws(() =>
-  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, [
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, [
     ringChain[0],
     ringChain[2],
   ]),
 )
-const resealedPrevious = crypto.sealPreviousCollectionKey(ring.keys[1], ring.keys[2], ring.collectionId, ring.ownerUserId, 3)
+const resealedPrevious = crypto.sealPreviousCollectionKey(ring.keys[1], ring.keys[2], ring.collectionId, ring.ownerAccountId, 3)
 assert.deepEqual(
-  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, [
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, [
     ringChain[0],
     ringChain[1],
     { ...ringChain[2], previousKeyEnvelope: resealedPrevious },
@@ -697,17 +699,17 @@ assert.equal(
   const reader = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 2).toString('base64'))
   const fileId = '22222222-2222-4222-8222-222222222222'
   const sealed = crypto.sealFileShareEnvelope(
-    Buffer.alloc(32, 0x66).toString('base64'), Buffer.alloc(32, 1).toString('base64'), reader.driveHpkePublicKey,
+    Buffer.alloc(32, 0x66).toString('base64'), Buffer.alloc(32, 1).toString('base64'), reader.driveXwingPublicKey,
     fileId, 2, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   )
   const open = (file, generation) => crypto.openFileShareEnvelope(
-    sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
+    sealed, owner.driveSigningPublicKey, reader.driveXwingPrivateKey,
     file, generation, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   )
   assert.equal(open(fileId, 2), Buffer.alloc(32, 0x66).toString('base64'))
   assert.throws(() => open(fileId, 3))
   assert.throws(() => crypto.openNamedShareEnvelope(
-    sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
+    sealed, owner.driveSigningPublicKey, reader.driveXwingPrivateKey,
     fileId, 2, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   ))
 }
@@ -772,7 +774,7 @@ assert.deepEqual(
 assert.throws(() => crypto.openPhotosLibrary(libraryVector.first.envelope, ...libraryOwner, Buffer.alloc(32, 0xa2).toString('base64url')))
 assert.throws(() => crypto.openPhotosLibrary(libraryVector.first.envelope, masterKeySet(libraryVector.masterKey), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', libraryVector.recordId))
 // The generic account-record path refuses the purpose.
-assert.throws(() => crypto.openAccountRecord(libraryVector.first.envelope, libraryVector.masterKey, 13, libraryVector.binding))
+assert.throws(() => crypto.openAccountRecord(libraryVector.first.envelope, libraryVector.masterKey, 34, libraryVector.binding))
 const resealed = crypto.sealPhotosLibrary(
   JSON.stringify({ v: 1, favourites: ['33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222'], archived: [], hidden: [], albums: [1] }),
   masterKeySet(libraryVector.masterKey), libraryVector.binding, libraryVector.recordId, 3,
@@ -843,8 +845,8 @@ const fresh = crypto.generateMailAddressKey(masterKeySet(mailVectors.masterKey),
 assert.deepEqual(Object.keys(fresh).sort(), ['envelope', 'fingerprint', 'publicKey', 'sha256Fingerprint'])
 assert.equal(crypto.inspectMailAddressPublicKey(fresh.publicKey, 'carol@kutup.dev').fingerprint, fresh.fingerprint)
 // The generic account-envelope path refuses the mail-key purpose.
-assert.throws(() => crypto.openAccountRecord(fresh.envelope, mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
-assert.throws(() => crypto.sealAccountRecord('AA==', mailVectors.masterKey, 5, 1, mailVectors.binding), /typed export/)
+assert.throws(() => crypto.openAccountRecord(fresh.envelope, mailVectors.masterKey, 23, mailVectors.binding), /typed export/)
+assert.throws(() => crypto.sealAccountRecord('AA==', mailVectors.masterKey, 23, 1, mailVectors.binding), /typed export/)
 
 // Mail between Kutup users (docs/plans/mail.md): a split message opens for
 // each recipient with the shared data packet; fresh ones round-trip.
@@ -943,10 +945,10 @@ const aliceAccount = { server: 'kutup.dev', accountId: '3f1c9a52-6b7e-4f0e-9d1a-
 const bobAccount = { server: 'kutup.dev', accountId: '8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b' }
 const aliceIdentity = crypto.deriveAccountIdentityKeys(mailVectors.masterKey)
 const bobIdentity = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 0x22).toString('base64'))
-const memberOf = (account, identity) => ({ account, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveHpkePublicKey })
+const memberOf = (account, identity) => ({ account, incarnationId: identity.incarnationId, xwingPublicKey: identity.driveXwingPublicKey })
 const groupKey = crypto.generateMailGroupKey('hr@kutup.dev', groupId, 1_790_000_000, [memberOf(aliceAccount, aliceIdentity)])
 assert.equal(groupKey.shares.length, 1)
-const heldBy = (account, identity, share) => ({ account, hpkePrivateKey: identity.driveHpkePrivateKey, share, groupId, fingerprint: groupKey.fingerprint })
+const heldBy = (account, identity, share) => ({ account, hpkePrivateKey: identity.driveXwingPrivateKey, share, groupId, fingerprint: groupKey.fingerprint })
 const aliceHolds = heldBy(aliceAccount, aliceIdentity, groupKey.shares[0])
 const toGroup = crypto.encryptMailMessageAsGroup(aliceHolds, [groupKey.publicKey], new TextEncoder().encode('hr mail'))
 const groupMessage = new Uint8Array([...b64bytes(toGroup.keyPackets[0]), ...toGroup.dataPacket])
@@ -978,7 +980,7 @@ assert.equal(verifyChain(chainVectors.adminRestart).sequence, 1)
 const groupFirstList = { address: 'hr@kutup.dev', sequence: 1, issuedAt: '2026-10-16T12:00:00Z', keys: [{ fingerprint: groupKey.fingerprint, sha256Fingerprint: groupKey.sha256Fingerprint, primary: true, flags: 3 }] }
 const firstSigner = crypto.newMailGroupSigner(groupId, [memberOf(aliceAccount, aliceIdentity)], groupFirstList, undefined, undefined)
 assert.equal(firstSigner.handover, undefined)
-const aliceSigns = { account: aliceAccount, hpkePrivateKey: aliceIdentity.driveHpkePrivateKey, groupId, signer: firstSigner.publicKey, signingShare: firstSigner.shares[0] }
+const aliceSigns = { account: aliceAccount, hpkePrivateKey: aliceIdentity.driveXwingPrivateKey, groupId, signer: firstSigner.publicKey, signingShare: firstSigner.shares[0] }
 const groupSecondList = crypto.signMailGroupKeyList(aliceSigns, { ...groupFirstList, sequence: 2, previousHash: firstSigner.keyList.hash })
 const grown = crypto.verifyMailGroupKeyChain(groupId, firstSigner.publicKey, [firstSigner.keyList, groupSecondList], [])
 assert.equal(grown.sequence, 2)
@@ -988,7 +990,7 @@ const handedOver = crypto.newMailGroupSigner(groupId, [memberOf(bobAccount, bobI
 const third = crypto.verifyMailGroupKeyChain(groupId, firstSigner.publicKey, [firstSigner.keyList, groupSecondList, handedOver.keyList], [handedOver.handover])
 assert.deepEqual(third.signers, [firstSigner.publicKey, handedOver.publicKey])
 const bobSignerShare = crypto.reshareMailGroupSigner(aliceSigns, [memberOf(bobAccount, bobIdentity)])[0]
-crypto.signMailGroupKeyList({ ...aliceSigns, account: bobAccount, hpkePrivateKey: bobIdentity.driveHpkePrivateKey, signingShare: bobSignerShare }, groupFirstList)
+crypto.signMailGroupKeyList({ ...aliceSigns, account: bobAccount, hpkePrivateKey: bobIdentity.driveXwingPrivateKey, signingShare: bobSignerShare }, groupFirstList)
 assert.throws(() => crypto.signMailGroupKeyList({ ...aliceSigns, signingShare: bobSignerShare }, groupFirstList))
 const armoredPgp = crypto.encryptMailPgp(
   masterKeySet(mailVectors.masterKey), mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
@@ -1109,15 +1111,15 @@ const identityVectors = JSON.parse(
 const iv = identityVectors
 const ivAccount = crypto.parseAccountRef(iv.account)
 assert.equal(crypto.signDriveKeyBinding(iv.masterKey, ivAccount, 1), iv.driveKeyBinding)
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), true)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveXwingPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), true)
 // The epoch is signed: the same binding at another epoch fails, and epochs start at 1.
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 2), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveXwingPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 2), false)
 assert.throws(() => crypto.signDriveKeyBinding(iv.masterKey, ivAccount, 0), /epoch/)
 // Another account, a swapped recipient key or signer, another authority: refused.
-assert.equal(crypto.verifyDriveKeyBinding({ ...ivAccount, accountId: '00000000-0000-4000-8000-000000000000' }, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
+assert.equal(crypto.verifyDriveKeyBinding({ ...ivAccount, accountId: '00000000-0000-4000-8000-000000000000' }, iv.authorityPublicKey, iv.driveXwingPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
 assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveSigningPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.driveSigningPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, 'not base64', 1), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.driveSigningPublicKey, iv.driveXwingPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveXwingPublicKey, iv.driveSigningPublicKey, 'not base64', 1), false)
 // An address in place of an account is refused outright.
 assert.throws(() => crypto.signDriveKeyBinding(iv.masterKey, 'alice@kutup.dev', 1))
 assert.deepEqual(crypto.openIdentityPins(masterKeySet(iv.masterKey), iv.binding, iv.sealed), { value: iv.pins, revision: iv.revision })
@@ -1217,26 +1219,33 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
 }
 
 // Account renames (kutup-crypto account_rename): a chain signed by the
-// authority; rollbacks, broken and foreign chains are refused.
+// authority, binding the account id; rollbacks, broken and foreign chains,
+// and the chain looked up for another account id, are refused.
 {
   const v = vectors.accountRename
   for (const statement of v.chain) {
     assert.deepEqual(
-      JSON.parse(crypto.signAccountRename(v.masterKey, statement.sequence, statement.previous, statement.current, statement.issuedAtMs)),
+      JSON.parse(
+        crypto.signAccountRename(v.masterKey, v.accountId, statement.sequence, statement.previous, statement.current, statement.issuedAtMs),
+      ),
       statement,
     )
   }
-  const view = crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain))
+  const view = crypto.verifyAccountRenameChain(v.authorityPublicKey, v.accountId, JSON.stringify(v.chain))
   assert.equal(view.first, v.first)
   assert.equal(view.current, v.current)
+  assert.equal(view.accountId, v.accountId)
   assert.deepEqual(view.addresses, ['alice@kutup.dev', 'alicia@kutup.dev', 'ali@kutup.dev'])
-  const shorter = crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain.slice(0, 1)))
-  crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain), JSON.stringify(shorter.digests))
-  assert.throws(() => crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain.slice(0, 1)), JSON.stringify(view.digests)))
+  const shorter = crypto.verifyAccountRenameChain(v.authorityPublicKey, v.accountId, JSON.stringify(v.chain.slice(0, 1)))
+  crypto.verifyAccountRenameChain(v.authorityPublicKey, v.accountId, JSON.stringify(v.chain), JSON.stringify(shorter.digests))
+  assert.throws(() =>
+    crypto.verifyAccountRenameChain(v.authorityPublicKey, v.accountId, JSON.stringify(v.chain.slice(0, 1)), JSON.stringify(view.digests)),
+  )
   for (const bad of v.invalidChains) {
-    assert.throws(() => crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(bad.chain)), bad.why)
+    assert.throws(() => crypto.verifyAccountRenameChain(v.authorityPublicKey, v.accountId, JSON.stringify(bad.chain)), bad.why)
   }
-  assert.throws(() => crypto.verifyAccountRenameChain(v.otherAuthorityPublicKey, JSON.stringify(v.chain)))
+  assert.throws(() => crypto.verifyAccountRenameChain(v.otherAuthorityPublicKey, v.accountId, JSON.stringify(v.chain)))
+  assert.throws(() => crypto.verifyAccountRenameChain(v.authorityPublicKey, v.otherAccountId, JSON.stringify(v.chain)))
 }
 
 // OPAQUE sign-in (kutup-crypto opaque, suite 1): the browser's client against
@@ -1604,35 +1613,36 @@ const c0Digest = (digest) => {
 // account opens and reseals its own, a peer opens it with the profile key.
 {
   const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/profile-v1.json`, 'utf8'))
-  const master = Buffer.from(v.masterKey, 'base64')
+  // As a page passes them: the master-key set (generation 1 alone).
+  const master = Buffer.from(masterKeySet(v.masterKey), 'base64')
   const upload = v.upload.request
-  const view = crypto.accountProfileOpen(master, 1, upload, v.account, v.binding)
+  const view = crypto.accountProfileOpen(master, upload, v.account, v.binding)
   assert.equal(view.displayName, v.upload.displayName)
   assert.equal(view.avatar, v.upload.avatar)
   assert.equal(view.avatarContentType, v.upload.avatarContentType)
   assert.equal(view.revision, String(v.upload.revision))
-  const lookup = crypto.accountProfileKey(master, 1, upload, v.account, v.binding)
+  const lookup = crypto.accountProfileKey(master, upload, v.account, v.binding)
   assert.equal(lookup.key, v.upload.profileKey)
   assert.deepEqual(crypto.profileLookup(lookup.key), lookup)
   assert.deepEqual(crypto.profileOpenPeer(v.account, upload, lookup.key), view)
-  // Generation 0 does not exist.
-  assert.throws(() => crypto.accountProfileOpen(master, 0, upload, v.account, v.binding))
+  // A bare key is not a master-key set.
+  assert.throws(() => crypto.accountProfileOpen(Buffer.from(v.masterKey, 'base64'), upload, v.account, v.binding))
   // Another account's name or another master key: refused.
   assert.throws(() => crypto.profileOpenPeer('aci:00000000-0000-4000-8000-000000000001@example.com', upload, lookup.key))
-  assert.throws(() => crypto.accountProfileOpen(Buffer.alloc(32, 8), 1, upload, v.account, v.binding))
+  assert.throws(() => crypto.accountProfileOpen(Buffer.from(masterKeySet(Buffer.alloc(32, 8).toString('base64')), 'base64'), upload, v.account, v.binding))
 
   // The next revision keeps the key and opens with the new contents.
-  const next = crypto.accountProfileSeal(master, 1, upload, { displayName: '  Ayşe ', about: 'Merhaba' }, v.account, v.binding)
+  const next = crypto.accountProfileSeal(master, upload, { displayName: '  Ayşe ', about: 'Merhaba' }, v.account, v.binding)
   assert.equal(next.revision, upload.revision + 1)
   assert.equal(next.version, upload.version)
-  const reopened = crypto.accountProfileOpen(master, 1, next, v.account, v.binding)
+  const reopened = crypto.accountProfileOpen(master, next, v.account, v.binding)
   assert.equal(reopened.displayName, 'Ayşe')
   assert.equal(reopened.about, 'Merhaba')
   assert.equal(reopened.avatar, undefined)
   // A first profile, and contents that fail validation.
-  const first = crypto.accountProfileSeal(master, 1, null, { displayName: 'Ali' }, v.account, v.binding)
+  const first = crypto.accountProfileSeal(master, null, { displayName: 'Ali' }, v.account, v.binding)
   assert.equal(first.revision, 1)
-  assert.throws(() => crypto.accountProfileSeal(master, 1, null, { displayName: '   ' }, v.account, v.binding))
+  assert.throws(() => crypto.accountProfileSeal(master, null, { displayName: '   ' }, v.account, v.binding))
   assert.throws(() => crypto.profileLookup('AA=='))
 }
 

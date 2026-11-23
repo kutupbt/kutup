@@ -325,7 +325,8 @@
       "signInRequired": "Bu sunucuda herkese açık bağlantılar yalnızca oturum açmış kişiler için açılır. Oturum açın, sonra bağlantıyı yeniden açın.",
       "badKey": "Bağlantının anahtarı bu albümü açmıyor. Bağlantının tamamını isteyin.",
       "notAlbum": "Bu bağlantı bir albüme değil.",
-      "other": "Bir şeyler ters gitti. Yeniden deneyin."
+      "other": "Bir şeyler ters gitti. Yeniden deneyin.",
+      "newerLink": "Bu bağlantı daha yeni bir Kutup gerektiriyor. Bu sunucunun çalıştırdığından daha yeni bir Kutup sürümüyle oluşturulmuş."
     }
   }
 }

@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::site_settings::CALENDAR_ALARMS_PAGE;
 use crate::AppState;
 
@@ -57,12 +57,12 @@ fn instant(text: &str, what: &str) -> AppResult<time::OffsetDateTime> {
         .map_err(|_| AppError::bad_request(format!("{what} is an RFC 3339 time")))
 }
 
-/// `GET /api/calendar/alarms?start=&end=` — the caller's next alarms in a
+/// `GET /api/v1/calendar/alarms?start=&end=` — the caller's next alarms in a
 /// window, by fire time, `calendarAlarmsPage` at most (Proton's `/alarms`):
 /// the open app fires its own device notifications from these.
 #[utoipa::path(
     get,
-    path = "/api/calendar/alarms",
+    path = "/api/v1/calendar/alarms",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(AlarmsQuery),
@@ -70,10 +70,10 @@ fn instant(text: &str, what: &str) -> AppResult<time::OffsetDateTime> {
 )]
 pub async fn alarms(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<AlarmsQuery>,
 ) -> AppResult<Json<Alarms>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let start = instant(&query.start, "start")?;
     let end = instant(&query.end, "end")?;
     let after_fire = query
@@ -134,19 +134,19 @@ pub struct CalendarSettings {
     pub zone: Option<String>,
 }
 
-/// `GET /api/calendar/settings`
+/// `GET /api/v1/calendar/settings`
 #[utoipa::path(
     get,
-    path = "/api/calendar/settings",
+    path = "/api/v1/calendar/settings",
     tag = "calendar",
     security(("BearerAuth" = [])),
     responses((status = 200, body = CalendarSettings))
 )]
 pub async fn settings(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<CalendarSettings>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let zone: Option<String> =
         sqlx::query_scalar("SELECT zone FROM calendar_account_settings WHERE account_id = $1")
             .bind(user_id)
@@ -155,11 +155,11 @@ pub async fn settings(
     Ok(Json(CalendarSettings { zone }))
 }
 
-/// `PUT /api/calendar/settings` — the account's calendar zone; its all-day
+/// `PUT /api/v1/calendar/settings` — the account's calendar zone; its all-day
 /// reminders move with it (shortly: the reminder job recomputes them).
 #[utoipa::path(
     put,
-    path = "/api/calendar/settings",
+    path = "/api/v1/calendar/settings",
     tag = "calendar",
     security(("BearerAuth" = [])),
     request_body = CalendarSettings,
@@ -167,10 +167,10 @@ pub async fn settings(
 )]
 pub async fn put_settings(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<CalendarSettings>,
 ) -> AppResult<Json<CalendarSettings>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     crate::handlers::calendar::limited(user_id)?;
     if let Some(zone) = &input.zone {
         // The bundled time zone database knows it.
@@ -219,12 +219,12 @@ pub struct CalendarPushSubscription {
     pub auth: String,
 }
 
-/// `PUT /api/calendar/push-subscription` — this signed-in browser takes
+/// `PUT /api/v1/calendar/push-subscription` — this signed-in browser takes
 /// reminder pushes (one subscription per session; signing out ends it).
 /// The push services are Chat's allowlist.
 #[utoipa::path(
     put,
-    path = "/api/calendar/push-subscription",
+    path = "/api/v1/calendar/push-subscription",
     tag = "calendar",
     security(("BearerAuth" = [])),
     request_body = CalendarPushSubscription,
@@ -232,14 +232,14 @@ pub struct CalendarPushSubscription {
 )]
 pub async fn put_push_subscription(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<CalendarPushSubscription>,
 ) -> AppResult<StatusCode> {
     let push = state
         .web_push
         .as_ref()
         .ok_or_else(|| AppError::not_found("Web Push is off on this server"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     crate::handlers::calendar::limited(user_id)?;
     if !push.allowed_endpoint(&input.endpoint) {
         return Err(AppError::bad_request(
@@ -322,17 +322,17 @@ pub async fn put_push_subscription(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/calendar/push-subscription` — this browser takes no more.
+/// `DELETE /api/v1/calendar/push-subscription` — this browser takes no more.
 #[utoipa::path(
     delete,
-    path = "/api/calendar/push-subscription",
+    path = "/api/v1/calendar/push-subscription",
     tag = "calendar",
     security(("BearerAuth" = [])),
     responses((status = 204))
 )]
 pub async fn delete_push_subscription(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<StatusCode> {
     sqlx::query("DELETE FROM calendar_push_subscriptions WHERE session_id = $1")
         .bind(user.session.session_id)

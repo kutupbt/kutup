@@ -39,6 +39,16 @@ pub enum KutupChatError {
     /// from it (`NativeLinkingDevice`), or re-register.
     #[error("this device must be linked from one of the account's devices")]
     LinkRequired,
+    /// The server refuses this app's version: show the store's update prompt.
+    #[error("this app is too old for the server (needs {minimum})")]
+    ClientTooOld { minimum: String },
+    /// The server is older than this app supports.
+    #[error("the server runs an older Kutup than this app supports ({supported})")]
+    ServerTooOld { supported: String },
+    /// The server was reset (another instance id, docs/plans/api-surface.md
+    /// §5): delete the chat store kept for it and sign in again.
+    #[error("the server was reset")]
+    ServerReset,
 }
 
 impl From<ChatError> for KutupChatError {
@@ -67,6 +77,9 @@ impl From<ChatError> for KutupChatError {
             ChatError::SendNotConverged(attempts) => Self::SendNotConverged { attempts },
             ChatError::MissingBundle(device_id) => Self::MissingBundle { device_id },
             ChatError::LinkRequired => Self::LinkRequired,
+            ChatError::ClientTooOld(minimum) => Self::ClientTooOld { minimum },
+            ChatError::ServerTooOld(supported) => Self::ServerTooOld { supported },
+            ChatError::ServerReset => Self::ServerReset,
         }
     }
 }
@@ -86,7 +99,7 @@ pub enum ChatHttpMethod {
     Put,
 }
 
-/// A relative request under the authenticated server API base (`…/api`). The
+/// A relative request under the authenticated server API base (`…/api/v1`). The
 /// platform adapter adds authorization and executes it with URLSession/OkHttp.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ChatHttpRequest {
@@ -109,6 +122,8 @@ pub struct ChatProvisionedSettings {
 pub struct ChatHttpResponse {
     pub status: u16,
     pub body_json: String,
+    /// The answer's `X-Kutup-Instance` header, when it had one.
+    pub instance_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]

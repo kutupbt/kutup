@@ -68,7 +68,7 @@ pub fn seal_group_signing_share(
     key: &GroupSigningKey,
     group_id: &str,
     member: &GroupShareMember<'_>,
-    member_hpke_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
+    member_xwing_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>> {
     seal_group_secret(
         SIGNING_SHARE_DOMAIN,
@@ -76,7 +76,7 @@ pub fn seal_group_signing_share(
         group_id,
         &key.public_key,
         member,
-        member_hpke_public_key,
+        member_xwing_public_key,
     )
 }
 
@@ -437,7 +437,7 @@ mod tests {
                 account: &bob_ref,
                 incarnation_id: &incarnation,
             },
-            &bob.drive_hpke_public_key(),
+            &bob.drive_xwing_public_key(),
         )
         .unwrap();
         let opened = open_group_signing_share(
@@ -445,7 +445,7 @@ mod tests {
             GROUP,
             &key.public_key,
             &bob_ref,
-            bob.drive_hpke_private_key(),
+            bob.drive_xwing_private_key(),
         )
         .unwrap();
         assert_eq!(opened.public_key, key.public_key);
@@ -455,7 +455,7 @@ mod tests {
             GROUP,
             &other.public_key,
             &bob_ref,
-            bob.drive_hpke_private_key()
+            bob.drive_xwing_private_key()
         )
         .is_err());
         let carol = AccountRef::new("kutup.dev", "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70").unwrap();
@@ -464,7 +464,7 @@ mod tests {
             GROUP,
             &key.public_key,
             &carol,
-            bob.drive_hpke_private_key()
+            bob.drive_xwing_private_key()
         )
         .is_err());
     }

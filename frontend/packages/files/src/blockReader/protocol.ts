@@ -130,7 +130,7 @@ export interface DriveBlockSource {
 /** A Chat attachment (docs/chat-media.md): opened against its E2EE descriptor. */
 export interface ChatMediaBlockSource {
   family: 'chatMedia'
-  /** `/api/chat/media/objects/{attachmentId}` on the account's own server, answered with Range. */
+  /** `/api/v1/chat/media/objects/{attachmentId}` on the account's own server, answered with Range. */
   url: string
   attachmentKey: Uint8Array
   attachmentId: string
@@ -161,7 +161,7 @@ export interface OpenedObject {
 
 /** Page → reader Worker. `token` is the bearer token to fetch with from then on ('' for a public link). */
 export type ReaderRequest =
-  | { type: 'open'; id: number; target: BlockReaderTarget; settings: BlockReaderSettings; token: string }
+  | { type: 'open'; id: number; target: BlockReaderTarget; settings: BlockReaderSettings; token: string; client: string | null }
   | { type: 'block'; id: number; index: number; token: string }
   | { type: 'signedBy'; id: number; key: string }
   | { type: 'serve'; range: StreamRange; mimeType: string; token: string }

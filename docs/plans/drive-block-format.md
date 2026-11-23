@@ -22,7 +22,7 @@ Slice 2 (the server) is built too:
   federated uploads (`drive_blob.rs`), for blobs naming a `revisionId`;
 - the federated range proxy (`drive_federation_ranges.rs`);
 - the §7 settings, with the upload and version limits, in the admin UI and
-  `GET /api/drive/limits`.
+  `GET /api/v1/drive/limits`.
 
 Slice 7 removed the streaming-format uploads that worked beside it. The user's decision: "follow proton drive". Reference:
 Proton's web client, `kutup-references/WebClients`. Its new
@@ -362,7 +362,7 @@ reader requires the served revision to be the named one:
   so the smallest binding is the metadata itself: every block-format state
   is stored with the file's next metadata naming it (the version request
   carries `metadataEnvelope` and `metadataRevision`, as a whole-file save
-  does; a `409 revision_conflict` returns the current metadata, and the
+  does; a `409 revisionConflict` returns the current metadata, and the
   saver seals on top of it once). The public page asks for that state by id
   (`?revision=`) and refuses any other. Signed-in readers and the live
   session still take the newest state the version list shows (the live
@@ -404,9 +404,9 @@ header. `files.content_revision_id` names the original's.
 - Multipart uploads and `POST /files/{id}/versions` validate the same way.
 
 **Range GET on every content route:**
-- `GET /api/files/:id/download`, `/original` (renamed to the revision
-  route), `/api/files/:id/versions/:vid/download`;
-- `GET /api/share/:token/download/:fileId`;
+- `GET /api/v1/drive/files/:id/download`, `/original` (renamed to the revision
+  route), `/api/v1/drive/files/:id/versions/:vid/download`;
+- `GET /api/v1/drive/public-links/:token/files/:fileId/download`;
 - the Chat media download route and the federated proxies below.
 
 Each route takes one `bytes=a-b` range, or `a-`, or `-k` (the last k bytes).
@@ -577,7 +577,7 @@ copied.
    are gone). One opener does it for all of them (`@kutup/files`
    `stream/playback.ts` `openMediaPlayback`; drive-core `playback.ts`
    `openPlayback`, `openPublicPlayback`, `usePlaybackOf`). The limits come
-   from `GET /api/drive/limits`; a public link's page has no session, so
+   from `GET /api/v1/drive/limits`; a public link's page has no session, so
    its reader fetches with the link's key and no token, under the
    defaults.
 
@@ -662,7 +662,7 @@ worker (open question 7).
     `Upload-Length` the object's length, sealed block by block, two blocks a
     PATCH, then the commit with `FileMetadataV2` (`originalRevisionId` on a
     new file's first) and the `RevisionContent` envelope. `409
-    revision_conflict` reads the file again and seals on top once;
+    revisionConflict` reads the file again and seals on top once;
     `alreadyCommitted` is success; a new file's taken name moves to the next
     free one (up to 3); `objectMissing` and other refusals cancel the
     upload; `notUploaded` and lost connections keep the record.
@@ -797,7 +797,7 @@ rPGP, and it is additive anyway.
 The block size is **not** a setting. It is a fact of suite 2, like the 5 MiB
 chunk of suite 1, and changing it changes the bytes. The limits around it
 are site settings (`site_settings.rs` `NumericSetting`, in the admin UI, per
-the standing rule). The client reads them from `GET /api/drive/limits`.
+the standing rule). The client reads them from `GET /api/v1/drive/limits`.
 
 | Setting | Default | Bounds |
 |---|---|---|
@@ -991,7 +991,7 @@ Each slice is a PR.
    - Every suite-2 upload (tus file and version, multipart file and version,
      federated) lands as an *uploaded revision*: stored, checked (header,
      trailer, structure), counted in quota, but not current.
-   - `POST /api/files/{id}/revisions/{revisionId}/commit` with
+   - `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit` with
      `{ metadataEnvelope, metadataRevision }`: the `FileMetadataV2` sealed
      with `content = { revisionId, manifestSha256 }`. In one transaction the
      server checks the revision is uploaded and belongs to the file, takes
@@ -1012,7 +1012,7 @@ Each slice is a PR.
      row or stores the version as a tus version lands (docs/api.md).
    - Web side: the client picks the revision id, sends it in the tus
      `Upload-Metadata`, and commits after the last PATCH (`commit.ts`). A
-     `409 revision_conflict` re-reads the file from its folder's listing and
+     `409 revisionConflict` re-reads the file from its folder's listing and
      seals the metadata again on top of it, once (a version keeps a name
      changed meanwhile); `alreadyCommitted` is success. A refusal at the
      commit (name taken, file changed) cancels the upload (tus DELETE).
@@ -1085,7 +1085,7 @@ Each slice is a PR.
      are never fetched or opened.
    - Incomplete multipart uploads whose abort failed after their row went:
      the upload sweep aborts those no row names once older than
-     `storage_incomplete_multipart_max_age_seconds` (a day by default;
+     `server.storage.incomplete_multipart_max_age_seconds` (a day by default;
      docs/self-hosting.md has the matching bucket rule).
 4. **Download and streaming.** Built (2026-11-12, §4).
    - The block reader Worker and `fetchDecrypt` on blocks.

@@ -71,7 +71,7 @@ export interface DefaultReminders {
 export interface CalendarRow {
   id: string
   /** The owner's account id (on this server): who shared the passphrase. */
-  ownerId: string
+  ownerAccountId: string
   publicKey: string
   fingerprint: string
   lockedSecretKey: string
@@ -161,7 +161,7 @@ async function unlock(session: Session, row: CalendarRow): Promise<UnlockedCalen
   let found = unlocked.get(cacheKey)
   if (!found) {
     found = (async () => {
-      if (row.ownerId !== session.userId) {
+      if (row.ownerAccountId !== session.accountId) {
         // Shared calendars come in E3, with their owners' verified keys.
         throw new Error('a calendar of another account')
       }
@@ -489,7 +489,7 @@ export async function loadEvents(
 
 /**
  * One change refused by an events sync, with its code (`uidTaken`,
- * `eventLimit`, `revision_conflict` when another device saved first,
+ * `eventLimit`, `revisionConflict` when another device saved first,
  * `sequenceBehind`…).
  */
 export class EventRefusedError extends Error {
@@ -565,7 +565,7 @@ export async function deleteEvent(
   await syncOne(calendar, addressId, { delete: { id: existing.id, baseRevision: existing.revision } })
 }
 
-/** One of the caller's alarms (`GET /api/calendar/alarms`). */
+/** One of the caller's alarms (`GET /api/v1/calendar/alarms`). */
 export interface Alarm {
   calendarId: string
   eventId: string

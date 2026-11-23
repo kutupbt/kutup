@@ -31,7 +31,7 @@ export interface CurrentLedgerEntity {
 
 /** Whose ledger: the signed-in account (`session`). */
 export interface LedgerAccount {
-  userId: string
+  accountId: string
   masterKeys: MasterKeys
   roots: AccountRoots
   /** What the account's sealed records are bound to (`session.envelopeBinding`). */

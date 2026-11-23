@@ -29,11 +29,13 @@ test('uploading a folder recreates its tree in Drive', async ({ browser }) => {
     const page = await openDrive(context)
     const folders: string[] = []
     const uploads: string[] = []
+    const commits: string[] = []
     page.on('response', (response) => {
       if (response.request().method() !== 'POST' || !response.ok()) return
       const pathname = new URL(response.url()).pathname
-      if (/^\/api\/collections\/?$/.test(pathname)) folders.push(pathname)
-      if (/^\/api\/uploads\/?$/.test(pathname)) uploads.push(pathname)
+      if (/^\/api\/v1\/drive\/collections\/?$/.test(pathname)) folders.push(pathname)
+      if (/^\/api\/v1\/drive\/uploads\/?$/.test(pathname)) uploads.push(pathname)
+      if (/^\/api\/v1\/drive\/files\/[^/]+\/revisions\/[^/]+\/commit$/.test(pathname)) commits.push(pathname)
     })
 
     await page.getByRole('button', { name: 'New' }).first().click()
@@ -42,6 +44,9 @@ test('uploading a folder recreates its tree in Drive', async ({ browser }) => {
     // Two folders (the root and 2024), one encrypted upload per file.
     await expect.poll(() => folders.length, { timeout: 60_000 }).toBeGreaterThanOrEqual(2)
     await expect.poll(() => uploads.length, { timeout: 60_000 }).toBeGreaterThanOrEqual(3)
+    // Each upload is in Drive once its revision is committed, after its
+    // last block: a reload before that cancels the upload in flight.
+    await expect.poll(() => commits.length, { timeout: 60_000 }).toBeGreaterThanOrEqual(3)
 
     await page.reload()
     await openItem(page, root)

@@ -6,25 +6,15 @@ import {
   resetLocalChatDevice,
 } from './local-store'
 
-vi.mock('@kutup/session/apiBase', () => ({
-  resolveApiBase: vi.fn().mockResolvedValue('/api'),
-}))
-
 describe('local Chat device store', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
-  it('derives a stable opaque account-scoped device database name', async () => {
-    const first = await chatDeviceDatabaseName('account-1')
-    const repeated = await chatDeviceDatabaseName('account-1')
-    const other = await chatDeviceDatabaseName('account-2')
-
-    expect(first).toMatch(/^kutup-chat-v2:[0-9a-f]{32}$/u)
-    expect(repeated).toBe(first)
-    expect(other).not.toBe(first)
-    expect(first).not.toContain('account-1')
+  it("names the device database by the account's permanent id", async () => {
+    expect(await chatDeviceDatabaseName('account-1')).toBe('kutup.chat.store:account-1')
+    expect(await chatDeviceDatabaseName('account-2')).toBe('kutup.chat.store:account-2')
   })
 
   it('deletes only the account-scoped device database', async () => {

@@ -15,7 +15,7 @@ use crate::account_data::KeyOwner;
 use crate::error::{AppError, AppResult};
 use crate::handlers::{octet_stream_response, trusted_uuid};
 use crate::mail::sealed::{self, Opener};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 pub(crate) const FOLDERS: [&str; 8] = [
@@ -56,7 +56,7 @@ pub struct MailMessage {
     pub labels: Vec<String>,
     pub seen: bool,
     pub starred: bool,
-    /// `zero_access` (encrypted on arrival) or `end_to_end`.
+    /// `zeroAccess` (encrypted on arrival) or `endToEnd`.
     pub protection: String,
     /// Stored (encrypted) size in bytes.
     pub size: i64,
@@ -90,7 +90,7 @@ pub struct MailMessage {
     /// Its attached files (Proton's AttachmentsMetadata), for the list.
     pub attachments: Vec<crate::mail::headers::AttachmentMeta>,
     /// A scheduled message (folder `scheduled`): when it is sent, and its
-    /// held send, to take it back with `POST /api/mail/outbox/{id}/cancel`.
+    /// held send, to take it back with `POST /api/v1/mail/outbox/{id}/cancel`.
     #[serde(with = "time::serde::rfc3339::option")]
     pub scheduled_at: Option<OffsetDateTime>,
     pub outbox_id: Option<String>,
@@ -441,11 +441,11 @@ fn parse_cursor(value: &str, sort: Sort) -> AppResult<Cursor> {
     })
 }
 
-/// `GET /api/mail/messages?folder=&q=&before=&limit=` — one folder (or
+/// `GET /api/v1/mail/messages?folder=&q=&before=&limit=` — one folder (or
 /// Starred, or all mail), newest first, optionally searched.
 #[utoipa::path(
     get,
-    path = "/api/mail/messages",
+    path = "/api/v1/mail/messages",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(MailListQuery),
@@ -456,7 +456,7 @@ fn parse_cursor(value: &str, sort: Sort) -> AppResult<Cursor> {
 )]
 pub async fn list_messages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<MailListQuery>,
 ) -> AppResult<Json<MailMessagePage>> {
     list_page(&state, &user, query).await
@@ -481,12 +481,12 @@ pub struct SearchIndexPage {
     pub total: Option<i64>,
 }
 
-/// `GET /api/mail/search-index` — every message of your own mailbox, newest
+/// `GET /api/v1/mail/search-index` — every message of your own mailbox, newest
 /// first, for the browser to open and index (docs/plans/mail-body-search.md;
 /// it keeps Drafts by their rows alone).
 #[utoipa::path(
     get,
-    path = "/api/mail/search-index",
+    path = "/api/v1/mail/search-index",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(SearchIndexQuery),
@@ -497,10 +497,10 @@ pub struct SearchIndexPage {
 )]
 pub async fn search_index(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<SearchIndexQuery>,
 ) -> AppResult<Json<SearchIndexPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(200).clamp(1, 200);
     let before = query
         .before
@@ -609,7 +609,7 @@ pub(crate) const SEARCH_FEED: crate::change_feed::Feed = crate::change_feed::Fee
     "mail_change_floors",
 );
 
-/// `GET /api/mail/search-index/changes?since=` — what changed in your own
+/// `GET /api/v1/mail/search-index/changes?since=` — what changed in your own
 /// mailbox since `since`, for body search to keep the list rows it holds
 /// current (docs/plans/mail-body-search.md; Proton's event loop). Only
 /// changes made by transactions that have all finished are answered, so
@@ -617,7 +617,7 @@ pub(crate) const SEARCH_FEED: crate::change_feed::Feed = crate::change_feed::Fee
 /// feed is now.
 #[utoipa::path(
     get,
-    path = "/api/mail/search-index/changes",
+    path = "/api/v1/mail/search-index/changes",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(SearchChangesQuery),
@@ -628,10 +628,10 @@ pub(crate) const SEARCH_FEED: crate::change_feed::Feed = crate::change_feed::Fee
 )]
 pub async fn search_index_changes(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<SearchChangesQuery>,
 ) -> AppResult<Json<SearchChanges>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(500).clamp(1, 500);
     let since = query
         .since
@@ -704,10 +704,10 @@ pub(crate) async fn forget_old_tombstones(pool: &sqlx::PgPool) -> sqlx::Result<u
 /// A page of a place.
 async fn list_page(
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     query: MailListQuery,
 ) -> AppResult<Json<MailMessagePage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mailbox = mailbox(state, user_id, query.group.as_deref()).await?;
     let owner = mailbox.owner();
     let opener = mailbox.opener(state).await?;
@@ -876,12 +876,12 @@ pub struct SearchAddressesQuery {
     pub group: Option<String>,
 }
 
-/// `GET /api/mail/search-addresses` — what advanced search's Address can
+/// `GET /api/v1/mail/search-addresses` — what advanced search's Address can
 /// be (Proton's): your own addresses and the distribution lists you are
 /// in, or a shared mailbox's own address.
 #[utoipa::path(
     get,
-    path = "/api/mail/search-addresses",
+    path = "/api/v1/mail/search-addresses",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(SearchAddressesQuery),
@@ -889,10 +889,10 @@ pub struct SearchAddressesQuery {
 )]
 pub async fn search_addresses(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<SearchAddressesQuery>,
 ) -> AppResult<Json<Vec<String>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, query.group.as_deref())
         .await?
         .owner();
@@ -1213,13 +1213,13 @@ pub struct MailReceiptSent {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/{id}/receipt` — notes that the reader sent the
+/// `POST /api/v1/mail/messages/{id}/receipt` — notes that the reader sent the
 /// read receipt the message asked for (Proton's "Send read receipt"). The
 /// client sends the receipt itself, as mail (RFC 8098), so its contents
 /// stay end to end where the original was.
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/{id}/receipt",
+    path = "/api/v1/mail/messages/{id}/receipt",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Message id")),
@@ -1231,11 +1231,11 @@ pub struct MailReceiptSent {
 )]
 pub async fn receipt_sent(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<MailReceiptSent>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, request.group.as_deref())
         .await?
         .owner();
@@ -1267,12 +1267,12 @@ pub struct UnsubscribeMailList {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/{id}/unsubscribe` — unsubscribes from the
+/// `POST /api/v1/mail/messages/{id}/unsubscribe` — unsubscribes from the
 /// message's mailing list (Proton's one-click unsubscribe), or records that
 /// the reader did, so the message says "Unsubscribed".
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/{id}/unsubscribe",
+    path = "/api/v1/mail/messages/{id}/unsubscribe",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Message id")),
@@ -1285,11 +1285,11 @@ pub struct UnsubscribeMailList {
 )]
 pub async fn unsubscribe(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UnsubscribeMailList>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, request.group.as_deref())
         .await?
         .owner();
@@ -1324,11 +1324,11 @@ pub async fn unsubscribe(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-/// `GET /api/mail/messages/{id}/content` — the stored message: a binary
+/// `GET /api/v1/mail/messages/{id}/content` — the stored message: a binary
 /// OpenPGP message encrypted to the address key.
 #[utoipa::path(
     get,
-    path = "/api/mail/messages/{id}/content",
+    path = "/api/v1/mail/messages/{id}/content",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Message id"), MailboxQuery),
@@ -1339,11 +1339,11 @@ pub async fn unsubscribe(
 )]
 pub async fn message_content(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Query(scope): Query<MailboxQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, scope.group.as_deref())
         .await?
         .owner();
@@ -1423,11 +1423,11 @@ pub struct UpdatedMailMessages {
     pub updated: u64,
 }
 
-/// `PATCH /api/mail/messages` — marks read or unread, stars, or files up
+/// `PATCH /api/v1/mail/messages` — marks read or unread, stars, or files up
 /// to 500 messages at once. Moving to Trash marks them read, as Proton does.
 #[utoipa::path(
     patch,
-    path = "/api/mail/messages",
+    path = "/api/v1/mail/messages",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = UpdateMailMessages,
@@ -1438,10 +1438,10 @@ pub struct UpdatedMailMessages {
 )]
 pub async fn update_messages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<UpdateMailMessages>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, request.group.as_deref())
         .await?
         .owner();
@@ -1597,12 +1597,12 @@ pub struct SnoozeMailMessages {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/snooze` — Proton's Snooze: Inbox messages wait
+/// `POST /api/v1/mail/messages/snooze` — Proton's Snooze: Inbox messages wait
 /// in Snoozed until `until`, then come back unread; without `until`,
 /// snoozed messages come back now.
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/snooze",
+    path = "/api/v1/mail/messages/snooze",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = SnoozeMailMessages,
@@ -1613,10 +1613,10 @@ pub struct SnoozeMailMessages {
 )]
 pub async fn snooze_messages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<SnoozeMailMessages>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, request.group.as_deref())
         .await?
         .owner();
@@ -1662,7 +1662,7 @@ pub struct BatchMailMessages {
     /// All mail is not one (Proton's select all leaves it out).
     pub place: String,
     pub seen: Option<bool>,
-    /// As in `PATCH /api/mail/messages`.
+    /// As in `PATCH /api/v1/mail/messages`.
     pub folder: Option<String>,
     pub custom_folder: Option<String>,
     #[serde(default)]
@@ -1673,12 +1673,12 @@ pub struct BatchMailMessages {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/batch` — Proton's select all: marks read or
+/// `POST /api/v1/mail/messages/batch` — Proton's select all: marks read or
 /// unread, files or labels every message in a place at once, past the
-/// loaded page; the same rules as `PATCH /api/mail/messages`.
+/// loaded page; the same rules as `PATCH /api/v1/mail/messages`.
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/batch",
+    path = "/api/v1/mail/messages/batch",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = BatchMailMessages,
@@ -1689,10 +1689,10 @@ pub struct BatchMailMessages {
 )]
 pub async fn batch_messages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<BatchMailMessages>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, request.group.as_deref())
         .await?
         .owner();
@@ -1763,12 +1763,12 @@ pub struct DeleteMailMessages {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/delete` — deletes messages for good, only from
+/// `POST /api/v1/mail/messages/delete` — deletes messages for good, only from
 /// Trash, Spam and Drafts (elsewhere the client moves to Trash first, as
 /// Proton does). Frees their storage at once.
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/delete",
+    path = "/api/v1/mail/messages/delete",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = DeleteMailMessages,
@@ -1776,10 +1776,10 @@ pub struct DeleteMailMessages {
 )]
 pub async fn delete_messages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<DeleteMailMessages>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let ids = parse_ids(&request.ids)?;
     let mailbox = mailbox(&state, user_id, request.group.as_deref()).await?;
     let deleted = delete_for_good(&state, mailbox, &ids, &["trash", "spam", "drafts"]).await?;
@@ -1817,22 +1817,22 @@ pub(crate) async fn delete_for_good(
     .await?;
     // A distribution-list copy only drops the member's row: the shared data
     // packet is the group's, released once nobody holds it.
-    let deleted: Vec<(String, String, i64, bool)> = sqlx::query_as(
+    let deleted: Vec<(String, i64, bool)> = sqlx::query_as(
         "DELETE FROM mail_messages WHERE mailbox_owner = $1 AND id = ANY($2) AND folder = ANY($3)
-         RETURNING object_key, object_version, size_bytes, key_packet IS NOT NULL",
+         RETURNING object_key, size_bytes, key_packet IS NOT NULL",
     )
     .bind(owner)
     .bind(ids)
     .bind(folders)
     .fetch_all(&mut *tx)
     .await?;
-    let list_copies = deleted.iter().filter(|(_, _, _, shared)| *shared).count();
-    let messages: Vec<(String, String, i64)> = deleted
+    let list_copies = deleted.iter().filter(|(_, _, shared)| *shared).count();
+    let messages: Vec<(String, i64)> = deleted
         .iter()
-        .filter(|(_, _, _, shared)| !*shared)
-        .map(|(key, version, size, _)| (key.clone(), version.clone(), *size))
+        .filter(|(_, _, shared)| !*shared)
+        .map(|(key, size, _)| (key.clone(), *size))
         .collect();
-    let freed: i64 = messages.iter().map(|(_, _, size)| size).sum::<i64>()
+    let freed: i64 = messages.iter().map(|(_, size)| size).sum::<i64>()
         + attachments.iter().map(|(_, size)| size).sum::<i64>();
     let payer = match mailbox {
         Mailbox::Own(_) => crate::storage_pool::Payer::Account(owner),
@@ -1841,12 +1841,8 @@ pub(crate) async fn delete_for_good(
     crate::storage_pool::charge(&mut *tx, payer, -freed).await?;
     tx.commit().await?;
     // The rows are gone; a failed object delete leaves work for the sweep.
-    for (key, version) in messages
-        .iter()
-        .map(|(key, version, _)| (key.as_str(), version.as_str()))
-        .chain(attachments.iter().map(|(key, _)| (key.as_str(), "")))
-    {
-        if let Err(error) = state.storage.delete_stored(key, version).await {
+    for (key, _) in messages.iter().chain(&attachments) {
+        if let Err(error) = state.storage.delete(key).await {
             tracing::warn!(error = %error, "mail: deleted message object left for the sweep");
         }
     }
@@ -1878,12 +1874,12 @@ pub struct MailCountsQuery {
     pub conversations: bool,
 }
 
-/// `GET /api/mail/counts` — unread and total per folder, for Starred, and
+/// `GET /api/v1/mail/counts` — unread and total per folder, for Starred, and
 /// for each of the account's folders (`folder:<id>`) and labels
 /// (`label:<id>`, outside Spam and Trash); by conversation when asked.
 #[utoipa::path(
     get,
-    path = "/api/mail/counts",
+    path = "/api/v1/mail/counts",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(MailCountsQuery),
@@ -1891,10 +1887,10 @@ pub struct MailCountsQuery {
 )]
 pub async fn counts(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(scope): Query<MailCountsQuery>,
 ) -> AppResult<Json<Vec<MailFolderCount>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, scope.group.as_deref())
         .await?
         .owner();
@@ -1936,11 +1932,11 @@ pub async fn counts(
     ))
 }
 
-/// `GET /api/mail/threads/{id}` — every message of one of your threads,
+/// `GET /api/v1/mail/threads/{id}` — every message of one of your threads,
 /// oldest first.
 #[utoipa::path(
     get,
-    path = "/api/mail/threads/{id}",
+    path = "/api/v1/mail/threads/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Thread id"), MailboxQuery),
@@ -1951,11 +1947,11 @@ pub async fn counts(
 )]
 pub async fn thread(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Query(scope): Query<MailboxQuery>,
 ) -> AppResult<Json<Vec<MailMessage>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mailbox = mailbox(&state, user_id, scope.group.as_deref()).await?;
     let owner = mailbox.owner();
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;

@@ -79,11 +79,11 @@ describe('free names', () => {
 
 describe('a taken name', () => {
   it('is read from the server’s 409', () => {
-    const taken = nameTakenFromBody(409, { error: 'x', code: 'name_taken', holder: { kind: 'file', id: 'f1', contentHash: 'c' } })
+    const taken = nameTakenFromBody(409, { error: 'x', code: 'nameTaken', holder: { kind: 'file', id: 'f1', contentHash: 'c' } })
     expect(taken?.holder).toEqual({ kind: 'file', id: 'f1', contentHash: 'c' })
-    expect(nameTakenFromBody(409, { error: 'x', code: 'name_taken' })?.holder).toBeNull()
+    expect(nameTakenFromBody(409, { error: 'x', code: 'nameTaken' })?.holder).toBeNull()
     expect(nameTakenFromBody(409, { error: 'folder key changed' })).toBeNull()
-    expect(nameTakenFromBody(400, { code: 'name_taken' })).toBeNull()
+    expect(nameTakenFromBody(400, { code: 'nameTaken' })).toBeNull()
   })
 
   it('is recognised from an upload too', () => {

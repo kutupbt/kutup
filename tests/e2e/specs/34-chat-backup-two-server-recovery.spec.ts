@@ -270,7 +270,7 @@ test.describe('two-server continuous backup recovery', () => {
     const transferRequests: string[] = []
     const mediaGets = { a: [] as string[], b: [] as string[] }
     const watch = (context: BrowserContext, side: 'a' | 'b') => {
-      void context.route('**/api/chat/media/objects/*', (route) => route.fulfill({ status: 404 }))
+      void context.route('**/api/v1/chat/media/objects/*', (route) => route.fulfill({ status: 404 }))
       context.on('request', (request) => {
         if (request.url().includes('history-transfer')) transferRequests.push(request.url())
         const path = new URL(request.url()).pathname
@@ -301,7 +301,7 @@ test.describe('two-server continuous backup recovery', () => {
     expect(mediaGets).toEqual({ a: [], b: [] })
     const directProtectedDownload = restoredB.waitForResponse((response) => {
       const path = new URL(response.url()).pathname
-      return response.request().method() === 'GET' && path.includes('/api/chat/backup/media/') && response.ok()
+      return response.request().method() === 'GET' && path.includes('/api/v1/chat/backup/media/') && response.ok()
     })
     await restoredB.getByRole('button', { name: `Download ${directAttachment} into Kutup` }).click()
     await directProtectedDownload

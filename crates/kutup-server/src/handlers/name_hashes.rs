@@ -14,7 +14,7 @@ use crate::drive_names::{self, Place};
 use crate::error::{AppError, AppResult};
 use crate::handlers::drive_move::writable_folder;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -24,13 +24,13 @@ pub struct ContentHashRequest {
     pub content_hash: String,
 }
 
-/// `PUT /api/files/{id}/content-hash` — what a file's content is recognised
+/// `PUT /api/v1/drive/files/{id}/content-hash` — what a file's content is recognised
 /// by in its folder, recorded once the upload has read it all. Whoever can
 /// write the folder (or edit the file shared by itself).
 #[utoipa::path(
     put,
-    path = "/api/files/{id}/content-hash",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/content-hash",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = ContentHashRequest,
@@ -38,11 +38,11 @@ pub struct ContentHashRequest {
 )]
 pub async fn set_content_hash(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<ContentHashRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let hash = drive_names::parse_content_hash(Some(&req.content_hash))?
         .ok_or_else(|| AppError::bad_request("invalid content hash"))?;
@@ -59,7 +59,7 @@ pub async fn set_content_hash(
     if !crate::drive_writes::is_file_share_editor(&state.pool, user_id, file_id).await? {
         writable_folder(&mut tx, user_id, folder).await?;
     }
-    sqlx::query("UPDATE drive_files SET content_hash = $2 WHERE id = $1")
+    sqlx::query("UPDATE drive_files SET content_hash = decode($2, 'hex') WHERE id = $1")
         .bind(file_id)
         .bind(&hash)
         .execute(&mut *tx)
@@ -86,15 +86,15 @@ pub struct AvailableHashes {
     pub available: Vec<String>,
 }
 
-/// `POST /api/collections/{id}/available-hashes` — which of these names are
+/// `POST /api/v1/drive/collections/{id}/available-hashes` — which of these names are
 /// free in the folder (Proton Drive's `checkAvailableHashes`): "Keep both"
 /// and a restore into a taken name pick `name (n)` against the server, not a
 /// listing that may be stale. Whoever can write the folder, ten at a time,
 /// rate-limited per account; it tells no more than listing the folder does.
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/available-hashes",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/available-hashes",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Folder id")),
     request_body = AvailableHashesRequest,
@@ -102,11 +102,11 @@ pub struct AvailableHashes {
 )]
 pub async fn available_hashes(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<AvailableHashesRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let folder = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     writable_folder(&mut tx, user_id, folder).await?;
@@ -115,22 +115,22 @@ pub async fn available_hashes(
     Ok(Json(AvailableHashes { available }).into_response())
 }
 
-/// `POST /api/drive/top-level-available-hashes` — the same among the
+/// `POST /api/v1/drive/top-level-available-hashes` — the same among the
 /// account's top-level folders.
 #[utoipa::path(
     post,
-    path = "/api/drive/top-level-available-hashes",
-    tag = "collections",
+    path = "/api/v1/drive/top-level-available-hashes",
+    tag = "drive",
     security(("BearerAuth" = [])),
     request_body = AvailableHashesRequest,
     responses((status = 200, description = "The free ones", body = AvailableHashes))
 )]
 pub async fn top_level_available_hashes(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<AvailableHashesRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let available = free_of(&mut tx, Place::TopLevel(user_id), user_id, &req).await?;
     tx.commit().await?;

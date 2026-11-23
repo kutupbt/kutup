@@ -2,7 +2,7 @@
 //!
 //! The server is a blind relay: it verifies each frame's Ed25519 signature (never decrypts)
 //! against the frame key the sender's account manifest lists for its device
-//! (docs/plans/one-device-list.md), persists the durable kinds to `file_update_log`, and fans
+//! (docs/plans/one-device-list.md), persists the durable kinds to `collab_update_log`, and fans
 //! frames out to the other peers in the file's room, each named by its sender account
 //! (`envelope::deliver`). Auth (a device ticket or token + device credential, file access)
 //! happens before the upgrade; `handle_connection` is the per-connection coroutine: hello →
@@ -25,7 +25,7 @@ use crate::AppState;
 use kutup_crypto::account_ref::AccountRef;
 
 /// Query params on the WS URL. Browsers can't set headers on `new WebSocket(url)`, so a
-/// device ticket (`POST /api/device-ticket`) arrives here; a native client sends its token
+/// device ticket (`POST /api/v1/account/devices/tickets`) arrives here; a native client sends its token
 /// and `X-Kutup-Device` instead.
 #[derive(Debug, Deserialize)]
 pub struct CollabQuery {
@@ -69,8 +69,8 @@ pub(crate) struct PeerSummary {
     /// The tab's id (see `CollabQuery::tab`); omitted for an older client.
     #[serde(skip_serializing_if = "String::is_empty")]
     tab: String,
-    #[serde(rename = "userId")]
-    user_id: String,
+    #[serde(rename = "accountId")]
+    account_id: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     username: String,
 }
@@ -100,13 +100,13 @@ struct PeersMsg {
     kind: &'static str,
 }
 
-/// `GET /api/files/{fileId}/collab/ws` — authenticates, then upgrades. Mirrors
+/// `GET /api/v1/drive/files/{fileId}/collab/ws` — authenticates, then upgrades. Mirrors
 /// `PreUpgrade` + `Upgrade`: all access checks run here so the upgraded connection trusts
 /// the resolved identity.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/collab/ws",
-    tag = "collab",
+    path = "/api/v1/drive/files/{fileId}/collab/ws",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(
         ("fileId" = String, Path, description = "File id"),
@@ -124,7 +124,7 @@ pub async fn ws(
     let device = authenticate_socket(&state, &headers, &q).await?;
     // Anyone who may read the file joins; only editors' edits are kept.
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    let access = file_access(&state.pool, device.user_id, file_uuid)
+    let access = file_access(&state.pool, device.account_id, file_uuid)
         .await?
         .ok_or_else(|| AppError::not_found("file not found"))?;
     if access == Access::None {
@@ -268,7 +268,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
     let hub = state.hub.clone();
     let (file_id, file_uuid) = (conn.file_id.clone(), conn.file_uuid);
     let device = &conn.device;
-    let user_uuid = device.user_id;
+    let user_uuid = device.account_id;
 
     // Username + color for the peer-list (best-effort).
     let (username, color): (String, String) = sqlx::query_as(
@@ -406,7 +406,7 @@ pub(crate) fn peer_summaries(hub: &Hub, file_id: &str) -> Vec<PeerSummary> {
             color: p.color.clone(),
             device_id: p.device_id,
             tab: p.tab.clone(),
-            user_id: p.user_id.clone(),
+            account_id: p.account_id.clone(),
             username: p.username.clone(),
         })
         .collect()
@@ -539,9 +539,9 @@ async fn trim_log(
     tx.commit().await
 }
 
-/// Deletes the rows of `delete` (a `DELETE FROM file_update_log l ...
+/// Deletes the rows of `delete` (a `DELETE FROM collab_update_log l ...
 /// RETURNING l.*` statement) and raises each sender's floor
-/// (`file_sender_floors`) to the highest counter it took, in one statement,
+/// (`collab_sender_floors`) to the highest counter it took, in one statement,
 /// so a trimmed frame stays a replay. Every deletion of log rows goes
 /// through here. The number of rows deleted.
 pub(crate) fn trimming(delete: &str) -> String {
@@ -665,7 +665,7 @@ pub(crate) async fn accept_frame(
     // started with: the device listed itself again since, or the frame lies.
     if f.manifest_sequence > device.manifest_sequence {
         let now =
-            crate::account_devices::frame_device(state, device.user_id, device.device_id as i32)
+            crate::account_devices::frame_device(state, device.account_id, device.device_id as i32)
                 .await;
         if !now.is_ok_and(|now| {
             now.frame_key == device.frame_key && f.manifest_sequence <= now.manifest_sequence
@@ -701,7 +701,7 @@ pub(crate) async fn accept_frame(
     // (a share can be narrowed while the socket is open).
     // A failed check never lets the edit through: it closes the socket, as
     // a definite "no" does (the client reconnects).
-    match file_access(&state.pool, device.user_id, file_uuid).await {
+    match file_access(&state.pool, device.account_id, file_uuid).await {
         Ok(Some(Access::Write)) => {}
         Ok(Some(Access::Read)) => return FrameOutcome::Dropped,
         _ => return FrameOutcome::Close,
@@ -738,7 +738,7 @@ pub(crate) async fn accept_frame(
     // client knows every frame up to a position it has seen is applied.
     let log_sender = LogSender {
         domain: None,
-        account: device.user_id,
+        account: device.account_id,
         device: device.device_id,
     };
     let Ok(seq) = persist_frame(state, file_uuid, log_sender, &f, data).await else {
@@ -840,7 +840,7 @@ async fn sender_seq_high(
                           AND sender_device_id = $3), 0))",
     )
     .bind(file_uuid)
-    .bind(device.user_id)
+    .bind(device.account_id)
     .bind(device.device_id as i32)
     .fetch_one(pool)
     .await
@@ -885,7 +885,7 @@ pub(crate) fn log_lock_key(file_uuid: Uuid) -> i64 {
     (file_uuid.as_u128() >> 64) as u64 as i64
 }
 
-/// Inserts a frame into `file_update_log`, assigning the next per-file seq — mirrors
+/// Inserts a frame into `collab_update_log`, assigning the next per-file seq — mirrors
 /// `persistFrame`. Sequence allocation is serialized per file so simultaneous frames from
 /// different devices cannot both select the same `MAX(seq) + 1`; the sender's
 /// `(domain, account, device, sender_seq)` unique index still rejects exact replays.
@@ -1044,12 +1044,12 @@ pub struct FramesPage {
     pub more: bool,
 }
 
-/// `GET /api/files/{fileId}/collab/frames` — the collaboration log after a
+/// `GET /api/v1/drive/files/{fileId}/collab/frames` — the collaboration log after a
 /// position, for a reader of the file (as the socket's replay).
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/collab/frames",
-    tag = "collab",
+    path = "/api/v1/drive/files/{fileId}/collab/frames",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id"), FramesQuery),
     responses((status = 200, description = "Frames after `after`, oldest first", body = FramesPage))
@@ -1062,7 +1062,7 @@ pub async fn get_frames(
 ) -> AppResult<Response> {
     let device = crate::account_devices::frame_device_of_request(&state, &headers).await?;
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    match file_access(&state.pool, device.user_id, file_uuid).await? {
+    match file_access(&state.pool, device.account_id, file_uuid).await? {
         None => return Err(AppError::not_found("file not found")),
         Some(Access::None) => return Err(AppError::forbidden("forbidden")),
         Some(_) => {}
@@ -1128,15 +1128,15 @@ pub struct FrameKept {
     pub seq: i64,
 }
 
-/// `POST /api/files/{fileId}/collab/frames` — one sealed edit frame
+/// `POST /api/v1/drive/files/{fileId}/collab/frames` — one sealed edit frame
 /// (`application/octet-stream`) from a registered device: kept and sent to
 /// the room, as from a socket. `409 frameRefused` when the gate drops it (not
 /// this device's, a stale key or document key, a replayed sequence): read the
 /// log again and rebuild. `403` without write access; `429` past the limit.
 #[utoipa::path(
     post,
-    path = "/api/files/{fileId}/collab/frames",
-    tag = "collab",
+    path = "/api/v1/drive/files/{fileId}/collab/frames",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
     request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "One sealed collaboration frame"),
@@ -1153,13 +1153,13 @@ pub async fn post_frame(
 ) -> AppResult<Response> {
     let device = crate::account_devices::frame_device_of_request(&state, &headers).await?;
     if !crate::ratelimit::COLLAB_FRAME_POSTS
-        .allow(&format!("{}/{}", device.user_id, device.device_id))
+        .allow(&format!("{}/{}", device.account_id, device.device_id))
     {
         return Err(AppError::too_many_requests("too many requests")
             .with_details(serde_json::json!({ "code": "rateLimited" })));
     }
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    match file_access(&state.pool, device.user_id, file_uuid).await? {
+    match file_access(&state.pool, device.account_id, file_uuid).await? {
         None => return Err(AppError::not_found("file not found")),
         Some(Access::Write) => {}
         Some(_) => return Err(AppError::forbidden("forbidden")),

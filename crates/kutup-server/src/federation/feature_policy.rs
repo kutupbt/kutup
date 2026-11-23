@@ -19,8 +19,9 @@ use uuid::Uuid;
 
 use super::identity::insert_system_audit;
 use super::{AuthenticatedFederationRequest, FederationRequestSpec, FederationStack};
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 use kutup_federation_proto::FederationFeature;
 use reqwest::Method;
@@ -207,13 +208,13 @@ impl FeaturePolicyStore {
         insert_system_audit(
             &mut tx,
             if previous.is_some() {
-                "federation.feature-policy.rotate"
+                AdminAction::FederationRotateFeaturePolicy
             } else {
-                "federation.feature-policy.bootstrap"
+                AdminAction::FederationCreateFeaturePolicy
             },
             json!({
                 "actorType": match rotation {
-                    PolicyRotation::Operator => "operator-command",
+                    PolicyRotation::Operator => "operatorCommand",
                     PolicyRotation::Refuse | PolicyRotation::Automatic => "system",
                 },
                 "domain": envelope.domain,
@@ -234,7 +235,7 @@ impl FeaturePolicyStore {
         envelope: &FederatedFeaturePolicyEnvelopeV1,
     ) -> anyhow::Result<bool> {
         if envelope.domain != expected_domain {
-            self.record_folded(envelope, "wrong_domain").await?;
+            self.record_folded(envelope, "wrongDomain").await?;
             anyhow::bail!("remote feature policy has the wrong domain");
         }
         let mut tx = self.pool.begin().await?;
@@ -348,7 +349,7 @@ impl FeaturePolicyStore {
         sqlx::query(
             "INSERT INTO federation_feature_policy_failures
              (domain, feature_type, failure_class, evidence_digest, received_value)
-             VALUES ($1,$2,$3,$4,$5)",
+             VALUES ($1,$2,$3,decode($4, 'hex'),$5)",
         )
         .bind(&envelope.domain)
         .bind(envelope.feature_type.as_u16() as i16)
@@ -374,7 +375,7 @@ async fn fetch_remote_envelope(
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
-                path: format!("/api/fed/policies/{feature}"),
+                path: format!("/api/fed/v2/policies/{feature}"),
                 query: sequence.map(|value| format!("sequence={value}")),
                 content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
@@ -397,7 +398,7 @@ async fn fetch_remote_envelope(
 
 pub(crate) async fn get_local_feature_policy(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    _auth: AuthAccount,
     Path(feature): Path<String>,
     Query(query): Query<PolicySequenceQuery>,
 ) -> AppResult<Response> {
@@ -419,7 +420,7 @@ pub(crate) async fn get_federated_feature_policy(
 ) -> AppResult<Response> {
     let federation = configured(&state)?;
     let feature_type = parse_feature(&feature)?;
-    let path = format!("/api/fed/policies/{feature}");
+    let path = format!("/api/fed/v2/policies/{feature}");
     let raw_query = query.sequence.map(|value| format!("sequence={value}"));
     let authenticated: AuthenticatedFederationRequest = federation
         .authenticate_inbound(
@@ -562,7 +563,7 @@ async fn insert_envelope(
         "INSERT INTO federation_feature_policy_documents
          (domain, feature_type, sequence, policy_hash,
           federation_identity_generation, envelope, is_local)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)",
+         VALUES ($1,$2,$3,decode($4, 'hex'),$5,$6,$7)",
     )
     .bind(&envelope.domain)
     .bind(envelope.feature_type.as_u16() as i16)

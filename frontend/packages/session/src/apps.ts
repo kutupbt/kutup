@@ -1,7 +1,7 @@
 // Where each Kutup app lives.
 //
 // The origins are server configuration (KUTUP_ACCOUNT_URL, KUTUP_DRIVE_URL,
-// KUTUP_CHAT_URL, KUTUP_MAPS_URL, KUTUP_PHOTOS_URL, KUTUP_OFFICE_URL, KUTUP_CONTACTS_URL, KUTUP_MAIL_URL, KUTUP_PASS_URL, KUTUP_CALENDAR_URL, KUTUP_EDITOR_URL), published by `GET /api/auth/settings`,
+// KUTUP_CHAT_URL, KUTUP_MAPS_URL, KUTUP_PHOTOS_URL, KUTUP_OFFICE_URL, KUTUP_CONTACTS_URL, KUTUP_MAIL_URL, KUTUP_PASS_URL, KUTUP_CALENDAR_URL, KUTUP_EDITOR_URL), published by `GET /api/v1/auth/settings`,
 // so a self-hoster can use any hostnames. The server enforces the same map
 // for session forks; the client never derives an origin from a URL
 // parameter.
@@ -91,4 +91,18 @@ export function appUrl(app: keyof AppDirectory, path = '/'): string {
 /** Test seam. */
 export function setAppDirectoryForTesting(value: AppDirectory | null): void {
   directory = value
+}
+
+/**
+ * A public link opened on another app than the one that shows it (an album
+ * link on drive., a folder link on photos.): the same `/s/<token>` there,
+ * fragment kept (docs/plans/api-surface.md §7), so links survive moves of
+ * what shows them. Returns whether it navigated.
+ */
+export async function goToLinkHome(app: keyof AppDirectory, token: string): Promise<boolean> {
+  await loadAppDirectory()
+  const target = new URL(appUrl(app, `/s/${encodeURIComponent(token)}`))
+  if (target.origin === window.location.origin) return false
+  window.location.replace(`${target.toString()}${window.location.hash}`)
+  return true
 }

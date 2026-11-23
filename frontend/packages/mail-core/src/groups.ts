@@ -58,7 +58,7 @@ export interface MailGroup {
 }
 
 export interface MailGroupMember {
-  userId: string
+  accountId: string
   username: string
   address: string
   role: GroupRole
@@ -84,7 +84,7 @@ export interface MailGroupKeyRow {
 }
 
 export interface ShareInput {
-  userId: string
+  accountId: string
   share: string
 }
 
@@ -149,7 +149,7 @@ export function heldKeys(rows: MailGroupKeyRow[], groupId: string, holder: Group
 
 /** A Kutup account found by its address. */
 export interface AccountRef {
-  userId: string
+  accountId: string
   username: string
   address: string
 }
@@ -172,7 +172,7 @@ interface MemberIdentity {
   server: string
   accountId: string
   accountIncarnationId: string
-  driveHpkePublicKey: string
+  driveXwingPublicKey: string
   driveSigningPublicKey: string
   accountAuthorityPublicKey: string
   driveKeyBinding?: string | null
@@ -183,7 +183,7 @@ interface MemberIdentity {
 
 /** The member's account key is not one their account signed. */
 export class MemberKeyUnproven extends Error {
-  constructor(readonly userId: string) {
+  constructor(readonly accountId: string) {
     super('a member\'s account key is not signed by their account')
   }
 }
@@ -204,30 +204,30 @@ export interface MemberTrust {
  * `IdentityNotConfirmed` until the caller confirms. Nothing is sealed to keys
  * the server alone vouches for.
  */
-async function memberKey(member: { userId: string }, trust: MemberTrust): Promise<GroupKeyMember> {
-  const { data } = await api.get<MemberIdentity>(`/users/by-id/${encodeURIComponent(member.userId)}`)
+async function memberKey(member: { accountId: string }, trust: MemberTrust): Promise<GroupKeyMember> {
+  const { data } = await api.get<MemberIdentity>(`/accounts/${encodeURIComponent(member.accountId)}`)
   const account = { server: data.server, accountId: data.accountId }
-  if (data.accountId === member.userId && data.identitySuite === 1) {
+  if (data.accountId === member.accountId && data.identitySuite === 1) {
     throw new KeysPendingUpgrade(`${data.username}@${data.server}`)
   }
   const bound =
-    data.accountId === member.userId &&
+    data.accountId === member.accountId &&
     !!data.driveKeyBinding &&
     data.identitySuite === 2 &&
     Number.isSafeInteger(data.driveKeyBindingEpoch) &&
     (await verifyDriveKeyBinding(
       account,
       data.accountAuthorityPublicKey,
-      data.driveHpkePublicKey,
+      data.driveXwingPublicKey,
       data.driveSigningPublicKey,
       data.driveKeyBinding,
       data.driveKeyBindingEpoch!,
     ))
   if (!bound || (await incarnationIdOfAuthority(data.accountAuthorityPublicKey)) !== data.accountIncarnationId) {
-    throw new MemberKeyUnproven(member.userId)
+    throw new MemberKeyUnproven(member.accountId)
   }
   await confirmRecipient(trust.me, `${data.username}@${data.server}`, data, trust.confirmed)
-  return { account, incarnationId: data.accountIncarnationId, hpkePublicKey: data.driveHpkePublicKey }
+  return { account, incarnationId: data.accountIncarnationId, xwingPublicKey: data.driveXwingPublicKey }
 }
 
 /** Who signs a shared mailbox's key lists: its owners and managers. */
@@ -262,10 +262,10 @@ export async function groupChain(group: { id: string; address: string }): Promis
  * - `restart`: a new chain for `holders` (an administrator who holds no share; senders see a change).
  */
 export type GroupSigning =
-  | { kind: 'first'; holders: { userId: string }[] }
+  | { kind: 'first'; holders: { accountId: string }[] }
   | { kind: 'current'; holder: GroupSignerHolder; chain: GroupKeyChainView }
-  | { kind: 'handover'; holder: GroupSignerHolder; chain: GroupKeyChainView; holders: { userId: string }[] }
-  | { kind: 'restart'; holders: { userId: string }[]; chain: GroupKeyChainView | null }
+  | { kind: 'handover'; holder: GroupSignerHolder; chain: GroupKeyChainView; holders: { accountId: string }[] }
+  | { kind: 'restart'; holders: { accountId: string }[]; chain: GroupKeyChainView | null }
 
 function sortedKeys(keys: MailKeyListInput['keys']): MailKeyListInput['keys'] {
   return [...keys].sort((a, b) => (a.fingerprint < b.fingerprint ? -1 : a.fingerprint > b.fingerprint ? 1 : 0))
@@ -288,7 +288,7 @@ function nextList(address: string, chain: GroupKeyChainView | null, added: { fin
 export async function newGroupKey(
   groupAddress: string,
   groupId: string,
-  members: { userId: string }[],
+  members: { accountId: string }[],
   trust: MemberTrust,
   signing: GroupSigning,
 ): Promise<NewGroupKey> {
@@ -296,7 +296,7 @@ export async function newGroupKey(
   const made = await generateMailGroupKey(groupAddress, groupId, keys)
   const key = {
     publicKey: made.publicKey,
-    shares: members.map((member, i) => ({ userId: member.userId, share: made.shares[i] })),
+    shares: members.map((member, i) => ({ accountId: member.accountId, share: made.shares[i] })),
   }
   const added = { fingerprint: made.fingerprint, sha256Fingerprint: made.sha256Fingerprint }
   if (signing.kind === 'current') {
@@ -316,21 +316,21 @@ export async function newGroupKey(
     keyList: { data: signer.keyList.data, signature: signer.keyList.signature },
     signer: {
       publicKey: signer.publicKey,
-      shares: signing.holders.map((holder, i) => ({ userId: holder.userId, share: signer.shares[i] })),
+      shares: signing.holders.map((holder, i) => ({ accountId: holder.accountId, share: signer.shares[i] })),
       ...(signer.handover ? { handover: signer.handover } : {}),
     },
   }
 }
 
 export interface MemberInput {
-  userId: string
+  accountId: string
   address: string
   role: GroupRole
   canSendAs: boolean
 }
 
 export interface MembershipBody {
-  members: { userId: string; role: GroupRole; canSendAs: boolean }[]
+  members: { accountId: string; role: GroupRole; canSendAs: boolean }[]
   keyShares?: (ShareInput & { groupFingerprint: string })[]
   newKey?: NewGroupKey
   /** The signer in force's seed for owners and managers who lack it. */
@@ -352,14 +352,14 @@ export async function membershipBody(
   me: GroupKeyHolderOf | null,
   trust: MemberTrust,
 ): Promise<{ body: MembershipBody; historyShared: boolean }> {
-  const members = next.map(({ userId, role, canSendAs }) => ({ userId, role, canSendAs }))
+  const members = next.map(({ accountId, role, canSendAs }) => ({ accountId, role, canSendAs }))
   if (group.kind !== 'shared') return { body: { members }, historyShared: true }
   // Joining members, and members staying whose keys changed (an
   // administrator reset them): both get the mailbox's keys.
-  const joining = next.filter((m) => !current.some((c) => c.userId === m.userId))
-  const resealed = next.filter((m) => current.some((c) => c.userId === m.userId && c.needsKeys))
+  const joining = next.filter((m) => !current.some((c) => c.accountId === m.accountId))
+  const resealed = next.filter((m) => current.some((c) => c.accountId === m.accountId && c.needsKeys))
   const added = [...joining, ...resealed]
-  const removed = current.filter((c) => !next.some((m) => m.userId === c.userId))
+  const removed = current.filter((c) => !next.some((m) => m.accountId === c.accountId))
   const answer = await groupKeys(group.id).catch((): MailGroupKeys => ({ keys: [] }))
   const rows = answer.keys
   const held = me ? heldKeys(rows, group.id, me) : []
@@ -370,24 +370,24 @@ export async function membershipBody(
     body.keyShares = []
     for (const key of held) {
       const shares = await reshareMailGroupKey(key, keys)
-      added.forEach((member, i) => body.keyShares!.push({ groupFingerprint: key.fingerprint, userId: member.userId, share: shares[i] }))
+      added.forEach((member, i) => body.keyShares!.push({ groupFingerprint: key.fingerprint, accountId: member.accountId, share: shares[i] }))
     }
   }
   // A deactivated account gets no share; a manager seals the keys to it
   // again if it comes back.
-  const active = (m: { userId: string }) => current.find((c) => c.userId === m.userId)?.active !== false
+  const active = (m: { accountId: string }) => current.find((c) => c.accountId === m.accountId)?.active !== false
   // The signing key's holders: the active owners and managers. Losing one,
   // or one deleted or deactivated (`needsNewSigner`), means a new signer,
   // handed over by the one in force (the caller's, if they hold it; an
   // administrator without it starts a new chain). So does gaining one when
   // the caller has no share of the signer to give.
-  const holdersBefore = current.filter((c) => signs(c.role) && c.active).map((c) => c.userId)
+  const holdersBefore = current.filter((c) => signs(c.role) && c.active).map((c) => c.accountId)
   const holdersAfter = next.filter((m) => signs(m.role) && active(m))
   const signer: GroupSignerHolder | null =
     me && answer.signer && answer.signingShare ? { ...me, groupId: group.id, signer: answer.signer, signingShare: answer.signingShare } : null
-  const gained = holdersAfter.some((h) => !holdersBefore.includes(h.userId))
+  const gained = holdersAfter.some((h) => !holdersBefore.includes(h.accountId))
   const lost =
-    holdersBefore.some((id) => !holdersAfter.some((h) => h.userId === id)) || group.needsNewSigner || (gained && !signer)
+    holdersBefore.some((id) => !holdersAfter.some((h) => h.accountId === id)) || group.needsNewSigner || (gained && !signer)
   if (removed.length > 0 || (joining.length > 0 && !holdsAll) || lost) {
     const chain = await groupChain(group)
     const signing: GroupSigning = lost
@@ -402,12 +402,12 @@ export async function membershipBody(
   if (!body.newKey?.signer && signer) {
     // Owners and managers joining, promoted, or reset since get the signer in force.
     const lacking = holdersAfter.filter(
-      (h) => !holdersBefore.includes(h.userId) || current.some((c) => c.userId === h.userId && c.needsKeys),
+      (h) => !holdersBefore.includes(h.accountId) || current.some((c) => c.accountId === h.accountId && c.needsKeys),
     )
     if (lacking.length > 0) {
       const keys = await Promise.all(lacking.map((holder) => memberKey(holder, trust)))
       const shares = await reshareMailGroupSigner(signer, keys)
-      body.signerShares = lacking.map((holder, i) => ({ userId: holder.userId, share: shares[i] }))
+      body.signerShares = lacking.map((holder, i) => ({ accountId: holder.accountId, share: shares[i] }))
     }
   }
   return { body, historyShared: joining.length === 0 || holdsAll }

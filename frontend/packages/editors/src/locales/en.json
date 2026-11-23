@@ -314,6 +314,10 @@
       "waiting": {
         "title": "Waiting for the owner",
         "description": "This file moved to a new key, and its owner has not updated this link yet. It works again once they open Kutup Drive."
+      },
+      "newerLink": {
+        "title": "This link needs a newer Kutup",
+        "description": "It was made by a newer version of Kutup than this server runs. Ask the person who shared it, or try again after the server is updated."
       }
     }
   }

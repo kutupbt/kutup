@@ -71,7 +71,7 @@ test('body search: off, then on and built, then deleted', async ({ browser, requ
   await expect(mail.getByText('Results include message text, searched in this browser.')).toBeVisible()
   // Nothing readable is kept: the database's records are sealed.
   const plain = await mail.evaluate(async (needle) => {
-    const names = (await indexedDB.databases()).map((d) => d.name ?? '').filter((n) => n.startsWith('kutup-mail-search:'))
+    const names = (await indexedDB.databases()).map((d) => d.name ?? '').filter((n) => n.startsWith('kutup.mail.search:'))
     for (const name of names) {
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
         const r = indexedDB.open(name)

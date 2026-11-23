@@ -111,9 +111,9 @@ export function MailSendingPage() {
           </TableHeader>
           <TableBody>
             {senders.data.map((sender) => (
-              <TableRow key={sender.userId}>
+              <TableRow key={sender.accountId}>
                 <TableCell>
-                  <Link to={`/admin/users/${sender.userId}`} className="font-medium hover:underline">
+                  <Link to={`/admin/users/${sender.accountId}`} className="font-medium hover:underline">
                     {sender.username}
                   </Link>
                 </TableCell>
@@ -130,16 +130,16 @@ export function MailSendingPage() {
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-right">
                   {sender.pausedReason ? (
-                    <Button size="sm" variant="outline" onClick={() => update.mutate({ userId: sender.userId, change: { paused: false } })}>
+                    <Button size="sm" variant="outline" onClick={() => update.mutate({ accountId: sender.accountId, change: { paused: false } })}>
                       {t('admin.mailSending.resume')}
                     </Button>
                   ) : (
-                    <Button size="sm" variant="outline" onClick={() => update.mutate({ userId: sender.userId, change: { paused: true } })}>
+                    <Button size="sm" variant="outline" onClick={() => update.mutate({ accountId: sender.accountId, change: { paused: true } })}>
                       {t('admin.mailSending.pause')}
                     </Button>
                   )}{' '}
                   {sender.flagReason ? (
-                    <Button size="sm" variant="ghost" onClick={() => update.mutate({ userId: sender.userId, change: { clearFlag: true } })}>
+                    <Button size="sm" variant="ghost" onClick={() => update.mutate({ accountId: sender.accountId, change: { clearFlag: true } })}>
                       {t('admin.mailSending.clearFlag')}
                     </Button>
                   ) : null}{' '}
@@ -157,7 +157,7 @@ export function MailSendingPage() {
           sender={editing}
           pending={update.isPending}
           onClose={() => setEditing(null)}
-          onSave={(change) => update.mutate({ userId: editing.userId, change })}
+          onSave={(change) => update.mutate({ accountId: editing.accountId, change })}
         />
       ) : null}
     </PageBody>

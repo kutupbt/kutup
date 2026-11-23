@@ -1,17 +1,18 @@
 //! Who may open public links, and who may make them
 //! (docs/plans/server-personal-data.md, A11): a site-wide switch an
-//! administrator sets, a per-account one, and an operator's block on one
-//! link. Meeting call links are a way into a call, not a publication, and
+//! administrator sets, a per-account one (the entitlement
+//! `drive.public_sharing`: 0 is off, 1 or none follows the site's), and an
+//! operator's block on one link. Meeting call links are a way into a call, not a publication, and
 //! aren't covered.
 //!
 //! A link that may not be opened answers, whatever is asked of it:
-//! - `451 link_blocked` (reason `legal_order`) or `410 link_blocked` (another
+//! - `451 linkBlocked` (reason `legalOrder`) or `410 linkBlocked` (another
 //!   reason) when an operator blocked it;
-//! - `410 link_removed` when an administrator took it down, or its owner's
+//! - `410 linkRemoved` when an administrator took it down, or its owner's
 //!   account is not active;
-//! - `410 sharing_off` while public sharing is off, site-wide or for its
+//! - `410 sharingOff` while public sharing is off, site-wide or for its
 //!   owner;
-//! - `403 sign_in_required` while public sharing is `signed_in` and the
+//! - `403 signInRequired` while public sharing is `signedIn` and the
 //!   viewer is not signed in to this server.
 
 use axum::http::StatusCode;
@@ -21,13 +22,13 @@ use sqlx::{PgPool, Postgres, Transaction};
 use crate::error::{AppError, AppResult};
 
 /// The site setting that holds the switch.
-pub const SETTING: &str = "public_sharing";
+pub const SETTING: &str = "drive.public_sharing";
 
 /// Who may open public links on this server.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum PublicSharing {
     /// Anyone with the link.
     On,
@@ -43,7 +44,7 @@ impl PublicSharing {
         match self {
             Self::On => "on",
             Self::Off => "off",
-            Self::SignedIn => "signed_in",
+            Self::SignedIn => "signedIn",
         }
     }
 
@@ -51,7 +52,7 @@ impl PublicSharing {
         match value {
             "on" => Some(Self::On),
             "off" => Some(Self::Off),
-            "signed_in" => Some(Self::SignedIn),
+            "signedIn" => Some(Self::SignedIn),
             _ => None,
         }
     }
@@ -68,6 +69,16 @@ pub async fn site(pool: &PgPool) -> AppResult<PublicSharing> {
         .as_deref()
         .and_then(PublicSharing::parse)
         .unwrap_or(PublicSharing::On))
+}
+
+/// The account's own switch as the API names it (`on`, `off`), from its
+/// entitlement (`crate::entitlements::PUBLIC_SHARING`): `off` only at 0.
+pub fn account_switch(entitlement: Option<i64>) -> &'static str {
+    if entitlement == Some(0) {
+        "off"
+    } else {
+        "on"
+    }
 }
 
 /// Stores the administrators' choice.
@@ -88,24 +99,24 @@ pub async fn set_site(
 
 fn sharing_off_as(status: StatusCode, scope: &str) -> AppError {
     AppError::new(status, "public sharing is off")
-        .with_details(json!({ "code": "sharing_off", "scope": scope }))
+        .with_details(json!({ "code": "sharingOff", "scope": scope }))
 }
 
 /// A link an operator blocked: 451 for a legal order, else 410.
 pub fn link_blocked(reason: &str) -> AppError {
-    let status = if reason == "legal_order" {
+    let status = if reason == "legalOrder" {
         StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS
     } else {
         StatusCode::GONE
     };
     AppError::new(status, "this link was blocked")
-        .with_details(json!({ "code": "link_blocked", "reason": reason }))
+        .with_details(json!({ "code": "linkBlocked", "reason": reason }))
 }
 
 /// A link that opens only for someone signed in to this server.
 pub fn sign_in_required() -> AppError {
     AppError::new(StatusCode::FORBIDDEN, "sign in to open this link")
-        .with_details(json!({ "code": "sign_in_required" }))
+        .with_details(json!({ "code": "signInRequired" }))
 }
 
 /// Refuses a new link to what an operator blocked (any link of the target,
@@ -127,19 +138,20 @@ pub async fn ensure_target_open(
     }
 }
 
-/// Whether `owner` may make a public link now: `403 sharing_off` while
-/// sharing is off for the site or the account. `signed_in` still makes
+/// Whether `owner` may make a public link now: `403 sharingOff` while
+/// sharing is off for the site or the account. `signedIn` still makes
 /// links (they open for signed-in viewers).
 pub async fn ensure_may_share(pool: &PgPool, owner: uuid::Uuid) -> AppResult<()> {
     if site(pool).await? == PublicSharing::Off {
         return Err(sharing_off_as(StatusCode::FORBIDDEN, "site"));
     }
-    let account: Option<String> =
-        sqlx::query_scalar("SELECT public_sharing FROM accounts WHERE id = $1")
-            .bind(owner)
-            .fetch_optional(pool)
-            .await?;
-    if account.as_deref() == Some("off") {
+    let account = crate::entitlements::get(
+        pool,
+        crate::entitlements::Holder::Account(owner),
+        crate::entitlements::PUBLIC_SHARING,
+    )
+    .await?;
+    if account_switch(account) == "off" {
         return Err(sharing_off_as(StatusCode::FORBIDDEN, "account"));
     }
     Ok(())
@@ -149,14 +161,15 @@ pub async fn ensure_may_share(pool: &PgPool, owner: uuid::Uuid) -> AppResult<()>
 /// tokens pass: the caller answers those itself. `signed_in`: whether the
 /// viewer is signed in to this server.
 pub async fn ensure_link_up(pool: &PgPool, token: &str, signed_in: bool) -> AppResult<()> {
-    let row: Option<(bool, Option<String>, String)> = sqlx::query_as(
-        "SELECT p.removed_at IS NOT NULL OR NOT u.is_active,
+    let row: Option<(bool, Option<String>, Option<i64>)> = sqlx::query_as(
+        "SELECT p.removed_at IS NOT NULL OR u.state <> 'active',
                 COALESCE(p.blocked_reason, kutup_target_blocked(p.share_type, p.target_id)),
-                u.public_sharing
+                (SELECT value FROM account_entitlements WHERE account_id = u.id AND key = $2)
            FROM drive_public_shares p JOIN accounts u ON u.id = p.owner_account_id
           WHERE p.token = $1",
     )
     .bind(token)
+    .bind(crate::entitlements::PUBLIC_SHARING)
     .fetch_optional(pool)
     .await?;
     let Some((removed, blocked, account_sharing)) = row else {
@@ -175,9 +188,9 @@ pub async fn ensure_link_up(pool: &PgPool, token: &str, signed_in: bool) -> AppR
     }
     // One answer whether the site's switch or the owner's is off: a link's
     // holder doesn't learn which (the owner's own calls say).
-    if site == PublicSharing::Off || account_sharing == "off" {
+    if site == PublicSharing::Off || account_switch(account_sharing) == "off" {
         return Err(AppError::new(StatusCode::GONE, "public sharing is off")
-            .with_details(json!({ "code": "sharing_off" })));
+            .with_details(json!({ "code": "sharingOff" })));
     }
     Ok(())
 }
@@ -195,13 +208,20 @@ mod tests {
         ] {
             assert_eq!(PublicSharing::parse(value.as_str()), Some(value));
         }
-        assert_eq!(PublicSharing::parse("signedIn"), None);
+        assert_eq!(PublicSharing::parse("signed_in"), None);
+    }
+
+    #[test]
+    fn an_accounts_switch_is_off_only_at_zero() {
+        assert_eq!(account_switch(Some(0)), "off");
+        assert_eq!(account_switch(Some(1)), "on");
+        assert_eq!(account_switch(None), "on");
     }
 
     #[test]
     fn a_legal_block_is_451_and_another_410() {
         assert_eq!(
-            link_blocked("legal_order").status,
+            link_blocked("legalOrder").status,
             StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS
         );
         assert_eq!(link_blocked("abuse").status, StatusCode::GONE);

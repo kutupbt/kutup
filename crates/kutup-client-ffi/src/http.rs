@@ -33,6 +33,9 @@ pub(crate) struct NativeTransport {
     pub http: Arc<dyn ChatHttpClient>,
     /// `<deviceId>.<credential>` once the device is registered.
     pub device: std::sync::Mutex<Option<String>>,
+    /// The server's instance id as first answered (docs/plans/api-surface.md
+    /// §5): another one later means the server was reset.
+    pub instance: std::sync::Mutex<Option<String>>,
 }
 
 impl NativeTransport {
@@ -40,6 +43,7 @@ impl NativeTransport {
         Self {
             http,
             device: std::sync::Mutex::new(None),
+            instance: std::sync::Mutex::new(None),
         }
     }
 }
@@ -104,7 +108,7 @@ impl ChatTransport for NativeTransport {
 
     async fn register_device(&self, request: &RegisterChatDeviceRequestV2) -> CoreResult<u32> {
         let response: RegisterChatDeviceResponse = self
-            .json(ChatHttpMethod::Post, "/chat/device".into(), Some(request))
+            .json(ChatHttpMethod::Post, "/chat/devices".into(), Some(request))
             .await?;
         Ok(response.device_id)
     }
@@ -127,16 +131,12 @@ impl ChatTransport for NativeTransport {
         .await
     }
 
-    async fn fetch_device_session(&self) -> CoreResult<String> {
-        #[derive(serde::Deserialize)]
-        struct DeviceSession {
-            session: String,
-        }
+    async fn fetch_device_session(&self) -> CoreResult<kutup_chat_proto::DeviceSessionResponseV1> {
         let response = self
-            .request(ChatHttpMethod::Get, "/device-session".into(), None)
+            .request(ChatHttpMethod::Get, "/account/devices/session".into(), None)
             .await?;
         ensure_success(&response)?;
-        decode::<DeviceSession>(&response.body_json).map(|body| body.session)
+        decode(&response.body_json)
     }
 
     async fn fetch_manifest(&self, account: &str) -> CoreResult<Option<AccountManifestV3>> {
@@ -209,7 +209,7 @@ impl ChatTransport for NativeTransport {
                         .and_then(|code| code.as_str())
                         .map(str::to_owned)
                 });
-            if code.as_deref() == Some("head_required") {
+            if code.as_deref() == Some("headRequired") {
                 return Err(ChatError::Transport(
                     "this account's identity pins need the account head, which this client does not write yet".into(),
                 ));
@@ -383,6 +383,14 @@ impl NativeTransport {
             })
             .await
             .map_err(|error| ChatError::Transport(error.to_string()))?;
+        if let Some(current) = response.instance_id.as_deref().filter(|id| !id.is_empty()) {
+            let mut known = self.instance.lock().unwrap_or_else(|e| e.into_inner());
+            match known.as_deref() {
+                None => *known = Some(current.to_owned()),
+                Some(seen) if seen != current => return Err(ChatError::ServerReset),
+                Some(_) => {}
+            }
+        }
         if response.body_json.len() > MAX_RESPONSE_BYTES {
             return Err(ChatError::Transport(format!(
                 "HTTP {} response exceeded {MAX_RESPONSE_BYTES} bytes",
@@ -395,12 +403,28 @@ impl NativeTransport {
 
 fn ensure_success(response: &ChatHttpResponse) -> CoreResult<()> {
     if (200..300).contains(&response.status) {
-        Ok(())
-    } else {
-        Err(ChatError::Transport(format!(
+        return Ok(());
+    }
+    // The two version answers stop the engine with their own errors
+    // (docs/plans/api-surface.md §1.5); every other failure is transport.
+    let body: Option<serde_json::Value> = serde_json::from_str(&response.body_json).ok();
+    let field = |name: &str| {
+        body.as_ref()
+            .and_then(|b| b.get(name))
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| v.to_string())
+            })
+            .unwrap_or_default()
+    };
+    match field("code").as_str() {
+        "clientTooOld" => Err(ChatError::ClientTooOld(field("minimum"))),
+        "apiVersionUnsupported" => Err(ChatError::ServerTooOld(field("supported"))),
+        _ => Err(ChatError::Transport(format!(
             "chat API returned HTTP {}",
             response.status
-        )))
+        ))),
     }
 }
 

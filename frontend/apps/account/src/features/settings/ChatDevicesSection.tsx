@@ -29,7 +29,7 @@ export function ChatDevicesSection() {
   const { t, i18n } = useTranslation()
   const devices = useQuery({
     queryKey: ['chat-devices'],
-    queryFn: async () => (await api.get<{ devices: ChatDevice[] }>('/chat/device')).data.devices,
+    queryFn: async () => (await api.get<{ devices: ChatDevice[] }>('/chat/devices')).data.devices,
   })
   const manage = appUrl('chat', '/settings/devices')
 

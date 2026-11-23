@@ -9,7 +9,7 @@ export type MarkdownMode = 'edit' | 'split' | 'read'
 const VALID: MarkdownMode[] = ['edit', 'split', 'read']
 
 function storageKey(fileId: string): string {
-  return `kutup-md-mode-${fileId}`
+  return `kutup.office.markdownMode:${fileId}`
 }
 
 function readStored(fileId: string): MarkdownMode {

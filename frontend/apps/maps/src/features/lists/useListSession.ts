@@ -76,7 +76,7 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
     // An outdated picture is redrawn once the list is up, by someone who
     // may manage it (readers of a shared folder do not spend its owner's
     // quota), as Drive's backfill does.
-    const mayPicture = pictures && (!folder || folder.canManage || file.uploaderUserId === account.userId)
+    const mayPicture = pictures && (!folder || folder.canManage || file.uploaderAccountId === account.accountId)
     let pictured = false
     let replayedThrough: number | null = null
     // The latest saved version, which a picture of the live places is filed
