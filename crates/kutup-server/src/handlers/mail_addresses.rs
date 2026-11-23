@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::mail_keys::{begin_list_change, OwnMailAddress, UpdateKeyListRequest};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 fn coded(error: AppError, code: &str) -> AppError {
@@ -52,7 +52,7 @@ async fn default_address_in(
 ) -> AppResult<Option<(Uuid, String)>> {
     let rows: Vec<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
         "SELECT a.id, a.address, a.domain_id FROM mail_addresses a
-          WHERE a.user_id = $1 AND a.state = 'active' AND a.disabled_at IS NULL
+          WHERE a.account_id = $1 AND a.state = 'active' AND a.disabled_at IS NULL
             AND EXISTS (SELECT 1 FROM mail_address_keys k
                          WHERE k.address_id = a.id AND k.is_primary)
           ORDER BY a.position, a.created_at",
@@ -81,13 +81,13 @@ pub struct AddressOrderRequest {
     pub ids: Vec<String>,
 }
 
-/// `PUT /api/mail/addresses/order` — the account's addresses in a new order
+/// `PUT /api/v1/mail/addresses/order` — the account's addresses in a new order
 /// (Proton's `PUT addresses/order`; "Set as default" moves one first). The
 /// list names exactly the account's current addresses: a tab that missed one
 /// added or deleted meanwhile gets `409 addressSetChanged`.
 #[utoipa::path(
     put,
-    path = "/api/mail/addresses/order",
+    path = "/api/v1/mail/addresses/order",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = AddressOrderRequest,
@@ -99,10 +99,10 @@ pub struct AddressOrderRequest {
 )]
 pub async fn order(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<AddressOrderRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let ids: Vec<Uuid> = request
         .ids
         .iter()
@@ -112,7 +112,7 @@ pub async fn order(
     let mut tx = state.pool.begin().await?;
     let current: Vec<(Uuid, bool)> = sqlx::query_as(
         "SELECT id, disabled_at IS NOT NULL FROM mail_addresses
-          WHERE user_id = $1 AND state = 'active' ORDER BY id FOR UPDATE",
+          WHERE account_id = $1 AND state = 'active' ORDER BY id FOR UPDATE",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -157,7 +157,7 @@ async fn custom_address(
 ) -> AppResult<bool> {
     let row: Option<(Option<Uuid>, bool)> = sqlx::query_as(
         "SELECT domain_id, disabled_at IS NOT NULL FROM mail_addresses
-          WHERE id = $1 AND user_id = $2 AND state = 'active' FOR UPDATE",
+          WHERE id = $1 AND account_id = $2 AND state = 'active' FOR UPDATE",
     )
     .bind(address_id)
     .bind(user_id)
@@ -188,13 +188,13 @@ fn address_id(id: &str) -> AppResult<Uuid> {
     Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))
 }
 
-/// `PUT /api/mail/addresses/{id}/disable` — Proton's Disable, with the
+/// `PUT /api/v1/mail/addresses/{id}/disable` — Proton's Disable, with the
 /// address's next signed key list: the same keys, none of them to be
 /// encrypted to. The address neither receives nor sends; its catch-all
 /// ends. The default address is moved down first (`409 defaultAddress`).
 #[utoipa::path(
     put,
-    path = "/api/mail/addresses/{id}/disable",
+    path = "/api/v1/mail/addresses/{id}/disable",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Address id")),
@@ -207,11 +207,11 @@ fn address_id(id: &str) -> AppResult<Uuid> {
 )]
 pub async fn disable(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateKeyListRequest>,
 ) -> AppResult<Json<OwnMailAddress>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = address_id(&id)?;
     // The address's row is held from here (the list change locks it).
     let mut change = begin_list_change(&state, user_id, &id, &request.key_list).await?;
@@ -241,11 +241,11 @@ pub async fn disable(
     Ok(Json(change.finish(&state).await?))
 }
 
-/// `PUT /api/mail/addresses/{id}/enable` — Proton's Enable, with the
+/// `PUT /api/v1/mail/addresses/{id}/enable` — Proton's Enable, with the
 /// address's next signed key list: its primary key to be encrypted to again.
 #[utoipa::path(
     put,
-    path = "/api/mail/addresses/{id}/enable",
+    path = "/api/v1/mail/addresses/{id}/enable",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Address id")),
@@ -258,11 +258,11 @@ pub async fn disable(
 )]
 pub async fn enable(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateKeyListRequest>,
 ) -> AppResult<Json<OwnMailAddress>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = address_id(&id)?;
     let mut change = begin_list_change(&state, user_id, &id, &request.key_list).await?;
     if !custom_address(&mut change.tx, user_id, address).await? {
@@ -290,14 +290,14 @@ pub async fn enable(
     Ok(Json(change.finish(&state).await?))
 }
 
-/// `PUT /api/mail/addresses/{id}/delete` — Proton's Delete for an address on
+/// `PUT /api/v1/mail/addresses/{id}/delete` — Proton's Delete for an address on
 /// a custom domain, once disabled (Proton disables first; one that never had
 /// a key, which can't be disabled, at once): the name is free
 /// for anyone again, and its keys stay with this account to open the mail it
 /// received (never published, never used for new mail).
 #[utoipa::path(
     put,
-    path = "/api/mail/addresses/{id}/delete",
+    path = "/api/v1/mail/addresses/{id}/delete",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Address id")),
@@ -308,10 +308,10 @@ pub async fn enable(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = address_id(&id)?;
     let mut tx = state.pool.begin().await?;
     let disabled = custom_address(&mut tx, user_id, address).await?;

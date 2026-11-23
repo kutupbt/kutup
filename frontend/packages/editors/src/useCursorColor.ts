@@ -25,7 +25,7 @@ export function useCursorColor(): [string, (hex: string) => void] {
       broadcastColor(hex)
       // Fallback for the next load, before the session is back.
       setCursorColor(hex)
-      api.patch('/user/me', { color: hex }).catch(() => {
+      api.patch('/account', { color: hex }).catch(() => {
         updateSession({ color: previous })
         broadcastColor(previous)
         toast.error(t('editor.colorSaveFailed'))

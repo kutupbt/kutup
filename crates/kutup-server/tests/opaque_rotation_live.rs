@@ -26,7 +26,7 @@ fn client() -> Client {
 }
 
 fn live(c: &Client, base: &str, token: &str) -> StatusCode {
-    bearer(c.get(format!("{base}/api/user/me")), token)
+    bearer(c.get(format!("{base}/api/v1/account")), token)
         .send()
         .unwrap()
         .status()
@@ -47,7 +47,7 @@ fn rotate(
             Ok(registered) => registered,
             Err((status, _)) => return status,
         };
-    c.post(format!("{base}/api/auth/opaque/register/finish"))
+    c.post(format!("{base}/api/v1/auth/opaque/register/finish"))
         .bearer_auth(token)
         .json(&json!({
             "grant": grant, "keyBinding": user.binding,
@@ -137,7 +137,7 @@ fn a_rotation_moves_the_record_once_and_shows() {
             .unwrap();
     };
     set_key(
-        "UPDATE users SET opaque_server_key_id = (SELECT max(key_id) FROM opaque_server_setups)
+        "UPDATE accounts SET opaque_server_key_id = (SELECT max(key_id) FROM opaque_server_setups)
          WHERE id = $1::uuid",
     );
     assert_eq!(
@@ -153,7 +153,7 @@ fn a_rotation_moves_the_record_once_and_shows() {
         "already on the current setup"
     );
     set_key(
-        "UPDATE users SET opaque_server_key_id = (SELECT min(key_id) FROM opaque_server_setups)
+        "UPDATE accounts SET opaque_server_key_id = (SELECT min(key_id) FROM opaque_server_setups)
          WHERE id = $1::uuid",
     );
     // A rotate grant is no password change.
@@ -216,7 +216,7 @@ fn a_rotation_moves_the_record_once_and_shows() {
     assert_eq!(opened.as_slice(), user.master_key.as_slice());
     // The owner sees it.
     let events: Value = bearer(
-        c.get(format!("{base}/api/user/security-events")),
+        c.get(format!("{base}/api/v1/account/security-events")),
         &user.token,
     )
     .send()

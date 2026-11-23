@@ -8,7 +8,7 @@
 #   scripts/check-migration-baseline.sh <old-ref> --generate  write the baseline
 #
 # <old-ref> is a git ref whose crates/kutup-server/migrations is the old chain.
-# --generate writes crates/kutup-server/migrations/20261013000000_baseline.up.sql
+# --generate writes crates/kutup-server/migrations/20261112000000_baseline.up.sql
 # (and its down) from that chain, then compares.
 set -euo pipefail
 
@@ -16,7 +16,7 @@ old_ref="${1:?usage: $0 <old-ref> [--generate]}"
 generate="${2:-}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 migrations="$root/crates/kutup-server/migrations"
-baseline="$migrations/20261013000000_baseline"
+baseline="$migrations/20261112000000_baseline"
 work="$(mktemp -d)"
 container="kutup-baseline-$$"
 cleanup() {
@@ -36,13 +36,17 @@ dump() {
     --exclude-table=_sqlx_migrations "$@"
 }
 
-# Applies the .up.sql files in $1 to database $2, in version order, as sqlx does.
+# Applies the .up.sql files in $1 to database $2, in version order, as sqlx
+# does: each in one transaction (a temporary table ON COMMIT DROP lives for the
+# whole file), except one marked `-- no-transaction`.
 apply() {
-  local dir="$1" db="$2" file
+  local dir="$1" db="$2" file single
   psql -c "CREATE DATABASE $db" >/dev/null
   while IFS= read -r file; do
-    psql -d "$db" < "$file" >/dev/null || { echo "failed applying $(basename "$file")" >&2; exit 1; }
-  done < <(find "$dir" -maxdepth 1 -name '*.up.sql' | sort -t_ -k1,1n)
+    single=--single-transaction
+    head -n 1 "$file" | grep -q -- '-- no-transaction' && single=
+    psql $single -d "$db" < "$file" >/dev/null || { echo "failed applying $(basename "$file")" >&2; exit 1; }
+  done < <(find "$dir" -maxdepth 1 -name '*.up.sql' -printf '%f\t%p\n' | sort | cut -f2)
 }
 
 mkdir -p "$work/old"
@@ -52,16 +56,20 @@ apply "$work/old/crates/kutup-server/migrations" chain
 if [[ "$generate" == "--generate" ]]; then
   mkdir -p "$migrations"
   {
-    echo "-- The schema every migration up to the clean-slate release built, squashed"
-    echo "-- (scripts/check-migration-baseline.sh proves it equal). Never edit:"
-    echo "-- a change is a new timestamped migration (docs/contributing.md)."
+    echo "-- The whole migration chain squashed, proven equal to it by"
+    echo "-- scripts/check-migration-baseline.sh at the squash commit. Never edit once"
+    echo "-- applied: a change is then a new timestamped migration (docs/contributing.md)."
     echo "--"
-    echo "-- Refuses a database that already holds the old chain's tables."
+    echo "-- Refuses a database that already holds tables (an old chain's)."
     echo "DO \$\$ BEGIN"
-    echo "  IF to_regclass('public.users') IS NOT NULL THEN"
+    echo "  IF to_regclass('public.users') IS NOT NULL OR to_regclass('public.accounts') IS NOT NULL THEN"
     echo "    RAISE EXCEPTION 'this database predates the baseline: start from an empty one';"
     echo "  END IF;"
     echo "END \$\$;"
+    echo
+    # Functions are created before the tables their SQL bodies read, as
+    # pg_dump orders them: their bodies are checked when they first run.
+    echo "SET check_function_bodies = false;"
     echo
     dump --schema-only -d chain | grep -vE '^(SET |SELECT pg_catalog.set_config|\\(un)?restrict )'
     dump --data-only --inserts -d chain | grep -vE '^(SET |SELECT pg_catalog.set_config|\\(un)?restrict )'

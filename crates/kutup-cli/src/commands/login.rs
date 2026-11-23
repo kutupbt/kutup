@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 
-use crate::api::{Client, TotpRequest};
+use crate::api::{instance_id_of, Client, TotpRequest};
 use crate::commands::prompt_line;
 use crate::config;
 use crate::errors::HeadBlocked;
@@ -21,6 +21,8 @@ pub fn run(
         server = prompt_line("Server URL: ")?;
     }
     let server = server.trim_end_matches('/').to_string();
+    // A CLI this server no longer accepts says so before asking anything else.
+    Client::new(&server, "").check_version()?;
 
     // Username or Kutup address: --username flag, else prompt. Password: KUTUP_PASSWORD env (for
     // non-interactive automation/CI), else a hidden prompt.
@@ -40,7 +42,7 @@ pub fn run(
             "username": sess.username,
             "name": sess.name,
             "server": sess.server,
-            "userId": sess.user_id,
+            "accountId": sess.account_id,
         }))?;
     } else {
         println!("Logged in as {}", sess.username);
@@ -252,11 +254,11 @@ pub(crate) fn login_with_password(
     .context("open the account's roots")?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
         .context("derive the account's keys")?;
-    let public_key = b64.encode(identity.drive_hpke_public_key());
-    if public_key != resp.public_key {
+    let public_key = b64.encode(identity.drive_xwing_public_key());
+    if public_key != resp.drive_xwing_public_key {
         bail!("the server publishes another Drive key than this account's master key derives");
     }
-    let private_key = identity.drive_hpke_private_key().to_vec();
+    let private_key = identity.drive_xwing_private_key().to_vec();
 
     // Step 4: the server moved to a new setup: the same password registered
     // under it, now, while this side holds it (a failure only waits for the
@@ -275,7 +277,7 @@ pub(crate) fn login_with_password(
     let account = Client::new(server, &resp.access_token)
         .me()
         .context("read the account")?;
-    if account.account_id != resp.user_id {
+    if account.account_id != resp.account_id {
         bail!("the server described another account than the one signed in");
     }
 
@@ -310,13 +312,18 @@ pub(crate) fn login_with_password(
         }
     }
 
-    // Step 7: persist the session.
+    // Step 7: persist the session, with the server's instance id.
+    let instance_id = Client::new(server, "")
+        .health()
+        .ok()
+        .and_then(|health| instance_id_of(&health))
+        .unwrap_or_default();
     let mut store = Store::open(profile)?;
     let sess = Session {
         server: server.to_string(),
         name: name.to_string(),
         envelope_binding: binding,
-        user_id: resp.user_id,
+        account_id: resp.account_id,
         server_name: account.server,
         username: account.username,
         access_token: resp.access_token,
@@ -331,6 +338,7 @@ pub(crate) fn login_with_password(
         master_keyring: resp.master_keyring,
         storage_quota_bytes: resp.storage_quota_bytes,
         storage_used_bytes: resp.storage_used_bytes,
+        instance_id,
     };
     store.save_session(&sess).context("save session")?;
     Ok(sess)

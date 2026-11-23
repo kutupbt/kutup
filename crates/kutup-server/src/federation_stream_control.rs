@@ -39,7 +39,7 @@ use crate::federation_outbox::{self, Kind};
 use crate::AppState;
 
 /// Where a stream control message goes.
-pub const PATH: &str = "/api/fed/chat/stream-control";
+pub const PATH: &str = "/api/fed/v2/chat/stream-control";
 
 /// The largest stream control message taken.
 const MAX_BYTES: usize = 1024;
@@ -48,6 +48,62 @@ fn kind_of(stream: FederationStreamV1) -> Kind {
     match stream {
         FederationStreamV1::Chat => Kind::Chat,
         FederationStreamV1::Media => Kind::Media,
+        FederationStreamV1::Sealed => Kind::Sealed,
+    }
+}
+
+/// A queued transaction this server can no longer read (a retired format, a
+/// damaged payload) must not hold its destination's queue: its sequence is
+/// withdrawn, as an off account's send is, so the peer moves on with no gap,
+/// and the row is settled as rejected (`undecodable`). Only the row's id is
+/// logged. Returns whether it is settled; otherwise it is tried again later
+/// (the peer waits for an earlier sequence, or did not answer).
+pub async fn settle_undecodable(
+    state: &AppState,
+    stream: FederationStreamV1,
+    row_id: Uuid,
+    destination: &str,
+    sequence: i64,
+    attempts: i32,
+) -> AppResult<bool> {
+    tracing::warn!(row = %row_id, "a queued federation transaction no longer decodes: its sequence is withdrawn");
+    match withdraw(state, stream, destination, sequence, row_id).await? {
+        Withdrawal::Accepted => {
+            federation_outbox::settle(
+                &state.pool,
+                row_id,
+                Some(sequence),
+                false,
+                Some("undecodable"),
+                &serde_json::json!({ "withdrawn": true }),
+            )
+            .await?;
+            Ok(true)
+        }
+        Withdrawal::Gap { expected } => {
+            federation_outbox::retry_later(
+                &state.pool,
+                row_id,
+                Some(sequence),
+                attempts,
+                "sequenceGap",
+                &format!("remote expects sequence {expected}"),
+            )
+            .await?;
+            Ok(false)
+        }
+        Withdrawal::Retry(error) => {
+            federation_outbox::retry_later(
+                &state.pool,
+                row_id,
+                Some(sequence),
+                attempts,
+                "transport",
+                &error,
+            )
+            .await?;
+            Ok(false)
+        }
     }
 }
 
@@ -213,7 +269,7 @@ async fn apply(
     Ok(Applied::Accepted(answer))
 }
 
-/// `POST /api/fed/chat/stream-control` — a sequence of the origin's stream
+/// `POST /api/fed/v2/chat/stream-control` — a sequence of the origin's stream
 /// used up with nothing delivered (a withdrawal, or a skip-safe code).
 pub async fn receive(
     State(state): State<AppState>,

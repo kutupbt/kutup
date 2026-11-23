@@ -153,7 +153,7 @@ function Row({
           ) : (
             <Badge variant={STATE_BADGE[forwarding.state]}>{t(`forwarding.state.${forwarding.state}`)}</Badge>
           )}
-          <Badge variant={forwarding.kind === 'end_to_end' ? 'ok' : 'warn'}>{t(`forwarding.kind.${forwarding.kind}`)}</Badge>
+          <Badge variant={forwarding.kind === 'endToEnd' ? 'ok' : 'warn'}>{t(`forwarding.kind.${forwarding.kind}`)}</Badge>
         </p>
         <p className="text-xs text-muted-foreground">{describeForwarding(forwarding, t)}</p>
         {forwarding.notice ? <p className="text-xs text-status-warn">{t(`forwarding.notice.${forwarding.notice}`)}</p> : null}

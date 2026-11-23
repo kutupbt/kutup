@@ -341,7 +341,7 @@ mod tests {
             incarnation_id: String::new(),
             authority_key_id: String::new(),
             self_authority_key: authority(seed),
-            drive_hpke_public_key: String::new(),
+            drive_xwing_public_key: String::new(),
             drive_share_signing_public_key: String::new(),
             highest_sequence: 1,
             manifest_hash: String::new(),

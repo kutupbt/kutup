@@ -16,7 +16,7 @@ export function useIdentityStatus(account: string | null | undefined, claimed: C
     queryKey: [
       ...statusKey,
       account ?? '',
-      claimed.driveHpkePublicKey ?? '',
+      claimed.driveXwingPublicKey ?? '',
       claimed.driveSigningPublicKey ?? '',
       claimed.incarnationId ?? '',
       claimed.authorityPublicKey ?? '',

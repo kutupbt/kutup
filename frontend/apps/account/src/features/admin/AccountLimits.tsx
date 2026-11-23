@@ -15,13 +15,13 @@ import { RateLimitRow } from './RateLimitsPage'
  * account (docs/plans/settings-registry.md), on its page under
  * Administration: each with the value in effect and where it comes from.
  */
-export function AccountLimits({ userId }: { userId: string }) {
+export function AccountLimits({ accountId }: { accountId: string }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const key = [...adminKey, 'users', userId, 'limits'] as const
+  const key = [...adminKey, 'users', accountId, 'limits'] as const
   const limits = useQuery({
     queryKey: key,
-    queryFn: async () => (await api.get<Limits>(`/admin/users/${userId}/limits`)).data,
+    queryFn: async () => (await api.get<Limits>(`/admin/accounts/${accountId}/entitlements`)).data,
   })
   if (limits.isError) return <Alert variant="error">{apiErrorMessage(limits.error, t('common.tryAgain'))}</Alert>
   if (limits.isPending) return <FormSkeleton label={t('common.loading')} />
@@ -29,7 +29,7 @@ export function AccountLimits({ userId }: { userId: string }) {
   const source = (from: ValueSource, site: number) =>
     from === 'account' ? t('admin.limits.source.account', { site }) : t(`admin.limits.source.${from}`)
   const save = async (limitKey: string, value: number | null) =>
-    (await api.put<AccountSettingLimit | AccountRateLimitLimit>(`/admin/users/${userId}/limits/${limitKey}`, { value })).data
+    (await api.put<AccountSettingLimit | AccountRateLimitLimit>(`/admin/accounts/${accountId}/entitlements/${limitKey}`, { value })).data
   const saved = (next: AccountSettingLimit | AccountRateLimitLimit) =>
     queryClient.setQueryData<Limits>(key, (all) =>
       all && {

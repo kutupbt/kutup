@@ -35,6 +35,9 @@
   },
   "discovery": {
     "fedVersion": 2,
+    "fedVersions": [
+      2
+    ],
     "server": "alpha.example",
     "apiBase": "https://federation.alpha.example/api/fed",
     "capabilities": [
@@ -59,7 +62,7 @@
     "identityDocumentHash": "073155df957c8f58a577a1363975fab14253494c5e8ea054f3ca3cad9e0e04c4",
     "signedAt": 1700000200,
     "expiresAt": 1700003800,
-    "signature": "fr13j+SvH+1FTzWkNDLWJ3LXNBJS2fJ5U0lKoihOiD4cm/u9fGurOWllPGkK0/tKKI+73w6snQ5FkIxkW/zkCw=="
+    "signature": "1yyP410nIN3irFZ6foKKqTGQzpdbQuPnIXZHONtgqEvdxxOWEhMEJOdct++l1mG7r14qHJnvw/vz3X9DKL5vAA=="
   },
   "httpSignature": {
     "requestSignerPublicKeyBase64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
@@ -67,7 +70,7 @@
     "request": {
       "method": "POST",
       "authority": "beta.example",
-      "path": "/api/fed/chat/messages",
+      "path": "/api/fed/v2/chat/messages",
       "query": "?batch=1%2F2",
       "contentType": "application/json",
       "bodyBase64": "eyJ0cmFuc2FjdGlvbklkIjoiMDFIWFlaIn0=",
@@ -79,9 +82,9 @@
     "requestHeaders": {
       "contentDigest": "sha-256=:w2mUVLrlDRWqAvbUXp4ty65CN2mpKFlWg/sN1mjCmrQ=:",
       "signatureInput": "kutup=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\");created=1700000300;expires=1700000600;keyid=\"ed23d853125a3acff2782dddf84e018ebc85942ebf328ff1287202a479964207\";alg=\"ed25519\";nonce=\"01HZX-test-nonce\";tag=\"kutup-federation-v2\"",
-      "signature": "kutup=:44MsbQUTkHR3QGyrgaMQeM7JU/RE9IhNDRIz0iO8bG5nLjD8M41zuMJPwuFKwp/3R8IjY1NCVHR0UFpMODT7CA==:"
+      "signature": "kutup=:xYf83vqdmdSul9CWvoPDvT7BsphRqoBu9weN9OMHn3mIRiu2IkIc228ls3GO/tSvyT5/nQOalnnj1g33j0K9Cw==:"
     },
-    "requestSignatureBase": "\"@method\": POST\n\"@authority\": beta.example\n\"@path\": /api/fed/chat/messages\n\"@query\": ?batch=1%2F2\n\"content-digest\": sha-256=:w2mUVLrlDRWqAvbUXp4ty65CN2mpKFlWg/sN1mjCmrQ=:\n\"content-type\": application/json\n\"kutup-federation-version\": 2\n\"kutup-federation-feature\": chat.v2\n\"kutup-origin\": alpha.example\n\"kutup-destination\": beta.example\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\");created=1700000300;expires=1700000600;keyid=\"ed23d853125a3acff2782dddf84e018ebc85942ebf328ff1287202a479964207\";alg=\"ed25519\";nonce=\"01HZX-test-nonce\";tag=\"kutup-federation-v2\"",
+    "requestSignatureBase": "\"@method\": POST\n\"@authority\": beta.example\n\"@path\": /api/fed/v2/chat/messages\n\"@query\": ?batch=1%2F2\n\"content-digest\": sha-256=:w2mUVLrlDRWqAvbUXp4ty65CN2mpKFlWg/sN1mjCmrQ=:\n\"content-type\": application/json\n\"kutup-federation-version\": 2\n\"kutup-federation-feature\": chat.v2\n\"kutup-origin\": alpha.example\n\"kutup-destination\": beta.example\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\");created=1700000300;expires=1700000600;keyid=\"ed23d853125a3acff2782dddf84e018ebc85942ebf328ff1287202a479964207\";alg=\"ed25519\";nonce=\"01HZX-test-nonce\";tag=\"kutup-federation-v2\"",
     "responseSignerSeedBase64": "DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0=",
     "responseSignerPublicKeyBase64": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
     "responseSignerKeyId": "defe6330f78fcc11efd0fb28614f0d29d7b60d6e66c25c1c5b0f98fe505fc8bb",
@@ -97,8 +100,8 @@
     "responseHeaders": {
       "contentDigest": "sha-256=:EaSfhT64vv6U/vJ41IcSXNIJMLnkHEwJNDlEQ+fwCHg=:",
       "signatureInput": "kutup=(\"@status\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\" \"@method\";req \"@authority\";req \"@path\";req \"@query\";req \"content-digest\";req \"content-type\";req \"kutup-federation-version\";req \"kutup-federation-feature\";req \"kutup-origin\";req \"kutup-destination\";req);created=1700000401;expires=1700000601;keyid=\"defe6330f78fcc11efd0fb28614f0d29d7b60d6e66c25c1c5b0f98fe505fc8bb\";alg=\"ed25519\";nonce=\"01HZX-test-nonce\";tag=\"kutup-federation-v2\"",
-      "signature": "kutup=:RezMaOSw49lRioUC8vPFbw7K1H357enLbrlbj4anreBR/zX5WXIzEsJqMtjugFwiHv8Kh71/so7EDEAxQ1GdBQ==:"
+      "signature": "kutup=:WYUGcedaG5ltpiWKNi0O+uvbBAIGl8hSXJw7f6kwI05TvO0hK74pIKUDa9QDzAgykFHXSbFiwDWpSY7ogW2mCA==:"
     },
-    "responseSignatureBase": "\"@status\": 202\n\"content-digest\": sha-256=:EaSfhT64vv6U/vJ41IcSXNIJMLnkHEwJNDlEQ+fwCHg=:\n\"content-type\": application/json\n\"kutup-federation-version\": 2\n\"kutup-federation-feature\": chat.v2\n\"kutup-origin\": beta.example\n\"kutup-destination\": alpha.example\n\"@method\";req: POST\n\"@authority\";req: beta.example\n\"@path\";req: /api/fed/chat/messages\n\"@query\";req: ?batch=1%2F2\n\"content-digest\";req: sha-256=:w2mUVLrlDRWqAvbUXp4ty65CN2mpKFlWg/sN1mjCmrQ=:\n\"content-type\";req: application/json\n\"kutup-federation-version\";req: 2\n\"kutup-federation-feature\";req: chat.v2\n\"kutup-origin\";req: alpha.example\n\"kutup-destination\";req: beta.example\n\"@signature-params\": (\"@status\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\" \"@method\";req \"@authority\";req \"@path\";req \"@query\";req \"content-digest\";req \"content-type\";req \"kutup-federation-version\";req \"kutup-federation-feature\";req \"kutup-origin\";req \"kutup-destination\";req);created=1700000401;expires=1700000601;keyid=\"defe6330f78fcc11efd0fb28614f0d29d7b60d6e66c25c1c5b0f98fe505fc8bb\";alg=\"ed25519\";nonce=\"01HZX-test-nonce\";tag=\"kutup-federation-v2\""
+    "responseSignatureBase": "\"@status\": 202\n\"content-digest\": sha-256=:EaSfhT64vv6U/vJ41IcSXNIJMLnkHEwJNDlEQ+fwCHg=:\n\"content-type\": application/json\n\"kutup-federation-version\": 2\n\"kutup-federation-feature\": chat.v2\n\"kutup-origin\": beta.example\n\"kutup-destination\": alpha.example\n\"@method\";req: POST\n\"@authority\";req: beta.example\n\"@path\";req: /api/fed/v2/chat/messages\n\"@query\";req: ?batch=1%2F2\n\"content-digest\";req: sha-256=:w2mUVLrlDRWqAvbUXp4ty65CN2mpKFlWg/sN1mjCmrQ=:\n\"content-type\";req: application/json\n\"kutup-federation-version\";req: 2\n\"kutup-federation-feature\";req: chat.v2\n\"kutup-origin\";req: alpha.example\n\"kutup-destination\";req: beta.example\n\"@signature-params\": (\"@status\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\" \"@method\";req \"@authority\";req \"@path\";req \"@query\";req \"content-digest\";req \"content-type\";req \"kutup-federation-version\";req \"kutup-federation-feature\";req \"kutup-origin\";req \"kutup-destination\";req);created=1700000401;expires=1700000601;keyid=\"defe6330f78fcc11efd0fb28614f0d29d7b60d6e66c25c1c5b0f98fe505fc8bb\";alg=\"ed25519\";nonce=\"01HZX-test-nonce\";tag=\"kutup-federation-v2\""
   }
 }

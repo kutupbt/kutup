@@ -49,14 +49,14 @@ interface RemoteUser {
   server: string
   accountId: string
   accountIncarnationId: string
-  driveHpkePublicKey: string
+  driveXwingPublicKey: string
   driveSigningPublicKey: string
   identitySuite?: number
 }
 
 interface Keys {
   incarnationId: string
-  hpkePublicKey: string
+  xwingPublicKey: string
   signingPublicKey: string
 }
 
@@ -85,7 +85,7 @@ function keysOf(person: DrivePerson): Promise<Keys | null> {
       person.identitySuite !== 1 && person.accountIncarnationId && person.drivePublicKey && person.driveSigningPublicKey
         ? {
             incarnationId: person.accountIncarnationId,
-            hpkePublicKey: person.drivePublicKey,
+            xwingPublicKey: person.drivePublicKey,
             signingPublicKey: person.driveSigningPublicKey,
           }
         : null,
@@ -95,7 +95,7 @@ function keysOf(person: DrivePerson): Promise<Keys | null> {
   let pending = remoteKeys.get(cacheKey)
   if (!pending) {
     pending = api
-      .get<RemoteUser>(`/users/by-id/${encodeURIComponent(person.accountId)}`, {
+      .get<RemoteUser>(`/accounts/${encodeURIComponent(person.accountId)}`, {
         params: { server: person.server },
       })
       .then(({ data }) => {
@@ -105,7 +105,7 @@ function keysOf(person: DrivePerson): Promise<Keys | null> {
       })
       .then((data) => ({
         incarnationId: data.accountIncarnationId,
-        hpkePublicKey: data.driveHpkePublicKey,
+        xwingPublicKey: data.driveXwingPublicKey,
         signingPublicKey: data.driveSigningPublicKey,
       }))
       .catch(() => {
@@ -136,7 +136,7 @@ async function give(person: DrivePerson, keys: Keys, own: ProfileLookup, me: Dri
   const envelope = await sealProfileKeyEnvelope(
     fromBase64(own.key),
     me.roots.identityRoot,
-    keys.hpkePublicKey,
+    keys.xwingPublicKey,
     {
       sender: me.accountRef,
       senderIncarnationId: me.incarnationId,

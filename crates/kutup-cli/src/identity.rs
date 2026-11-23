@@ -118,7 +118,7 @@ impl Me {
         // Who this account is, read with the session: by its id, never by
         // the username the session last saw (a rename elsewhere changes it).
         let current = ctx.client.me().context("read the account")?;
-        if current.account_id != ctx.session.user_id {
+        if current.account_id != ctx.session.account_id {
             bail!("the server described another account than this session's");
         }
         let roots = ctx.session.roots()?;
@@ -184,7 +184,7 @@ pub fn published_with(client: &crate::api::Client, account: &str) -> Result<Publ
             .with_context(|| format!("the lookup for {account} gave no valid account id"))?,
         account: user.account,
         authority: user.account_authority_public_key,
-        hpke: user.drive_hpke_public_key,
+        hpke: user.drive_xwing_public_key,
         signing: user.drive_signing_public_key,
         binding: user.drive_key_binding,
         identity_suite: user.identity_suite,

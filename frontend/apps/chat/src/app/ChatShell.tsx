@@ -167,7 +167,7 @@ export function ChatShell() {
             // A signed-out browser is not woken for this account any more.
             clearDrafts()
             // Nor does it host this account's meetings any more.
-            forgetAccountHostTokens(session.userId)
+            forgetAccountHostTokens(session.accountId)
             // Joins, leaves and contact changes still waiting for their list
             // writes go now.
             void Promise.all([chat.service?.flushGroupList(), chat.service?.flushContactList()])

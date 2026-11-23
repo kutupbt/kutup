@@ -357,7 +357,7 @@ For the full picture (key hierarchy, login flow, federation model, storage layer
 | Local-first testing and CI workflow routing | [docs/contributing.md](docs/contributing.md), [tests/e2e/README.md](tests/e2e/README.md) |
 | Web UI architecture, theme system, and responsive rules | [docs/frontend.md](docs/frontend.md) |
 | Documentation map and document-status conventions | [docs/README.md](docs/README.md) |
-| Machine-readable OpenAPI document | `/api-docs/openapi.json` on a running stack (interactive Swagger UI is not bundled) |
+| Machine-readable OpenAPI document | `/api/v1/openapi.json` on a running stack (interactive Swagger UI is not bundled) |
 
 ---
 

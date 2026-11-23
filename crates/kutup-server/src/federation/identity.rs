@@ -5,9 +5,9 @@ use kutup_federation_proto::{
 use serde_json::json;
 use sqlx::{PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
-use uuid::Uuid;
 
 use super::FederationRuntimeConfig;
+use crate::audit_log::AdminAction;
 
 const LOCAL_IDENTITY_ADVISORY_LOCK: i64 = 0x4b55_5455_5046_4944;
 
@@ -36,7 +36,7 @@ impl LocalFederationIdentity {
             insert_local_document(&mut transaction, &genesis, now).await?;
             insert_system_audit(
                 &mut transaction,
-                "federation.identity.genesis",
+                AdminAction::FederationCreateIdentity,
                 json!({
                     "actorType": "system",
                     "domain": config.server_name,
@@ -154,9 +154,9 @@ pub(crate) async fn rotate_local_identity(
     insert_local_document(&mut transaction, &rotated, now).await?;
     insert_system_audit(
         &mut transaction,
-        "federation.identity.rotate-local",
+        AdminAction::FederationRotateIdentity,
         json!({
-            "actorType": "operator-command",
+            "actorType": "operatorCommand",
             "domain": config.server_name,
             "sequence": rotated.sequence,
             "oldFingerprint": latest.key.key_id,
@@ -176,10 +176,17 @@ pub(crate) async fn rotate_local_identity(
 /// Into the admin log's chain, in this transaction (docs/plans/server-personal-data.md, A8).
 pub(crate) async fn insert_system_audit(
     transaction: &mut Transaction<'_, Postgres>,
-    action: &str,
+    action: AdminAction,
     payload: serde_json::Value,
 ) -> Result<(), sqlx::Error> {
-    crate::audit_log::append_in(transaction, Uuid::nil(), action, None, &payload).await
+    crate::audit_log::append_in(
+        transaction,
+        crate::audit_log::Actor::Job,
+        action,
+        None,
+        &payload,
+    )
+    .await
 }
 
 async fn lock_local_identity(
@@ -196,7 +203,7 @@ async fn load_local_documents(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> anyhow::Result<Vec<FederationIdentityDocumentV1>> {
     let rows: Vec<(i64, String, String, serde_json::Value)> = sqlx::query_as(
-        "SELECT sequence, document_hash, key_id, document
+        "SELECT sequence, encode(document_hash, 'hex'), encode(key_id, 'hex'), document
          FROM federation_local_identity_documents ORDER BY sequence",
     )
     .fetch_all(&mut **transaction)
@@ -240,7 +247,7 @@ async fn insert_local_document(
     sqlx::query(
         "INSERT INTO federation_local_identity_documents
          (sequence, document_hash, key_id, document, created_at)
-         VALUES ($1, $2, $3, $4, $5)",
+         VALUES ($1, decode($2, 'hex'), decode($3, 'hex'), $4, $5)",
     )
     .bind(sequence)
     .bind(document.document_hash()?)

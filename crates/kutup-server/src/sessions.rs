@@ -3,7 +3,7 @@
 //! Design: `docs/plans/multi-app-web-rewrite.md` ("Sessions and forking").
 //!
 //! - Every sign-in creates an `auth_sessions` row with a client type
-//!   (`web-account`, `web-drive`, `web-chat`, `web-maps`, `web-photos`, `web-office`, `web-contacts`, `web-mail`, `web-pass`, `cli`, …). Access tokens carry the
+//!   (`web-account`, `web-drive`, `web-chat`, `web-maps`, `web-photos`, `web-office`, `web-contacts`, `web-mail`, `web-pass`, `web-calendar`, `cli`, `mail-bridge`). Access tokens carry the
 //!   session id (`sid`) and every authenticated request checks the row is
 //!   live, so revocation is immediate.
 //! - Refresh tokens are opaque 32-byte secrets, stored as SHA-256 and rotated
@@ -24,8 +24,17 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
-/// Idle lifetime; every refresh slides it forward.
-pub const SESSION_TTL: Duration = Duration::days(30);
+/// `account`'s idle session lifetime (`account.session_ttl_days`: its own
+/// value, else the site's, else 30 days); every refresh slides it forward.
+/// Read at each sign-in, fork and refresh, so a change applies to each
+/// session at its next.
+pub async fn ttl<'e, E: sqlx::PgExecutor<'e>>(executor: E, account: Uuid) -> AppResult<Duration> {
+    Ok(Duration::days(
+        crate::site_settings::SESSION_TTL_DAYS
+            .load_for(executor, account)
+            .await?,
+    ))
+}
 /// How long a just-rotated refresh token still yields an access token.
 pub const REFRESH_GRACE: Duration = Duration::seconds(60);
 /// How long a fork hand-off waits for the child origin.
@@ -46,9 +55,30 @@ pub enum ClientType {
     WebPass,
     WebCalendar,
     Cli,
+    /// The Mail bridge (docs/plans/mail-parity.md): a program on the
+    /// person's computer serving IMAP and SMTP to desktop mail apps, signed
+    /// in on its own as the CLI is, so its sign-in is listed and ended apart.
+    MailBridge,
 }
 
 impl ClientType {
+    /// Every client type: the baseline's `client_type` domain holds exactly
+    /// these (checked by a test).
+    pub const ALL: [ClientType; 12] = [
+        Self::WebAccount,
+        Self::WebDrive,
+        Self::WebChat,
+        Self::WebMaps,
+        Self::WebPhotos,
+        Self::WebOffice,
+        Self::WebContacts,
+        Self::WebMail,
+        Self::WebPass,
+        Self::WebCalendar,
+        Self::Cli,
+        Self::MailBridge,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::WebAccount => "web-account",
@@ -62,6 +92,7 @@ impl ClientType {
             Self::WebPass => "web-pass",
             Self::WebCalendar => "web-calendar",
             Self::Cli => "cli",
+            Self::MailBridge => "mail-bridge",
         }
     }
 
@@ -78,6 +109,7 @@ impl ClientType {
             "web-pass" => Some(Self::WebPass),
             "web-calendar" => Some(Self::WebCalendar),
             "cli" => Some(Self::Cli),
+            "mail-bridge" => Some(Self::MailBridge),
             _ => None,
         }
     }
@@ -85,12 +117,12 @@ impl ClientType {
     /// Web clients hold the refresh token in an HttpOnly cookie on their own
     /// origin; everything else receives it in the response body.
     pub fn uses_cookie(self) -> bool {
-        !matches!(self, Self::Cli)
+        !matches!(self, Self::Cli | Self::MailBridge)
     }
 
     /// Clients that sign in with a password (the others are forked).
     pub fn signs_in_directly(self) -> bool {
-        matches!(self, Self::WebAccount | Self::Cli)
+        matches!(self, Self::WebAccount | Self::Cli | Self::MailBridge)
     }
 
     /// Clients the account app may fork a session for.
@@ -146,6 +178,8 @@ async fn sealed_client(
 pub struct IssuedSession {
     pub session_id: Uuid,
     pub refresh_token: String,
+    /// How long it lasts unused ([`ttl`]): the refresh cookie's lifetime.
+    pub ttl: Duration,
 }
 
 pub async fn create(
@@ -159,9 +193,10 @@ pub async fn create(
     let refresh_token = new_secret();
     let mut conn = pool.acquire().await?;
     let client_sealed = sealed_client(&mut conn, user_id, session_id, user_agent).await?;
+    let ttl = ttl(&mut *conn, user_id).await?;
     sqlx::query(
         "INSERT INTO auth_sessions
-             (id, user_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
+             (id, account_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(session_id)
@@ -170,12 +205,13 @@ pub async fn create(
     .bind(parent)
     .bind(hash_secret(&refresh_token))
     .bind(client_sealed)
-    .bind(OffsetDateTime::now_utc() + SESSION_TTL)
+    .bind(OffsetDateTime::now_utc() + ttl)
     .execute(&mut *conn)
     .await?;
     Ok(IssuedSession {
         session_id,
         refresh_token,
+        ttl,
     })
 }
 
@@ -183,7 +219,7 @@ pub async fn create(
 #[derive(Clone, Debug)]
 pub struct LiveSession {
     pub session_id: Uuid,
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub client: ClientType,
     pub is_admin: bool,
     /// A digest of the account's security state (its password hash, 2FA
@@ -196,20 +232,20 @@ pub struct LiveSession {
 /// active. Called for every authenticated request.
 pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<LiveSession> {
     let row: Option<(String, bool, String)> = sqlx::query_as(
-        "SELECT s.client_type, u.is_admin,
+        "SELECT s.client_type, u.role <> 'member',
                 encode(sha256(convert_to(
                     length(COALESCE(encode(u.opaque_record, 'hex'), '')) || ':' ||
                     COALESCE(encode(u.opaque_record, 'hex'), '') ||
-                    u.totp_enabled::text || ',' ||
+                    (u.totp_secret_sealed IS NOT NULL)::text || ',' ||
                     (SELECT count(*) || '/' || count(*) FILTER (WHERE NOT k.compromised)
-                     FROM user_security_keys k WHERE k.user_id = u.id) || ',' ||
-                    u.is_admin::text || ',' ||
+                     FROM account_security_keys k WHERE k.account_id = u.id) || ',' ||
+                    u.role || ',' ||
                     length(COALESCE(u.username, '')) || ':' || COALESCE(u.username, '') ||
-                    length(COALESCE(u.key_binding, '')) || ':' || COALESCE(u.key_binding, ''),
+                    length(COALESCE(u.key_binding::text, '')) || ':' || COALESCE(u.key_binding::text, ''),
                     'UTF8')), 'hex')
-         FROM auth_sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
-           AND s.expires_at > now() AND u.is_active
+         FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
+         WHERE s.id = $1 AND s.account_id = $2 AND s.revoked_at IS NULL
+           AND s.expires_at > now() AND u.state = 'active'
            -- A forked session lives only while its sign-in does.
            AND NOT EXISTS (SELECT 1 FROM auth_sessions p
                            WHERE p.id = s.parent_session_id AND p.revoked_at IS NOT NULL)",
@@ -224,7 +260,7 @@ pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<L
         ClientType::parse(&client_type).ok_or_else(|| AppError::unauthorized("unauthorized"))?;
     Ok(LiveSession {
         session_id,
-        user_id,
+        account_id: user_id,
         client,
         is_admin,
         version,
@@ -236,6 +272,8 @@ pub enum RefreshOutcome {
     Rotated {
         session: LiveSession,
         refresh_token: String,
+        /// How long it now lasts unused ([`ttl`]).
+        ttl: Duration,
     },
     /// The token was just rotated by a concurrent refresh; the new one is
     /// already on its way to this client (same cookie jar). Mint an access
@@ -273,8 +311,8 @@ pub async fn refresh(
         Option<OffsetDateTime>,
     );
     let current: Option<Row> = sqlx::query_as(
-        "SELECT s.id, s.user_id, s.client_type, u.is_admin, u.is_active, s.expires_at, s.revoked_at, s.rotated_at
-         FROM auth_sessions s JOIN users u ON u.id = s.user_id
+        "SELECT s.id, s.account_id, s.client_type, u.role <> 'member', u.state = 'active', s.expires_at, s.revoked_at, s.rotated_at
+         FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
          WHERE s.refresh_token_hash = $1
          FOR UPDATE OF s",
     )
@@ -294,6 +332,7 @@ pub async fn refresh(
             return Err(AppError::unauthorized("invalid refresh token"));
         }
         let next = new_secret();
+        let ttl = ttl(&mut *tx, user_id).await?;
         sqlx::query(
             "UPDATE auth_sessions
              SET previous_refresh_token_hash = refresh_token_hash,
@@ -304,26 +343,27 @@ pub async fn refresh(
         .bind(id)
         .bind(hash_secret(&next))
         .bind(now)
-        .bind(now + SESSION_TTL)
+        .bind(now + ttl)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
         return Ok(RefreshOutcome::Rotated {
             session: LiveSession {
                 session_id: id,
-                user_id,
+                account_id: user_id,
                 client,
                 is_admin,
                 // A refresh answers no account request; the next one says it.
                 version: String::new(),
             },
             refresh_token: next,
+            ttl,
         });
     }
 
     let previous: Option<Row> = sqlx::query_as(
-        "SELECT s.id, s.user_id, s.client_type, u.is_admin, u.is_active, s.expires_at, s.revoked_at, s.rotated_at
-         FROM auth_sessions s JOIN users u ON u.id = s.user_id
+        "SELECT s.id, s.account_id, s.client_type, u.role <> 'member', u.state = 'active', s.expires_at, s.revoked_at, s.rotated_at
+         FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
          WHERE s.previous_refresh_token_hash = $1
          FOR UPDATE OF s",
     )
@@ -356,7 +396,7 @@ pub async fn refresh(
     Ok(RefreshOutcome::Grace {
         session: LiveSession {
             session_id: id,
-            user_id,
+            account_id: user_id,
             client,
             is_admin,
             version: String::new(),
@@ -410,7 +450,7 @@ pub async fn sign_out(pool: &PgPool, session_id: Uuid) -> AppResult<()> {
 /// Revoke one of the caller's sessions (and its children).
 pub async fn revoke_owned(pool: &PgPool, user_id: Uuid, session_id: Uuid) -> AppResult<bool> {
     let owned: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM auth_sessions WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        "SELECT id FROM auth_sessions WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL",
     )
     .bind(session_id)
     .bind(user_id)
@@ -459,7 +499,7 @@ pub async fn revoke_all_for_user_in(
     };
     sqlx::query(
         "UPDATE auth_sessions SET revoked_at = now()
-         WHERE user_id = $1 AND revoked_at IS NULL
+         WHERE account_id = $1 AND revoked_at IS NULL
            AND ($2::uuid IS NULL OR (id <> $2 AND parent_session_id IS DISTINCT FROM $2))",
     )
     .bind(user_id)
@@ -468,7 +508,7 @@ pub async fn revoke_all_for_user_in(
     .await?;
     sqlx::query(
         "DELETE FROM calendar_push_subscriptions s USING auth_sessions a
-          WHERE s.session_id = a.id AND a.user_id = $1 AND a.revoked_at IS NOT NULL",
+          WHERE s.session_id = a.id AND a.account_id = $1 AND a.revoked_at IS NOT NULL",
     )
     .bind(user_id)
     .execute(&mut **tx)
@@ -500,7 +540,7 @@ pub async fn list(pool: &PgPool, user_id: Uuid) -> AppResult<Vec<SessionRow>> {
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT id, client_type, parent_session_id, client_sealed, created_at, last_used_at
          FROM auth_sessions
-         WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()
+         WHERE account_id = $1 AND revoked_at IS NULL AND expires_at > now()
          ORDER BY last_used_at DESC",
     )
     .bind(user_id)
@@ -540,7 +580,7 @@ pub async fn prune_ended(pool: &PgPool, days: i64) -> AppResult<u64> {
                                    >= now() - make_interval(days => $1::int))
             -- A legal hold keeps everything of its account
             -- (docs/plans/server-personal-data.md, A5).
-            AND NOT kutup_account_held(s.user_id)",
+            AND NOT kutup_account_held(s.account_id)",
     )
     .bind(days)
     .execute(pool)
@@ -587,8 +627,7 @@ pub async fn create_fork(
 
 pub struct ConsumedFork {
     pub issued: IssuedSession,
-    pub user_id: Uuid,
-    pub is_admin: bool,
+    pub account_id: Uuid,
     pub payload: Vec<u8>,
 }
 
@@ -619,24 +658,25 @@ pub async fn consume_fork(
         tx.commit().await?;
         return Err(AppError::unauthorized("invalid fork"));
     }
-    let parent: Option<(Uuid, bool)> = sqlx::query_as(
-        "SELECT s.user_id, u.is_admin FROM auth_sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.is_active
+    let parent: Option<Uuid> = sqlx::query_scalar(
+        "SELECT s.account_id FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
+         WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.state = 'active'
          FOR UPDATE OF s",
     )
     .bind(parent_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((user_id, is_admin)) = parent else {
+    let Some(user_id) = parent else {
         tx.commit().await?;
         return Err(AppError::unauthorized("invalid fork"));
     };
     let session_id = Uuid::new_v4();
     let refresh_token = new_secret();
     let client_sealed = sealed_client(&mut tx, user_id, session_id, user_agent).await?;
+    let ttl = ttl(&mut *tx, user_id).await?;
     sqlx::query(
         "INSERT INTO auth_sessions
-             (id, user_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
+             (id, account_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(session_id)
@@ -645,7 +685,7 @@ pub async fn consume_fork(
     .bind(parent_id)
     .bind(hash_secret(&refresh_token))
     .bind(client_sealed)
-    .bind(OffsetDateTime::now_utc() + SESSION_TTL)
+    .bind(OffsetDateTime::now_utc() + ttl)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -653,9 +693,9 @@ pub async fn consume_fork(
         issued: IssuedSession {
             session_id,
             refresh_token,
+            ttl,
         },
-        user_id,
-        is_admin,
+        account_id: user_id,
         payload,
     })
 }
@@ -707,20 +747,66 @@ mod tests {
 
     #[test]
     fn client_types_round_trip_and_classify() {
-        for client in [
-            ClientType::WebAccount,
-            ClientType::WebDrive,
-            ClientType::WebChat,
-            ClientType::Cli,
-        ] {
+        for client in ClientType::ALL {
             assert_eq!(ClientType::parse(client.as_str()), Some(client));
+            // Every client either signs in or is forked, never both.
+            assert_ne!(client.signs_in_directly(), client.is_fork_child());
         }
         assert_eq!(ClientType::parse("android-drive"), None);
         assert!(ClientType::WebAccount.signs_in_directly());
         assert!(ClientType::Cli.signs_in_directly());
+        assert!(ClientType::MailBridge.signs_in_directly());
+        assert!(!ClientType::MailBridge.is_fork_child());
+        assert!(!ClientType::MailBridge.uses_cookie());
         assert!(!ClientType::WebDrive.signs_in_directly());
         assert!(ClientType::WebChat.is_fork_child());
         assert!(!ClientType::WebAccount.is_fork_child());
         assert!(!ClientType::Cli.uses_cookie());
+    }
+
+    /// The baseline's `client_type` domain holds every type and no other, and
+    /// the two fork checks name exactly the ones that sign in directly.
+    #[test]
+    fn the_schema_holds_every_client_type() {
+        let baseline = include_str!("../migrations/20261112000000_baseline.up.sql");
+        let quoted = |line: &str| -> Vec<String> {
+            let mut names: Vec<String> = line
+                .split('\'')
+                .skip(1)
+                .step_by(2)
+                .map(str::to_owned)
+                .collect();
+            names.sort();
+            names
+        };
+        let line = |name: &str| {
+            baseline
+                .lines()
+                .find(|line| line.contains(name))
+                .unwrap_or_else(|| panic!("no {name} in the baseline"))
+        };
+        let names = |filter: fn(&ClientType) -> bool| {
+            let mut names: Vec<String> = ClientType::ALL
+                .iter()
+                .filter(|c| filter(c))
+                .map(|c| c.as_str().to_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(
+            quoted(line("CONSTRAINT client_type_check")),
+            names(|_| true)
+        );
+        for check in [
+            "CONSTRAINT auth_session_forks_child_client_type_check",
+            "CONSTRAINT auth_sessions_check CHECK (((parent_session_id IS NULL)",
+        ] {
+            assert_eq!(
+                quoted(line(check)),
+                names(|c| c.signs_in_directly()),
+                "{check}"
+            );
+        }
     }
 }

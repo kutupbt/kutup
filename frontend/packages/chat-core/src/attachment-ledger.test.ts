@@ -35,7 +35,7 @@ vi.mock('@kutup/crypto/chatMedia', () => crypto)
 
 const { ChatAttachmentLedger } = await import('./attachment-ledger')
 
-const account = { userId: 'u', masterKeys: 'keys', roots: {}, envelopeBinding: 'b' } as never
+const account = { accountId: 'u', masterKeys: 'keys', roots: {}, envelopeBinding: 'b' } as never
 const entry = (attachmentId: string, state = 'active') => ({
   version: 1,
   conversationKind: 'direct',

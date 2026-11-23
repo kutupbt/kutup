@@ -1,4 +1,4 @@
-//! `POST /api/account/master-key/rotate` — a new master key
+//! `POST /api/v1/account/master-key/rotate` — a new master key
 //! (docs/plans/mk-rotation-exercise.md), in one transaction: the password
 //! registered again with it, a new recovery phrase, the five roots re-wrapped,
 //! the previous key kept in the keyring, the next account head sealed under
@@ -19,7 +19,7 @@ use crate::account_heads::{self, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::grants::{self, Purpose};
 use crate::handlers::opaque::RecordUpload;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::security_events;
 use crate::AppState;
 
@@ -42,7 +42,7 @@ pub struct RotateRequest {
     /// The five roots sealed again under the new key: each the newest
     /// generation the account keeps of it.
     account_roots: Vec<String>,
-    /// The previous master key under the new one (purpose 27; its object the
+    /// The previous master key under the new one (`MasterKeyKeyring`; its object the
     /// previous generation).
     master_keyring: String,
     /// The next account head, sealed under the new key.
@@ -75,7 +75,7 @@ fn checked(
 
 #[utoipa::path(
     post,
-    path = "/api/account/master-key/rotate",
+    path = "/api/v1/account/master-key/rotate",
     tag = "account",
     security(("BearerAuth" = [])),
     request_body = RotateRequest,
@@ -83,16 +83,16 @@ fn checked(
         (status = 204, description = "The new master key is the account's; its other sign-ins ended"),
         (status = 400, description = "rotationInvalid: a record is not this rotation's"),
         (status = 403, description = "grantInvalid"),
-        (status = 409, description = "head_conflict (read the head again), opaqueKeyStale, or organizationKeys (the account holds organization keys or an escrow, which a rotation can't carry yet)")
+        (status = 409, description = "headConflict (read the head again), opaqueKeyStale, or organizationKeys (the account holds organization keys or an escrow, which a rotation can't carry yet)")
     )
 )]
 pub async fn rotate(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<RotateRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let session = user.session.session_id;
     let (record, server_key_id) = req.record.checked(&state)?;
     let recovery_verifier = crate::handlers::auth::hash_recovery_proof(&req.recovery_proof)?;
@@ -101,7 +101,7 @@ pub async fn rotate(
     let (_, grant) = grants::take(&mut *tx, &req.grant, &[Purpose::MasterKeyRotation])
         .await?
         .ok_or_else(grants::invalid)?;
-    if grant.user_id != user_id || grant.session_id != Some(session) {
+    if grant.account_id != user_id || grant.session_id != Some(session) {
         return Err(grants::invalid());
     }
     // The account row, locked: no listed write or other rotation between.
@@ -161,10 +161,11 @@ pub async fn rotate(
         // The object is the generation, 4 bytes big-endian: byte order is
         // number order (no max() for bytea).
         "SELECT DISTINCT ON (purpose) purpose, object FROM account_roots
-          WHERE user_id = $1 AND purpose BETWEEN 22 AND 26
+          WHERE account_id = $1 AND purpose = ANY($2)
           ORDER BY purpose, object DESC",
     )
     .bind(user_id)
+    .bind(crate::account_roots::purpose_codes())
     .fetch_all(&mut *tx)
     .await?;
     if req.account_roots.len() != PURPOSES.len() || newest.len() != PURPOSES.len() {
@@ -195,10 +196,11 @@ pub async fn rotate(
     account_heads::advance(&mut tx, &locked, Some(&head)).await?;
 
     let updated = sqlx::query(
-        "UPDATE users SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
-                          master_key_envelope = $6, recovery_key_envelope = $7,
+        "UPDATE accounts SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
+                          master_key_envelope = kutup_unb64($6),
+                          recovery_key_envelope = kutup_unb64($7),
                           recovery_key_verifier = $8, master_key_generation = $9
-          WHERE id = $1 AND key_binding = $2 AND master_key_generation = $10 AND is_active",
+          WHERE id = $1 AND key_binding = $2::uuid AND master_key_generation = $10 AND state = 'active'",
     )
     .bind(user_id)
     .bind(&binding)
@@ -218,7 +220,7 @@ pub async fn rotate(
     for (purpose, object, envelope) in &roots {
         sqlx::query(
             "UPDATE account_roots SET envelope = $4
-              WHERE user_id = $1 AND purpose = $2 AND object = $3",
+              WHERE account_id = $1 AND purpose = $2 AND object = $3",
         )
         .bind(user_id)
         .bind(purpose.as_u16() as i16)
@@ -228,7 +230,7 @@ pub async fn rotate(
         .await?;
     }
     sqlx::query(
-        "INSERT INTO account_roots (user_id, purpose, object, envelope) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO account_roots (account_id, purpose, object, envelope) VALUES ($1, $2, $3, $4)",
     )
     .bind(user_id)
     .bind(AccountRecordPurpose::MasterKeyKeyring.as_u16() as i16)

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// More folders than anyone arranges photos in; keeps listing bounded.
@@ -28,27 +28,27 @@ pub struct PhotosPreferences {
     pub library_folder_ids: Vec<Uuid>,
 }
 
-/// `GET /api/photos/preferences` — your library's folders.
+/// `GET /api/v1/photos/preferences` — your library's folders.
 #[utoipa::path(
     get,
-    path = "/api/photos/preferences",
+    path = "/api/v1/photos/preferences",
     tag = "photos",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your photo library's folders", body = PhotosPreferences))
 )]
 pub async fn get_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<PhotosPreferences>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok(Json(preferences_of(&state, user_id).await?))
 }
 
 async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPreferences> {
     let upload: Option<Uuid> = sqlx::query_scalar(
         "SELECT p.upload_folder_id FROM photos_preferences p
-         JOIN collections c ON c.id = p.upload_folder_id
-         WHERE p.user_id = $1 AND c.owner_user_id = $1 AND c.deleted_at IS NULL",
+         JOIN drive_collections c ON c.id = p.upload_folder_id
+         WHERE p.account_id = $1 AND c.owner_account_id = $1 AND c.deleted_at IS NULL",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -56,8 +56,8 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
     .flatten();
     let listed: Vec<Uuid> = sqlx::query_scalar(
         "SELECT f.collection_id FROM photos_library_folders f
-         JOIN collections c ON c.id = f.collection_id
-         WHERE f.user_id = $1 AND c.deleted_at IS NULL
+         JOIN drive_collections c ON c.id = f.collection_id
+         WHERE f.account_id = $1 AND c.deleted_at IS NULL
          ORDER BY f.added_at, f.collection_id",
     )
     .bind(user_id)
@@ -76,11 +76,11 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
     })
 }
 
-/// `PUT /api/photos/preferences` — choose the upload folder (one of your own)
+/// `PUT /api/v1/photos/preferences` — choose the upload folder (one of your own)
 /// and the other folders the library shows.
 #[utoipa::path(
     put,
-    path = "/api/photos/preferences",
+    path = "/api/v1/photos/preferences",
     tag = "photos",
     security(("BearerAuth" = [])),
     request_body = PhotosPreferences,
@@ -91,17 +91,17 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
 )]
 pub async fn put_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<PhotosPreferences>,
 ) -> AppResult<Json<PhotosPreferences>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if request.library_folder_ids.len() > MAX_LIBRARY_FOLDERS {
         return Err(AppError::bad_request("too many folders in the library"));
     }
     if let Some(folder) = request.upload_folder_id {
         let owned: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM collections
-                           WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM drive_collections
+                           WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL)",
         )
         .bind(folder)
         .bind(user_id)
@@ -125,8 +125,8 @@ pub async fn put_preferences(
     }
     let mut tx = state.pool.begin().await?;
     sqlx::query(
-        "INSERT INTO photos_preferences (user_id, upload_folder_id) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET
+        "INSERT INTO photos_preferences (account_id, upload_folder_id) VALUES ($1, $2)
+         ON CONFLICT (account_id) DO UPDATE SET
              upload_folder_id = EXCLUDED.upload_folder_id, updated_at = now()",
     )
     .bind(user_id)
@@ -134,14 +134,14 @@ pub async fn put_preferences(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "DELETE FROM photos_library_folders WHERE user_id = $1 AND NOT (collection_id = ANY($2))",
+        "DELETE FROM photos_library_folders WHERE account_id = $1 AND NOT (collection_id = ANY($2))",
     )
     .bind(user_id)
     .bind(&folders)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO photos_library_folders (user_id, collection_id)
+        "INSERT INTO photos_library_folders (account_id, collection_id)
          SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING",
     )
     .bind(user_id)

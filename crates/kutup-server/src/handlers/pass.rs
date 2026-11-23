@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// What has become of a kept key's vault, for its owner now.
@@ -47,23 +47,23 @@ pub struct VaultState {
     state: VaultSecretState,
 }
 
-/// `GET /api/pass/vault-states` — what has become of the vault of every key
+/// `GET /api/v1/pass/vault-states` — what has become of the vault of every key
 /// the account keeps (its `passSecrets` records), by file id.
 #[utoipa::path(
     get,
-    path = "/api/pass/vault-states",
+    path = "/api/v1/pass/vault-states",
     tag = "pass",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Each kept key's vault and its state", body = Vec<VaultState>))
 )]
-pub async fn vault_states(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn vault_states(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     // `exists`, `trashed`: a purged vault's file row is gone (a record has no
     // foreign key to it). The record id is the file id (canonical text).
     let rows: Vec<(String, bool, bool)> = sqlx::query_as(
         "SELECT r.record_id, f.id IS NOT NULL, f.deleted_at IS NOT NULL
-           FROM account_records r LEFT JOIN files f ON f.id::text = r.record_id
-          WHERE r.user_id = $1 AND r.scope = $2
+           FROM account_records r LEFT JOIN drive_files f ON f.id::text = r.record_id
+          WHERE r.account_id = $1 AND r.scope = $2
           ORDER BY r.record_id",
     )
     .bind(user_id)
@@ -182,28 +182,28 @@ fn refusal(status: StatusCode, error: &'static str, attempts_left: Option<i16>) 
         .into_response()
 }
 
-/// `GET /api/pass/pin` — whether the account has a PIN.
+/// `GET /api/v1/pass/pin` — whether the account has a PIN.
 #[utoipa::path(
     get,
-    path = "/api/pass/pin",
+    path = "/api/v1/pass/pin",
     tag = "pass",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Whether a PIN is set", body = PinStatus))
 )]
-pub async fn pin_status(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn pin_status(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let set: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pass_pins WHERE user_id = $1)")
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pass_pins WHERE account_id = $1)")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
     Ok(Json(PinStatus { set }).into_response())
 }
 
-/// `PUT /api/pass/pin` — sets or changes the PIN, with the account password.
+/// `PUT /api/v1/pass/pin` — sets or changes the PIN, with the account password.
 #[utoipa::path(
     put,
-    path = "/api/pass/pin",
+    path = "/api/v1/pass/pin",
     tag = "pass",
     security(("BearerAuth" = [])),
     request_body = SetPinRequest,
@@ -215,29 +215,29 @@ pub async fn pin_status(State(state): State<AppState>, user: AuthUser) -> AppRes
 )]
 pub async fn set_pin(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<SetPinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     if !valid_pin(&req.pin) {
         return Err(AppError::bad_request("the PIN must be six digits"));
     }
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let hash = bcrypt::hash(&req.pin, bcrypt::DEFAULT_COST)
         .map_err(|e| AppError::internal(format!("hash PIN: {e}")))?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
         .await?;
     sqlx::query(
-        "INSERT INTO pass_pins (user_id, pin_hash) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET pin_hash = $2, updated_at = NOW()",
+        "INSERT INTO pass_pins (account_id, pin_hash) VALUES ($1, $2)
+         ON CONFLICT (account_id) DO UPDATE SET pin_hash = $2, updated_at = NOW()",
     )
     .bind(user_id)
     .bind(hash)
     .execute(&mut *tx)
     .await?;
     // A new PIN, with the password: every sign-in's tries start again.
-    sqlx::query("DELETE FROM pass_pin_failures WHERE user_id = $1")
+    sqlx::query("DELETE FROM pass_pin_failures WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -245,10 +245,10 @@ pub async fn set_pin(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/pass/pin` — removes the PIN, with the account password.
+/// `DELETE /api/v1/pass/pin` — removes the PIN, with the account password.
 #[utoipa::path(
     delete,
-    path = "/api/pass/pin",
+    path = "/api/v1/pass/pin",
     tag = "pass",
     security(("BearerAuth" = [])),
     request_body = RemovePinRequest,
@@ -259,15 +259,15 @@ pub async fn set_pin(
 )]
 pub async fn remove_pin(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<RemovePinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
         .await?;
-    sqlx::query("DELETE FROM pass_pins WHERE user_id = $1")
+    sqlx::query("DELETE FROM pass_pins WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -275,10 +275,10 @@ pub async fn remove_pin(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/pass/pin/verify` — checks the PIN.
+/// `POST /api/v1/pass/pin/verify` — checks the PIN.
 #[utoipa::path(
     post,
-    path = "/api/pass/pin/verify",
+    path = "/api/v1/pass/pin/verify",
     tag = "pass",
     security(("BearerAuth" = [])),
     request_body = VerifyPinRequest,
@@ -290,13 +290,13 @@ pub async fn remove_pin(
 )]
 pub async fn verify_pin(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<VerifyPinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let hash: Option<String> =
-        sqlx::query_scalar("SELECT pin_hash FROM pass_pins WHERE user_id = $1")
+        sqlx::query_scalar("SELECT pin_hash FROM pass_pins WHERE account_id = $1")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -315,7 +315,7 @@ pub async fn verify_pin(
     // Reserve a try first: of any number of tries at once, at most the
     // remaining ones reach the check.
     let reserved: Option<i16> = sqlx::query_scalar(
-        "INSERT INTO pass_pin_failures (sign_in_id, user_id, failures) VALUES ($1, $2, 1)
+        "INSERT INTO pass_pin_failures (sign_in_id, account_id, failures) VALUES ($1, $2, 1)
          ON CONFLICT (sign_in_id) DO UPDATE SET failures = pass_pin_failures.failures + 1
          WHERE pass_pin_failures.failures < $3
          RETURNING failures",

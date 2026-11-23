@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 
 /// The Drive object suite every stored blob is in (`blob_suite` of
-/// `files`, `file_versions` and `uploads`): the block format.
+/// `drive_files`, `drive_file_versions` and `drive_uploads`): the block format.
 pub const BLOCK_SUITE: i16 = 2;
 
 /// A block-format blob being stored, bound to the revision the client chose.
@@ -102,8 +102,8 @@ impl BlockBlob {
 
 /// Refuses (`409`) a revision id any file, version or open upload already
 /// has: a revision names one content, and its id is that content's ETag, so
-/// it is unique across `files.content_revision_id`, `file_versions.id` and
-/// `uploads.revision_id` together. Each table has its unique key; across the
+/// it is unique across `drive_files.content_revision_id`, `drive_file_versions.id` and
+/// `drive_uploads.revision_id` together. Each table has its unique key; across the
 /// three, every claim of an id takes that id's advisory lock first (held to
 /// the end of the transaction that stores it), so two claims of one id can't
 /// both find it free.
@@ -118,9 +118,9 @@ pub async fn ensure_revision_free(
         .execute(&mut **tx)
         .await?;
     let taken: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM files WHERE content_revision_id = $1)
-             OR EXISTS (SELECT 1 FROM file_versions WHERE id = $1)
-             OR EXISTS (SELECT 1 FROM uploads
+        "SELECT EXISTS (SELECT 1 FROM drive_files WHERE content_revision_id = $1)
+             OR EXISTS (SELECT 1 FROM drive_file_versions WHERE id = $1)
+             OR EXISTS (SELECT 1 FROM drive_uploads
                         WHERE revision_id = $1 AND id IS DISTINCT FROM $2)",
     )
     .bind(revision)
@@ -173,18 +173,18 @@ pub async fn ensure_object_stored(
     }
 }
 
-/// `409 revision_conflict`: the metadata is not the file's next revision
+/// `409 revisionConflict`: the metadata is not the file's next revision
 /// (exactly the current one + 1, or 1 for a new file).
 pub fn revision_conflict() -> AppError {
     AppError::conflict("metadata revision must advance exactly once")
-        .with_details(serde_json::json!({ "code": "revision_conflict" }))
+        .with_details(serde_json::json!({ "code": "revisionConflict" }))
 }
 
-/// [`revision_conflict`] with the file's metadata as it is now, for a saver
+/// [`revisionConflict`] with the file's metadata as it is now, for a saver
 /// that seals on top of it (a version save; docs/api.md).
 pub fn revision_conflict_at(metadata_revision: i64, metadata_envelope: Option<&str>) -> AppError {
     let mut details = serde_json::json!({
-        "code": "revision_conflict",
+        "code": "revisionConflict",
         "metadataRevision": metadata_revision,
     });
     if let Some(envelope) = metadata_envelope {

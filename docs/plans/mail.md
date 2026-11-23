@@ -148,8 +148,8 @@ bytes and the client parses MIME the same way whatever the source.
 - **Readable fields** for the list come from the sender's browser (subject,
   addresses, ids); From is always the authenticated sender. The reading
   pane shows the decrypted message's own headers and its signature check.
-- **Protection**, the padlock: received from outside `zero_access`; between
-  Kutup users `end_to_end`, verified when the signature checks against the
+- **Protection**, the padlock: received from outside `zeroAccess`; between
+  Kutup users `endToEnd`, verified when the signature checks against the
   sender's key list; sent to outside "sent with zero-access encryption".
 
 ### Drafts
@@ -290,7 +290,7 @@ help pages (checked 2026-10-10):
   plaintext message. Every outgoing message carries an Autocrypt header with
   the sender's key.
 - **Receiving:** mail that arrives PGP-encrypted to the address key
-  (`multipart/encrypted`, or an inline PGP message) is marked `end_to_end`
+  (`multipart/encrypted`, or an inline PGP message) is marked `endToEnd`
   on arrival and opened twice in the browser (the zero-access layer, then
   the sender's); `multipart/signed` and cleartext-signed mail is verified.
   Padlocks follow Proton's texts: "PGP-encrypted message", "…and signed",
@@ -302,7 +302,7 @@ help pages (checked 2026-10-10):
    with signature, detached and cleartext signature verification, the
    Autocrypt key; vectors and GnuPG interop both ways.
 2. **C3b server:** outside key lookup (WKD, Proton HKP, keys.openpgp.org),
-   PGP packages in `POST /api/mail/send`, `end_to_end` on arrival for PGP
+   PGP packages in `POST /api/mail/send`, `endToEnd` on arrival for PGP
    mail. The server checks each package is the same message and holds an
    encrypted OpenPGP message, but cannot check it is encrypted to the right
    key (a pinned key is known only to the browser). Submissions go one by
@@ -331,7 +331,7 @@ help pages (checked 2026-10-10):
    Dave's key with GnuPG and serves it from a WKD stand-in (the backend's
    `MAIL_TEST_KEY_ORIGIN` on a test stack); the live test finds it, sends
    PGP/MIME (refusing plaintext dressed as PGP and plaintext nobody needs),
-   and receives Dave's GnuPG reply as `end_to_end`, opening and verifying
+   and receives Dave's GnuPG reply as `endToEnd`, opening and verifying
    it; the gate checks the copy at the sink is PGP/MIME, DKIM-signed, has no
    plaintext, and that GnuPG opens it with a good signature. The Proton
    check is [`docs/test/mail-proton.md`](../test/mail-proton.md).
@@ -387,7 +387,7 @@ Migration 087: `mail_sending_policies` (overrides, pause, flag) and
 
 - `mail_messages`: id, user id, address id, thread id, folder (`inbox`,
   `drafts`, `sent`, `archive`, `spam`, `trash`), `seen`, `starred`,
-  protection (`zero_access` now; `end_to_end` with C2), object key,
+  protection (`zeroAccess` now; `endToEnd` with C2), object key,
   ciphertext size, received at, sent at (the Date header), subject,
   from (address and name), to, cc and reply-to (JSON lists, bounded),
   Message-ID, In-Reply-To, References (bounded), attachment count.

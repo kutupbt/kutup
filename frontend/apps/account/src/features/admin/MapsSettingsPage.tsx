@@ -216,7 +216,7 @@ export function MapsSettingsPage() {
   )
 }
 
-/** The settings alone, as `PUT /api/admin/maps` takes them. */
+/** The settings alone, as `PUT /api/v1/admin/maps` takes them. */
 function toDraft({ directOrigins: _origins, ...settings }: AdminMapSettings): MapSettings {
   return settings
 }

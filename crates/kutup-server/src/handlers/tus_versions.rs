@@ -4,7 +4,7 @@
 //! the content is sent), again when it lands as an uploaded revision, and
 //! at its commit, where the version, the new metadata (size, SHA-256, the
 //! content it commits to) and the content hash are stored in one
-//! transaction. One open upload per file (`uploads.file_id` is unique), as
+//! transaction. One open upload per file (`drive_uploads.file_id` is unique), as
 //! Proton allows one draft revision.
 
 use std::collections::HashMap;
@@ -34,7 +34,7 @@ async fn lock_file(
 ) -> AppResult<(Uuid, i32, i64)> {
     sqlx::query_as(
         "SELECT collection_id, key_generation, metadata_revision
-         FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+         FROM drive_files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(file_id)
     .fetch_optional(&mut **tx)
@@ -90,7 +90,7 @@ async fn check(
     Ok((collection_id, generation))
 }
 
-/// `POST /api/uploads` with `versionOf`: opens a version upload. `201` as a
+/// `POST /api/v1/drive/uploads` with `versionOf`: opens a version upload. `201` as a
 /// new file's; `409` with code `versionUploading` while another upload of a
 /// new version of this file is open, with `idleSeconds` since its last part
 /// (one idle a while was left by a crash, one active is still running), and
@@ -156,15 +156,15 @@ async fn open(
     )
     .await?;
     let open: Option<(Uuid, Uuid, i64, bool)> = sqlx::query_as(
-        "SELECT id, user_id, EXTRACT(EPOCH FROM NOW() - updated_at)::bigint,
+        "SELECT id, account_id, EXTRACT(EPOCH FROM NOW() - updated_at)::bigint,
                 uploaded_at IS NOT NULL
-         FROM uploads WHERE file_id = $1",
+         FROM drive_uploads WHERE file_id = $1",
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
     .await?;
     let owns_folder: bool =
-        sqlx::query_scalar("SELECT owner_user_id = $2 FROM collections WHERE id = $1")
+        sqlx::query_scalar("SELECT owner_account_id = $2 FROM drive_collections WHERE id = $1")
             .bind(collection_id)
             .bind(user_id)
             .fetch_one(&mut *tx)
@@ -189,7 +189,7 @@ async fn open(
                 .with_details(details),
         );
     }
-    let key_epoch: i32 = sqlx::query_scalar("SELECT key_epoch FROM files WHERE id = $1")
+    let key_epoch: i32 = sqlx::query_scalar("SELECT key_epoch FROM drive_files WHERE id = $1")
         .bind(file_id)
         .fetch_one(&mut *tx)
         .await?;
@@ -206,15 +206,13 @@ async fn open(
         .create_multipart(&storage_path)
         .await
         .map_err(|_| AppError::internal("storage create multipart"))?;
-    // The metadata comes with the commit: NULL, never the columns' old
-    // default (`uploads_metadata_at_commit`).
+    // The metadata comes with the commit, never with the upload.
     let inserted = sqlx::query(
-        "INSERT INTO uploads
-            (id, user_id, collection_id, file_id, total_bytes,
-             key_epoch, storage_path, s3_upload_id,
-             kind, key_generation, content_hash, based_on, revision_id, blob_suite,
-             metadata_envelope, metadata_revision)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'version',$9,$10,$11,$12,$13,NULL,NULL)",
+        "INSERT INTO drive_uploads
+            (id, account_id, collection_id, file_id, total_bytes,
+             key_epoch, s3_upload_id,
+             kind, key_generation, content_hash, based_on, revision_id, blob_suite)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'version',$8,decode($9, 'hex'),$10,$11,$12)",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -222,7 +220,6 @@ async fn open(
     .bind(file_id)
     .bind(total_bytes)
     .bind(key_epoch)
-    .bind(&storage_path)
     .bind(&s3_upload_id)
     .bind(key_generation)
     .bind(content_hash)
@@ -246,7 +243,7 @@ async fn open(
         StatusCode::CREATED,
         [
             ("Tus-Resumable", TUS_VERSION.to_string()),
-            ("Location", format!("/api/uploads/{upload_id}")),
+            ("Location", format!("/api/v1/drive/uploads/{upload_id}")),
             ("Upload-Offset", "0".to_string()),
             ("Content-Type", "application/json".to_string()),
         ],
@@ -257,7 +254,7 @@ async fn open(
 
 /// A version upload's last part arrived: its row as `patch` read it.
 pub(super) struct Landing {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub upload_id: Uuid,
     pub file_id: Uuid,
     /// The folder the file was in when the upload started (its content hash
@@ -301,7 +298,7 @@ pub(super) async fn finish(
     let checked = check(
         state,
         &mut tx,
-        landing.user_id,
+        landing.account_id,
         landing.file_id,
         Some(landing.key_generation),
         None,
@@ -340,7 +337,7 @@ pub(super) async fn finish(
     {
         drop(tx);
         let _ = state.storage.delete(&landing.storage_path).await;
-        let _ = sqlx::query("DELETE FROM uploads WHERE id = $1")
+        let _ = sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
             .bind(landing.upload_id)
             .execute(&state.pool)
             .await;
@@ -386,7 +383,7 @@ pub(super) async fn commit(
     let (collection_now, _) = check(
         state,
         tx,
-        landing.user_id,
+        landing.account_id,
         landing.file_id,
         Some(landing.key_generation),
         landing
@@ -424,7 +421,7 @@ pub(super) async fn discard(state: &AppState, landing: &Landing) {
         .storage
         .abort_multipart(&landing.storage_path, &landing.s3_upload_id)
         .await;
-    let _ = sqlx::query("DELETE FROM uploads WHERE id = $1")
+    let _ = sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
         .bind(landing.upload_id)
         .execute(&state.pool)
         .await;
@@ -446,23 +443,23 @@ async fn record(
     // restore from the editor does). Under the relay's per-file lock (taken
     // in `finish`), so no edit lands in between.
     let seq = super::collab::log_head(&mut **tx, landing.file_id).await?;
-    let doc_key_id: i64 = sqlx::query_scalar("SELECT current_doc_key_id FROM files WHERE id = $1")
-        .bind(landing.file_id)
-        .fetch_one(&mut **tx)
-        .await?;
+    let doc_key_id: i64 =
+        sqlx::query_scalar("SELECT current_doc_key_id FROM drive_files WHERE id = $1")
+            .bind(landing.file_id)
+            .fetch_one(&mut **tx)
+            .await?;
     // Stamped when stored, as a multipart save (`file_versions::store_version`).
     sqlx::query(
-        r#"INSERT INTO file_versions (id, file_id, storage_path, seq_at_snapshot, doc_key_id,
-                                      author_user_id, size_bytes, keep_forever, kind,
+        r#"INSERT INTO drive_file_versions (id, file_id, seq_at_snapshot, doc_key_id,
+                                      author_account_id, size_bytes, keep_forever, kind,
                                       key_generation, parent_version_id, created_at,
                                       blob_suite, revision_content_envelope)
-           VALUES ($1, $2, $3, $8, $9, $4, $5, false, 'file', $6, $7, clock_timestamp(),
-                   $10, $11)"#,
+           VALUES ($1, $2, $7, $8, $3, $4, false, 'file', $5, $6, clock_timestamp(),
+                   $9, kutup_unb64($10))"#,
     )
     .bind(landing.revision_id)
     .bind(landing.file_id)
-    .bind(&landing.storage_path)
-    .bind(landing.user_id)
+    .bind(landing.account_id)
     .bind(landing.total_bytes)
     .bind(landing.key_generation)
     .bind(parent)
@@ -474,12 +471,12 @@ async fn record(
     .await?;
     crate::storage_pool::charge(
         &mut **tx,
-        crate::storage_pool::Payer::Account(landing.user_id),
+        crate::storage_pool::Payer::Account(landing.account_id),
         landing.total_bytes,
     )
     .await?;
     sqlx::query(
-        "UPDATE files SET metadata_envelope = $2, metadata_revision = $3, content_hash = $4,
+        "UPDATE drive_files SET metadata_envelope = kutup_unb64($2), metadata_revision = $3, content_hash = decode($4, 'hex'),
                           updated_at = NOW()
          WHERE id = $1",
     )
@@ -489,7 +486,7 @@ async fn record(
     .bind(content_hash)
     .execute(&mut **tx)
     .await?;
-    sqlx::query("DELETE FROM uploads WHERE id = $1")
+    sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
         .bind(landing.upload_id)
         .execute(&mut **tx)
         .await?;

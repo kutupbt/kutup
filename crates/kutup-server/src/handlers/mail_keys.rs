@@ -7,7 +7,7 @@
 //! account authority. The server checks what it can (the public key's shape
 //! and address, the envelope's purpose and account, the list's signature,
 //! chain and contents) and publishes the public side: to Kutup users through
-//! `GET /api/mail/keys`, to the world through WKD.
+//! `GET /api/v1/mail/keys`, to the world through WKD.
 
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One key of an address, as its owner sees it.
@@ -100,7 +100,7 @@ pub(crate) async fn create_own_address(
     let address = mail_key::canonical_address(&format!("{username}@{server_name}"))
         .map_err(|_| AppError::bad_request("the username is not a valid mail address"))?;
     let created: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO mail_addresses (user_id, address) VALUES ($1, $2)
+        "INSERT INTO mail_addresses (account_id, address) VALUES ($1, $2)
          ON CONFLICT (folded) WHERE state <> 'freed' DO NOTHING RETURNING id",
     )
     .bind(user_id)
@@ -149,7 +149,7 @@ async fn own_address(
         bool,
         Option<Uuid>,
     ) = sqlx::query_as(
-        "SELECT state, key_list_owed, domain_id, position, disabled_at IS NOT NULL, user_id
+        "SELECT state, key_list_owed, domain_id, position, disabled_at IS NOT NULL, account_id
            FROM mail_addresses WHERE id = $1",
     )
     .bind(address_id)
@@ -220,25 +220,25 @@ async fn own_address(
     })
 }
 
-/// `GET /api/mail/addresses` — the caller's addresses with their keys and
+/// `GET /api/v1/mail/addresses` — the caller's addresses with their keys and
 /// current signed key list. An account without a username has none.
 #[utoipa::path(
     get,
-    path = "/api/mail/addresses",
+    path = "/api/v1/mail/addresses",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The caller's addresses", body = [OwnMailAddress]))
 )]
 pub async fn list_addresses(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<OwnMailAddress>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     // Read only: the rows come with the account and its renames. The
     // current addresses in the account's order (the default first), then the
     // old ones, newest first.
     let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, address FROM mail_addresses WHERE user_id = $1
+        "SELECT id, address FROM mail_addresses WHERE account_id = $1
           ORDER BY state = 'active' DESC, position, created_at DESC",
     )
     .bind(user_id)
@@ -298,11 +298,12 @@ pub(crate) async fn begin_list_change(
     let address_id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
     let data = decode(&key_list.data, "keyList.data")?;
     let signature = decode(&key_list.signature, "keyList.signature")?;
-    let authority: String =
-        sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let authority: String = sqlx::query_scalar(
+        "SELECT kutup_b64(account_authority_public_key) FROM accounts WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let authority: [u8; 32] = STANDARD
         .decode(&authority)
         .ok()
@@ -323,7 +324,7 @@ pub(crate) async fn begin_list_change(
     let mut tx = state.pool.begin().await?;
     let address: String = sqlx::query_scalar(
         "SELECT address FROM mail_addresses
-              WHERE id = $1 AND user_id = $2 AND state IN ('active', 'receiving') FOR UPDATE",
+              WHERE id = $1 AND account_id = $2 AND state IN ('active', 'receiving') FOR UPDATE",
     )
     .bind(address_id)
     .bind(user_id)
@@ -509,13 +510,13 @@ impl ListChange {
     }
 }
 
-/// `POST /api/mail/addresses/{id}/keys` — adds a key (generated, or
+/// `POST /api/v1/mail/addresses/{id}/keys` — adds a key (generated, or
 /// imported from a key file) to one of the caller's addresses together with
 /// the next signed key list, in one transaction. The list may make it the
 /// primary key (a new key replacing the old for new mail).
 #[utoipa::path(
     post,
-    path = "/api/mail/addresses/{id}/keys",
+    path = "/api/v1/mail/addresses/{id}/keys",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Address id")),
@@ -528,11 +529,11 @@ impl ListChange {
 )]
 pub async fn add_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<AddMailKeyRequest>,
 ) -> AppResult<Json<OwnMailAddress>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let public_key = decode(&req.public_key, "publicKey")?;
     let envelope = account_record::decode_record_b64(
         &req.private_key_envelope,
@@ -549,7 +550,7 @@ pub async fn add_key(
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     // The account's key binding: a key sealed for any other is refused.
     let binding: String =
-        sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT COALESCE(key_binding::text, '') FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_one(&mut *change.tx)
             .await?;
@@ -620,7 +621,7 @@ pub(crate) async fn first_key(
     let info = mail_key::inspect_address_public_key(&public_key, &address)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let (authority, binding): (String, String) = sqlx::query_as(
-        "SELECT account_authority_public_key, COALESCE(key_binding, '') FROM users WHERE id = $1",
+        "SELECT kutup_b64(account_authority_public_key), COALESCE(key_binding::text, '') FROM accounts WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut *conn)
@@ -703,12 +704,12 @@ pub struct UpdateKeyListRequest {
     pub key_list: SignedKeyList,
 }
 
-/// `PUT /api/mail/addresses/{id}/key-list` — publishes the next signed key
+/// `PUT /api/v1/mail/addresses/{id}/key-list` — publishes the next signed key
 /// list for the same keys: another key made primary, or keys marked
 /// obsolete (not encrypted to) or compromised (signatures not trusted).
 #[utoipa::path(
     put,
-    path = "/api/mail/addresses/{id}/key-list",
+    path = "/api/v1/mail/addresses/{id}/key-list",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Address id")),
@@ -721,11 +722,11 @@ pub struct UpdateKeyListRequest {
 )]
 pub async fn update_key_list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateKeyListRequest>,
 ) -> AppResult<Json<OwnMailAddress>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut change = begin_list_change(&state, user_id, &id, &req.key_list).await?;
     if change.signed.list.sequence == 1 {
         return Err(AppError::bad_request(
@@ -790,12 +791,12 @@ async fn public_keys(
     // The address as stored (the spelling its key lists and keys name),
     // whatever spelling was asked.
     let row: Option<(Uuid, String, Option<Uuid>, Uuid)> = sqlx::query_as(
-        "SELECT a.id, a.address, a.domain_id, a.user_id FROM mail_addresses a JOIN users u ON u.id = a.user_id
+        "SELECT a.id, a.address, a.domain_id, a.account_id FROM mail_addresses a JOIN accounts u ON u.id = a.account_id
           WHERE a.folded = kutup_address_folded($1)
             AND a.disabled_at IS NULL
             AND (a.state = 'active'
                  OR (a.state = 'receiving' AND a.receive_until > now()))
-            AND u.is_active",
+            AND u.state = 'active'",
     )
     .bind(address)
     .fetch_optional(&state.pool)
@@ -841,11 +842,11 @@ async fn public_keys(
     )))
 }
 
-/// `GET /api/mail/keys?email=` — a Kutup address's public keys and signed
+/// `GET /api/v1/mail/keys?email=` — a Kutup address's public keys and signed
 /// key-list chain (Proton's `keys/all`).
 #[utoipa::path(
     get,
-    path = "/api/mail/keys",
+    path = "/api/v1/mail/keys",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("email" = String, Query, description = "The address to look up")),
@@ -856,7 +857,7 @@ async fn public_keys(
 )]
 pub async fn lookup_keys(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Query(query): Query<KeyLookupQuery>,
 ) -> AppResult<Json<MailKeyLookup>> {
     let address =
@@ -879,7 +880,7 @@ pub async fn lookup_keys(
             }
         }
         // A list's mail is encrypted to its members: the browser asks
-        // `GET /api/mail/groups/recipients` for them.
+        // `GET /api/v1/mail/groups/recipients` for them.
         return Err(AppError::not_found("this address is a group")
             .with_details(serde_json::json!({ "code": "group" })));
     }
@@ -910,7 +911,7 @@ pub(crate) async fn lookup_address(
         return Ok(None);
     };
     let (account_id, authority): (Uuid, String) = sqlx::query_as(
-        "SELECT u.id, u.account_authority_public_key FROM mail_addresses a JOIN users u ON u.id = a.user_id
+        "SELECT u.id, COALESCE(kutup_b64(u.account_authority_public_key), '') FROM mail_addresses a JOIN accounts u ON u.id = a.account_id
           WHERE a.id = $1",
     )
     .bind(address_id)
@@ -1097,12 +1098,12 @@ pub struct OutsideMailKeyEntry {
     pub created_at: u32,
 }
 
-/// `GET /api/mail/keys/outside?email=` — an outside address's OpenPGP key,
+/// `GET /api/v1/mail/keys/outside?email=` — an outside address's OpenPGP key,
 /// from its Web Key Directory, Proton's key server or keys.openpgp.org
-/// (docs/plans/mail.md, C3). Kutup addresses use `GET /api/mail/keys`.
+/// (docs/plans/mail.md, C3). Kutup addresses use `GET /api/v1/mail/keys`.
 #[utoipa::path(
     get,
-    path = "/api/mail/keys/outside",
+    path = "/api/v1/mail/keys/outside",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("email" = String, Query, description = "The outside address")),
@@ -1114,14 +1115,16 @@ pub struct OutsideMailKeyEntry {
 )]
 pub async fn outside_keys(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Query(query): Query<KeyLookupQuery>,
 ) -> AppResult<Json<OutsideMailKey>> {
     let Some((local, domain)) = crate::mail::outside_keys::split(&query.email) else {
         return Err(AppError::bad_request("not an email address"));
     };
     if domain.eq_ignore_ascii_case(&state.config.chat_server_name) {
-        return Err(AppError::bad_request("a Kutup address: use /api/mail/keys"));
+        return Err(AppError::bad_request(
+            "a Kutup address: use /api/v1/mail/keys",
+        ));
     }
     let address = format!("{local}@{domain}");
     let found = crate::mail::outside_keys::lookup(&state, &address)

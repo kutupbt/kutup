@@ -18,7 +18,7 @@ const BOB = 'bob-user-id'
 
 beforeEach(() => {
   forgetLock()
-  localStorage.removeItem('kutup-pass-activity')
+  localStorage.removeItem('kutup.pass.activity')
 })
 
 describe('the device lock', () => {
@@ -27,7 +27,7 @@ describe('the device lock', () => {
     expect(isLocked(ALICE, 'v1')).toBe(false)
     markLocked(ALICE, 'v1')
     // What another tab reads: the same storage.
-    expect(JSON.parse(localStorage.getItem('kutup-pass-lock') ?? '{}').ids).toEqual(['v1'])
+    expect(JSON.parse(localStorage.getItem('kutup.pass.lock') ?? '{}').ids).toEqual(['v1'])
     expect(isLocked(ALICE, 'v1')).toBe(true)
     expect(isLocked(ALICE, 'v2')).toBe(false)
     markUnlocked(ALICE, 'v1')

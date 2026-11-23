@@ -35,12 +35,12 @@ export function moveRefusal(index: FolderIndex, source: MoveSource, dest: Folder
   if (source.file) {
     if (dest.id === from.id) return 'alreadyThere'
     if (!from.canUpload || !dest.canUpload) return 'readOnly'
-    if (dest.ownerUserId !== from.ownerUserId) return 'otherOwner'
+    if (dest.ownerAccountId !== from.ownerAccountId) return 'otherOwner'
     return null
   }
   // A folder: only its owner moves it, and only among their own folders.
   if (!from.canManage || from.source !== 'owned') return 'notOwner'
-  if (dest.source !== 'owned' || dest.ownerUserId !== from.ownerUserId) return 'otherOwner'
+  if (dest.source !== 'owned' || dest.ownerAccountId !== from.ownerAccountId) return 'otherOwner'
   if (isWithin(index, dest, from)) return 'intoItself'
   if (from.parentId === dest.id) return 'alreadyThere'
   return null
@@ -52,7 +52,7 @@ export async function moveFolder(folder: Folder, parent: Folder | null): Promise
   const place = parent ? inFolder(parent) : roots ? atTopLevel(roots) : null
   if (!place || !folder.name) throw new Error('folder is not open')
   try {
-    await api.post(`/collections/${folder.id}/move`, {
+    await api.post(`/drive/collections/${folder.id}/move`, {
       parentCollectionId: parent?.id ?? null,
       ...(await nameFieldsIn(place, folder.name)),
     })

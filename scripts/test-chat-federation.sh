@@ -150,24 +150,13 @@ until [[ "$(compose exec -T postgres-a psql -U kutup -d kutup -Atc \
   sleep 2
 done
 kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
-  "SELECT COUNT(*) FROM remote_account_renames WHERE domain='a.test' AND current_address LIKE 'ren_alicia@%'")"
+  "SELECT COUNT(*) FROM remote_account_renames WHERE server='a.test' AND current_address LIKE 'ren_alicia@%'")"
 [[ "$kept_renames" == "1" ]] || { echo "B did not keep A's rename chain ($kept_renames)" >&2; exit 1; }
 
 # Shares follow accounts (docs/plans/account-ids.md): renames on both sides
 # with a folder and a file shared across, and a freed name taken by someone
 # new inheriting nothing.
 run_phase account-ids
-
-# The federation outbox migration with deliveries mid-flight on both sides
-# (docs/plans/federation-outbox.md): run on a database made for it on A's
-# Postgres, from the migration before it, so peers mid-stream see no gap.
-compose exec -T postgres-a psql -U kutup -d kutup -q \
-  -c "DROP DATABASE IF EXISTS outbox_migration" -c "CREATE DATABASE outbox_migration"
-postgres_a="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
-  "$(compose ps -q postgres-a)")"
-KUTUP_TEST_DB="postgres://kutup:federation_test_a@$postgres_a:5432/outbox_migration" \
-  cargo test -p kutup-server --test federation_outbox_migration_live -- --nocapture
-compose exec -T postgres-a psql -U kutup -d kutup -q -c "DROP DATABASE outbox_migration"
 
 # Pairwise groups' anonymous route (docs/plans/pairwise-groups.md §3): the
 # home's signed X-Wing key config, sealed requests relayed and answered. A's
@@ -223,7 +212,7 @@ fi
 # its own local recipient, but never the remote sender account/device. Pending
 # reservations must also be empty after the durable retry finishes.
 media_sender_rows="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
-  "SELECT COUNT(*) FROM chat_media_objects WHERE origin_domain='a.test' AND origin_user_id IS NOT NULL")"
+  "SELECT COUNT(*) FROM chat_media_objects WHERE origin_server='a.test' AND origin_account_id IS NOT NULL")"
 media_pending_rows="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
   "SELECT COUNT(*) FROM chat_media_federation_inbound_pending")"
 media_sender_columns="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \

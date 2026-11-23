@@ -1,3 +1,4 @@
+import { storageReady } from '@kutup/crypto/storageGate'
 // What keeps a vault's edits when Kutup cannot be reached
 // (docs/plans/pass.md, "Offline"). Per vault, in this browser's IndexedDB:
 // the version the edits are made on (its id and contents) and the edited
@@ -19,11 +20,12 @@ export interface OutboxRecord {
 
 const STORE = 'vaults'
 
-const databaseName = (userId: string) => `kutup-pass-${userId}`
+const databaseName = (accountId: string) => `kutup.pass.outbox:${accountId}`
 
-function open(userId: string): Promise<IDBDatabase> {
+async function open(accountId: string): Promise<IDBDatabase> {
+  await storageReady()
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(databaseName(userId), 1)
+    const request = indexedDB.open(databaseName(accountId), 1)
     request.onupgradeneeded = () => {
       request.result.createObjectStore(STORE, { keyPath: 'fileId' })
     }
@@ -32,8 +34,8 @@ function open(userId: string): Promise<IDBDatabase> {
   })
 }
 
-async function run<T>(userId: string, mode: IDBTransactionMode, work: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-  const db = await open(userId)
+async function run<T>(accountId: string, mode: IDBTransactionMode, work: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+  const db = await open(accountId)
   try {
     return await new Promise<T>((resolve, reject) => {
       const tx = db.transaction(STORE, mode)
@@ -48,37 +50,37 @@ async function run<T>(userId: string, mode: IDBTransactionMode, work: (store: ID
 }
 
 export const outbox = {
-  async get(userId: string, fileId: string): Promise<OutboxRecord | null> {
+  async get(accountId: string, fileId: string): Promise<OutboxRecord | null> {
     try {
-      return ((await run(userId, 'readonly', (store) => store.get(fileId))) as OutboxRecord | undefined) ?? null
+      return ((await run(accountId, 'readonly', (store) => store.get(fileId))) as OutboxRecord | undefined) ?? null
     } catch {
       // A private window without IndexedDB: nothing was kept.
       return null
     }
   },
-  async put(userId: string, record: OutboxRecord): Promise<void> {
-    await run(userId, 'readwrite', (store) => store.put(record))
+  async put(accountId: string, record: OutboxRecord): Promise<void> {
+    await run(accountId, 'readwrite', (store) => store.put(record))
   },
-  async delete(userId: string, fileId: string): Promise<void> {
+  async delete(accountId: string, fileId: string): Promise<void> {
     try {
-      await run(userId, 'readwrite', (store) => store.delete(fileId))
+      await run(accountId, 'readwrite', (store) => store.delete(fileId))
     } catch {
       // Nothing to forget.
     }
   },
   /** Forgets every vault kept for the account here (on sign-out). */
-  async clear(userId: string): Promise<void> {
+  async clear(accountId: string): Promise<void> {
     await new Promise<void>((resolve) => {
-      const request = indexedDB.deleteDatabase(databaseName(userId))
+      const request = indexedDB.deleteDatabase(databaseName(accountId))
       request.onsuccess = () => resolve()
       request.onerror = () => resolve()
       request.onblocked = () => resolve()
     })
   },
   /** The vaults with edits waiting to be saved. */
-  async pendingIds(userId: string): Promise<string[]> {
+  async pendingIds(accountId: string): Promise<string[]> {
     try {
-      const all = (await run(userId, 'readonly', (store) => store.getAll())) as OutboxRecord[]
+      const all = (await run(accountId, 'readonly', (store) => store.getAll())) as OutboxRecord[]
       return all.filter((r) => r.pending).map((r) => r.fileId)
     } catch {
       return []

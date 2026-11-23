@@ -5,17 +5,17 @@ import { resolveApiBase } from '@kutup/session/apiBase'
 import { ApiChatTransport, FederationOffError, forgetFederationState } from './transport'
 
 // A custom-domain address: this server's Chat name is another than its domain.
-vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'u1', address: 'me@custom.example' }) }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ accountId: 'u1', address: 'me@custom.example' }) }))
 vi.mock('@kutup/session/apps', () => ({ loadServerSettings: () => Promise.resolve({ chat: { serverName: 'home.test' } }) }))
 
-/** This account's switch, as `/user/me` says it. */
+/** This account's switch, as `/account` says it. */
 let federation: 'on' | 'off' = 'on'
 const realGet = api.get.bind(api)
 beforeEach(() => {
   federation = 'on'
   forgetFederationState()
   vi.spyOn(api, 'get').mockImplementation(((url: string, ...rest: unknown[]) =>
-    url === '/user/me'
+    url === '/account'
       ? Promise.resolve({ data: { federation } })
       : (realGet as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest)) as typeof api.get)
 })
@@ -40,11 +40,11 @@ describe('ApiChatTransport', () => {
     const transport = new ApiChatTransport()
 
     await expect(transport.listDevices()).resolves.toEqual(devices)
-    expect(get).toHaveBeenCalledWith('/chat/device')
+    expect(get).toHaveBeenCalledWith('/chat/devices')
     await expect(transport.renameDevice(2, 'Work laptop')).resolves.toBeUndefined()
-    expect(patch).toHaveBeenCalledWith('/chat/device/2', { name: 'Work laptop' })
+    expect(patch).toHaveBeenCalledWith('/chat/devices/2', { name: 'Work laptop' })
     await expect(transport.revokeDevice(2)).resolves.toBeUndefined()
-    expect(remove).toHaveBeenCalledWith('/chat/device/2')
+    expect(remove).toHaveBeenCalledWith('/chat/devices/2')
   })
 
   it('links, relays and distributes with their refusals said as outcomes', async () => {

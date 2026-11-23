@@ -16,7 +16,7 @@ use super::{
 };
 
 /// The whole schema (the squashed baseline), applied into a schema of its own.
-const BASELINE: &str = include_str!("../../migrations/20261013000000_baseline.up.sql");
+const BASELINE: &str = include_str!("../../migrations/20261112000000_baseline.up.sql");
 
 #[tokio::test]
 async fn live_identity_trust_policy_and_replay_invariants() {
@@ -464,20 +464,20 @@ async fn live_identity_trust_policy_and_replay_invariants() {
     );
 
     let audit_actions: Vec<String> = sqlx::query_scalar(
-        "SELECT action FROM admin_audit_log
-         WHERE action LIKE 'federation.identity.%' ORDER BY id",
+        "SELECT kind FROM admin_audit_log
+         WHERE kind LIKE 'federation.%' ORDER BY id",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
     for required in [
-        "federation.identity.genesis",
-        "federation.identity.rotate-local",
-        "federation.identity.pin",
-        "federation.identity.verify",
-        "federation.identity.advance-remote",
-        "federation.identity.quarantine",
-        "federation.identity.repin",
+        "federation.createIdentity",
+        "federation.rotateIdentity",
+        "federation.pinPeer",
+        "federation.verifyPeer",
+        "federation.advancePeer",
+        "federation.quarantinePeer",
+        "federation.repinPeer",
     ] {
         assert!(audit_actions.iter().any(|action| action == required));
     }
@@ -538,7 +538,7 @@ fn replay_metadata(
         FederationHttpRequest {
             method: "POST".into(),
             authority: "local.example".into(),
-            path: "/api/fed/chat/messages".into(),
+            path: "/api/fed/v2/chat/messages".into(),
             query: "?".into(),
             content_type: "application/json".into(),
             body: body.to_vec(),

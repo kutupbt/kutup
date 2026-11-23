@@ -85,8 +85,8 @@ async function pumpFileIntoZip(
   const url = f.contentPath
     ? `${base}${f.contentPath}`
     : f.isRemote
-      ? `${base}/drive/federation/shares/${f.remoteShareId}/files/${f.id}/content`
-      : `${base}/files/${f.id}/download`
+      ? `${base}/drive/federation/folder-shares/${f.remoteShareId}/files/${f.id}/content`
+      : `${base}/drive/files/${f.id}/download`
   let pushed = false
   for await (const { plain, isFinal } of fetchDecryptedChunks(
     url,

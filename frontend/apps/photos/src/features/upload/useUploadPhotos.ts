@@ -74,7 +74,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
   const settled = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['files'] })
     void api
-      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/user/me')
+      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/account')
       .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes, storageQuotaBytes: data.storageQuotaBytes }))
       .catch(() => {})
   }, [queryClient])
@@ -122,7 +122,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
       const paired = still?.value
       if (paired && looksLive(paired.media, media)) media = { ...(media ?? {}), liveOf: paired.id }
       let uploaded
-      const owner = getSession()?.userId
+      const owner = getSession()?.accountId
       const folderKey = folder.key
       try {
         // Cameras reuse names: a different photo under a taken one is kept
@@ -232,7 +232,7 @@ export function useResumePhotos() {
   const settled = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['files'] })
     void api
-      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/user/me')
+      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/account')
       .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes, storageQuotaBytes: data.storageQuotaBytes }))
       .catch(() => {})
   }, [queryClient])

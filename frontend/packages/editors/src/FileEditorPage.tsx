@@ -406,7 +406,7 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
         mayRename={
           liveFolder.source === 'file'
             ? liveFolder.canUpload
-            : liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderUserId === session.userId)
+            : liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderAccountId === session.accountId)
         }
         onRestored={(bytes, base) => {
           if (opened.kind === 'office' || opened.kind === 'whiteboard') {
@@ -676,7 +676,7 @@ function Workspace({
                 // A version opens with the key generation it was saved under.
                 const version = (await listVersions(file.id)).find((v) => v.id === versionId)
                 if (!version) throw new Error('version not found')
-                return loadVersionBytes(await versionContentOf(file, version), `/files/${file.id}/versions/${versionId}/download`)
+                return loadVersionBytes(await versionContentOf(file, version), `/drive/files/${file.id}/versions/${versionId}/download`)
               }}
               kind={wholeFile}
               keys={keys}

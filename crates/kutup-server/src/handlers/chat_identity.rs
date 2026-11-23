@@ -78,11 +78,13 @@ pub(crate) async fn authenticated_device_of(
     kinds: DeviceKinds,
 ) -> AppResult<i32> {
     let device_id = credential_holds_of(pool, headers, user_id, kinds).await?;
-    sqlx::query("UPDATE devices SET last_seen_at = now() WHERE user_id = $1 AND device_id = $2")
-        .bind(user_id)
-        .bind(device_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE account_devices SET last_seen_at = now() WHERE account_id = $1 AND device_id = $2",
+    )
+    .bind(user_id)
+    .bind(device_id)
+    .execute(pool)
+    .await?;
     Ok(device_id)
 }
 
@@ -102,8 +104,8 @@ pub(crate) async fn credential_holds_of<'e>(
     let (device_id, credential) = parse_device_header(value).map_err(|_| unauthorized())?;
     let device_id = device_id as i32;
     let stored: Option<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
-        "SELECT credential_salt, credential_hash FROM devices
-          WHERE user_id = $1 AND device_id = $2 AND expired_at IS NULL
+        "SELECT credential_salt, credential_hash FROM account_devices
+          WHERE account_id = $1 AND device_id = $2 AND expired_at IS NULL
             AND ($3 OR suite IS NOT NULL)",
     )
     .bind(user_id)
@@ -141,7 +143,8 @@ pub(crate) async fn account_identity(
     user_id: Uuid,
 ) -> AppResult<Option<(String, i64)>> {
     Ok(sqlx::query_as(
-        "SELECT identity_key, manifest_version FROM chat_account_identities WHERE user_id = $1",
+        "SELECT kutup_b64(identity_key), manifest_version FROM chat_account_identities
+         WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_optional(&mut **tx)
@@ -154,10 +157,10 @@ pub(crate) async fn account_identity(
 /// manifest) isn't one: peers would refuse it, as they check bundles and
 /// mismatches against the manifest. The account's own syncs use its rows.
 pub(crate) const LISTED_DEVICES: &str = "SELECT d.device_id, d.registration_id
-       FROM devices d
-       JOIN chat_device_manifests m ON m.user_id = d.user_id
+       FROM account_devices d
+       JOIN chat_device_manifests m ON m.account_id = d.account_id
        JOIN LATERAL jsonb_array_elements(m.manifest -> 'devices') listed ON true
-      WHERE d.user_id = $1 AND d.expired_at IS NULL
+      WHERE d.account_id = $1 AND d.expired_at IS NULL
         AND (listed ->> 'deviceId')::int = d.device_id
         AND (listed -> 'chat' ->> 'registrationId')::bigint = d.registration_id
         AND (listed -> 'chat' ->> 'directChatSuite')::int = d.suite";
@@ -258,14 +261,14 @@ pub(crate) fn validate_manifest(manifest: &AccountManifestV3) -> AppResult<()> {
     Ok(())
 }
 
-/// `POST /api/chat/keys/check` (device-authenticated; Signal's
+/// `POST /api/v1/chat/keys/check` (device-authenticated; Signal's
 /// `/v2/keys/check`): whether the server holds what the device believes it
 /// holds for it (the account identity, its signed prekey and its last-resort
 /// key). `204` when they agree, `409 keysDiffer` when they don't (the device
 /// then uploads its keys again).
 #[utoipa::path(
     post,
-    path = "/api/chat/keys/check",
+    path = "/api/v1/chat/keys/check",
     tag = "chat",
     operation_id = "checkChatKeys",
     request_body = ChatKeysCheckRequest,
@@ -278,12 +281,12 @@ pub(crate) fn validate_manifest(manifest: &AccountManifestV3) -> AppResult<()> {
 )]
 pub async fn check_keys(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
-    auth: crate::middleware::AuthUser,
+    auth: crate::middleware::AuthAccount,
     headers: HeaderMap,
     axum::Json(request): axum::Json<ChatKeysCheckRequest>,
 ) -> AppResult<axum::response::Response> {
     use axum::response::IntoResponse as _;
-    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     let device_id = authenticated_device(&state.pool, &headers, user_id).await?;
     let presented = hex::decode(&request.digest)
         .ok()
@@ -291,9 +294,9 @@ pub async fn check_keys(
         .ok_or_else(|| AppError::bad_request("digest must be lowercase hex of 32 bytes"))?;
     let (identity_key, spk_id, spk, lrk_id, lrk): (String, i64, String, i64, String) =
         sqlx::query_as(
-            "SELECT identity_key, signed_pre_key_id, signed_pre_key,
-                    last_resort_kyber_pre_key_id, last_resort_kyber_pre_key
-               FROM devices WHERE user_id = $1 AND device_id = $2",
+            "SELECT kutup_b64(identity_key), signed_pre_key_id, kutup_b64(signed_pre_key),
+                    last_resort_kyber_pre_key_id, kutup_b64(last_resort_kyber_pre_key)
+               FROM account_devices WHERE account_id = $1 AND device_id = $2",
         )
         .bind(user_id)
         .bind(device_id)
@@ -317,7 +320,7 @@ pub async fn check_keys(
     }
 }
 
-/// `PUT /api/chat/account-identity` (device-authenticated; Signal's
+/// `PUT /api/v1/chat/account-identity` (device-authenticated; Signal's
 /// `PhoneNumberIdentityKeyDistributionRequest`): a new account identity for
 /// every device the manifest keeps, in one transaction. The request names
 /// exactly the manifest's devices (`409` with the mismatch otherwise, and for
@@ -329,7 +332,7 @@ pub async fn check_keys(
 /// the account goes, and the devices upload new ones.
 #[utoipa::path(
     put,
-    path = "/api/chat/account-identity",
+    path = "/api/v1/chat/account-identity",
     tag = "chat",
     operation_id = "distributeChatAccountIdentity",
     request_body = AccountIdentityDistributionRequest,
@@ -344,15 +347,15 @@ pub async fn check_keys(
 )]
 pub async fn distribute_identity(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
-    auth: crate::middleware::AuthUser,
+    auth: crate::middleware::AuthAccount,
     headers: HeaderMap,
     axum::Json(request): axum::Json<AccountIdentityDistributionRequest>,
 ) -> AppResult<axum::response::Response> {
     use axum::response::IntoResponse as _;
     use axum::Json;
-    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     let sender = authenticated_device(&state.pool, &headers, user_id).await?;
-    if !crate::ratelimit::CHAT_IDENTITY_DISTRIBUTIONS.allow(&auth.user_id) {
+    if !crate::ratelimit::CHAT_IDENTITY_DISTRIBUTIONS.allow(&auth.account_id) {
         return Err(
             AppError::too_many_requests("too many identity distributions")
                 .with_details(serde_json::json!({ "code": "rateLimited" })),
@@ -389,18 +392,19 @@ pub async fn distribute_identity(
     }
 
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
     // A retry after a lost answer: this manifest is already the head, the
     // distribution done and its syncs queued once. Answer as before, before
     // any check of the rows it changed.
-    let head: Option<String> =
-        sqlx::query_scalar("SELECT manifest_hash FROM chat_device_manifests WHERE user_id = $1")
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let head: Option<String> = sqlx::query_scalar(
+        "SELECT encode(manifest_hash, 'hex') FROM chat_device_manifests WHERE account_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     if head.as_deref()
         == Some(
             request
@@ -417,8 +421,8 @@ pub async fn distribute_identity(
         .into_response());
     }
     let rows: Vec<(i32, i64)> = sqlx::query_as(
-        "SELECT device_id, registration_id FROM devices
-          WHERE user_id = $1 AND expired_at IS NULL AND suite IS NOT NULL",
+        "SELECT device_id, registration_id FROM account_devices
+          WHERE account_id = $1 AND expired_at IS NULL AND suite IS NOT NULL",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -490,12 +494,12 @@ pub async fn distribute_identity(
         .map(|device| device.device_id as i32)
         .collect();
     // Link tokens die with the device set they were asked under.
-    sqlx::query("DELETE FROM chat_link_tokens WHERE user_id = $1")
+    sqlx::query("DELETE FROM chat_link_tokens WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
     let dropped: Vec<i32> = sqlx::query_scalar(
-        "DELETE FROM devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
+        "DELETE FROM account_devices WHERE account_id = $1 AND NOT (device_id = ANY($2))
          RETURNING device_id",
     )
     .bind(user_id)
@@ -504,11 +508,12 @@ pub async fn distribute_identity(
     .await?;
     for keys in &request.devices {
         sqlx::query(
-            "UPDATE devices SET identity_key = $3, registration_id = $4,
-                 signed_pre_key_id = $5, signed_pre_key = $6, signed_pre_key_signature = $7,
-                 last_resort_kyber_pre_key_id = $8, last_resort_kyber_pre_key = $9,
-                 last_resort_kyber_pre_key_signature = $10
-             WHERE user_id = $1 AND device_id = $2",
+            "UPDATE account_devices SET identity_key = kutup_unb64($3), registration_id = $4,
+                 signed_pre_key_id = $5, signed_pre_key = kutup_unb64($6),
+                 signed_pre_key_signature = kutup_unb64($7),
+                 last_resort_kyber_pre_key_id = $8, last_resort_kyber_pre_key = kutup_unb64($9),
+                 last_resort_kyber_pre_key_signature = kutup_unb64($10)
+             WHERE account_id = $1 AND device_id = $2",
         )
         .bind(user_id)
         .bind(keys.device_id as i32)
@@ -525,11 +530,11 @@ pub async fn distribute_identity(
     }
     // One-time keys were signed by (or made for) the old identity: Signal's
     // deleteSingleUsePreKeys.
-    sqlx::query("DELETE FROM chat_one_time_pre_keys WHERE user_id = $1")
+    sqlx::query("DELETE FROM chat_one_time_pre_keys WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM chat_one_time_kyber_pre_keys WHERE user_id = $1")
+    sqlx::query("DELETE FROM chat_one_time_kyber_pre_keys WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -539,9 +544,9 @@ pub async fn distribute_identity(
     let send_id = uuid::Uuid::new_v4().to_string();
     for message in &request.device_messages {
         sqlx::query(
-            "INSERT INTO chat_mailbox (recipient_user_id, recipient_device_id, sender_server,
+            "INSERT INTO chat_mailbox (recipient_account_id, recipient_device_id, sender_server,
                  sender_account_id, sender_device_id, envelope_type, suite, content, send_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+             VALUES ($1,$2,$3,$4,$5,$6,$7,kutup_unb64($8),$9)",
         )
         .bind(user_id)
         .bind(message.device_id as i32)

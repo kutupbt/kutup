@@ -16,10 +16,11 @@ use super::admin::audit;
 use super::mail_keys::{lookup_address, MailKeyLookup};
 use super::trusted_uuid;
 use crate::account_data::KeyOwner;
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::mail::group_keys::{self, NewGroupKey, ShareInput};
 use crate::mail::groups::{self, Sender};
-use crate::middleware::{AdminUser, AuthUser};
+use crate::middleware::{AdminAccount, AuthAccount};
 use crate::AppState;
 
 /// Most members a group may have.
@@ -68,7 +69,7 @@ pub struct MailGroup {
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MailGroupMember {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub username: String,
     /// The member's Kutup address.
     pub address: String,
@@ -98,9 +99,9 @@ const GROUP_COLUMNS: &str = "g.id, g.address, g.display_name, g.description, g.k
     g.system_role, g.storage_quota_bytes, g.storage_used_bytes,
     (SELECT COUNT(*) FROM mail_group_members c WHERE c.group_id = g.id) AS member_count,
     g.created_at,
-    (SELECT role FROM mail_group_members r WHERE r.group_id = g.id AND r.user_id = $1) AS my_role,
+    (SELECT role FROM mail_group_members r WHERE r.group_id = g.id AND r.account_id = $1) AS my_role,
     COALESCE((SELECT r.can_send_as OR r.role IN ('owner', 'manager') FROM mail_group_members r
-               WHERE r.group_id = g.id AND r.user_id = $1), false) AS my_can_send_as,
+               WHERE r.group_id = g.id AND r.account_id = $1), false) AS my_can_send_as,
     g.needs_new_signer, g.signature_sealed";
 
 /// Where a shared mailbox's signature is sealed: under the group's data key
@@ -161,25 +162,25 @@ async fn members_in(
     id: Uuid,
 ) -> AppResult<Vec<MailGroupMember>> {
     Ok(sqlx::query_as(
-        "SELECT u.id AS user_id, COALESCE(u.username, '') AS username,
+        "SELECT u.id AS account_id, COALESCE(u.username, '') AS username,
                 COALESCE(u.username, '') || '@' || $2 AS address,
-                m.role, m.can_send_as, u.is_active AS active,
-                u.is_active
+                m.role, m.can_send_as, u.state = 'active' AS active,
+                u.state = 'active'
                 AND EXISTS (SELECT 1 FROM mail_group_keys k WHERE k.group_id = m.group_id AND k.is_primary)
                 AND (NOT EXISTS (
                     SELECT 1 FROM mail_group_keys k
                       JOIN mail_group_key_shares s ON s.group_key_id = k.id
-                     WHERE k.group_id = m.group_id AND k.is_primary AND s.user_id = u.id
+                     WHERE k.group_id = m.group_id AND k.is_primary AND s.account_id = u.id
                        AND s.member_incarnation_id = u.account_incarnation_id)
                   OR (m.role IN ('owner', 'manager') AND NOT EXISTS (
                     SELECT 1 FROM mail_group_signing_shares g
-                     WHERE g.group_id = m.group_id AND g.user_id = u.id
+                     WHERE g.group_id = m.group_id AND g.account_id = u.id
                        AND g.member_incarnation_id = u.account_incarnation_id
                        AND g.signer_public_key = (
                            SELECT public_key FROM mail_group_signers
                             WHERE group_id = m.group_id ORDER BY from_sequence DESC LIMIT 1))))
                 AS needs_keys
-           FROM mail_group_members m JOIN users u ON u.id = m.user_id
+           FROM mail_group_members m JOIN accounts u ON u.id = m.account_id
           WHERE m.group_id = $1
           ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END, u.username",
     )
@@ -202,13 +203,13 @@ async fn detail(state: &AppState, caller: Uuid, id: Uuid) -> AppResult<MailGroup
 }
 
 async fn is_admin(state: &AppState, user: Uuid) -> AppResult<bool> {
-    Ok(
-        sqlx::query_scalar("SELECT is_admin FROM users WHERE id = $1 AND is_active")
-            .bind(user)
-            .fetch_optional(&state.pool)
-            .await?
-            .unwrap_or(false),
+    Ok(sqlx::query_scalar(
+        "SELECT role <> 'member' FROM accounts WHERE id = $1 AND state = 'active'",
     )
+    .bind(user)
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(false))
 }
 
 /// The caller's standing on a group: administrator, owner, manager, member
@@ -248,16 +249,16 @@ pub struct MailGroupRecipients {
     pub address: String,
     pub group_id: Uuid,
     pub kind: String,
-    /// Each receiver as `GET /api/mail/keys` answers for them; their key
+    /// Each receiver as `GET /api/v1/mail/keys` answers for them; their key
     /// lists are checked like any address's.
     pub members: Vec<MailKeyLookup>,
 }
 
-/// `GET /api/mail/groups/recipients?email=` — who receives a group's mail,
+/// `GET /api/v1/mail/groups/recipients?email=` — who receives a group's mail,
 /// with their keys, when the caller may post to it.
 #[utoipa::path(
     get,
-    path = "/api/mail/groups/recipients",
+    path = "/api/v1/mail/groups/recipients",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("email" = String, Query, description = "The group's address")),
@@ -269,10 +270,10 @@ pub struct MailGroupRecipients {
 )]
 pub async fn recipients(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<RecipientsQuery>,
 ) -> AppResult<Json<MailGroupRecipients>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address =
         kutup_crypto::mail_key::canonical_address(query.email.trim().to_lowercase().as_str())
             .map_err(|_| AppError::not_found("not found"))?;
@@ -304,22 +305,22 @@ pub async fn recipients(
 
 // --- Members, owners and managers -----------------------------------------
 
-/// `GET /api/mail/groups` — the groups the caller belongs to.
+/// `GET /api/v1/mail/groups` — the groups the caller belongs to.
 #[utoipa::path(
     get,
-    path = "/api/mail/groups",
+    path = "/api/v1/mail/groups",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your groups", body = Vec<MailGroup>))
 )]
 pub async fn my_groups(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<MailGroup>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let groups = sqlx::query_as(&format!(
         "SELECT {GROUP_COLUMNS} FROM mail_groups g
-          WHERE EXISTS (SELECT 1 FROM mail_group_members m WHERE m.group_id = g.id AND m.user_id = $1)
+          WHERE EXISTS (SELECT 1 FROM mail_group_members m WHERE m.group_id = g.id AND m.account_id = $1)
           ORDER BY g.address"
     ))
     .bind(user_id)
@@ -328,11 +329,11 @@ pub async fn my_groups(
     Ok(Json(opened_all(&state, groups).await?))
 }
 
-/// `GET /api/mail/groups/{id}` — a group and its members, for its members
+/// `GET /api/v1/mail/groups/{id}` — a group and its members, for its members
 /// and administrators.
 #[utoipa::path(
     get,
-    path = "/api/mail/groups/{id}",
+    path = "/api/v1/mail/groups/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -343,10 +344,10 @@ pub async fn my_groups(
 )]
 pub async fn group_detail(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailGroupDetail>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, user_id, id).await?;
     if standing(&state, user_id, &group).await? == Standing::None {
@@ -434,11 +435,11 @@ async fn apply_update(
     Ok(())
 }
 
-/// `PATCH /api/mail/groups/{id}` — the name, description and who may post,
+/// `PATCH /api/v1/mail/groups/{id}` — the name, description and who may post,
 /// for owners, managers and administrators.
 #[utoipa::path(
     patch,
-    path = "/api/mail/groups/{id}",
+    path = "/api/v1/mail/groups/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -450,11 +451,11 @@ async fn apply_update(
 )]
 pub async fn update_group(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(change): Json<UpdateMailGroup>,
 ) -> AppResult<Json<MailGroupDetail>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, user_id, id).await?;
     let standing = standing(&state, user_id, &group).await?;
@@ -467,7 +468,7 @@ pub async fn update_group(
         ));
     }
     apply_update(&state, &group, &change).await?;
-    audit(&state.pool, &user.user_id, "mail_group.update", None, json!({ "groupId": group.id, "address": group.address, "change": {
+    audit(&state.pool, &user.account_id, AdminAction::MailGroupUpdate, None, json!({ "groupId": group.id, "address": group.address, "change": {
         "displayName": change.display_name, "description": change.description, "postPolicy": change.post_policy,
         "signature": change.signature.is_some(),
     } })).await;
@@ -477,7 +478,7 @@ pub async fn update_group(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MailGroupMemberInput {
-    pub user_id: String,
+    pub account_id: String,
     pub role: String,
     #[serde(default)]
     pub can_send_as: bool,
@@ -533,13 +534,13 @@ async fn stale_members(
     members: &[Uuid],
 ) -> AppResult<Vec<Uuid>> {
     Ok(sqlx::query_scalar(
-        "SELECT u.id FROM users u
+        "SELECT u.id FROM accounts u
           WHERE u.id = ANY($3)
             AND NOT EXISTS (
                 SELECT 1 FROM mail_group_key_shares s
                   JOIN mail_group_keys k ON k.id = s.group_key_id
                  WHERE k.group_id = $2 AND k.fingerprint = $1
-                   AND s.user_id = u.id AND s.member_incarnation_id = u.account_incarnation_id)",
+                   AND s.account_id = u.id AND s.member_incarnation_id = u.account_incarnation_id)",
     )
     .bind(key_fingerprint)
     .bind(group_id)
@@ -571,11 +572,11 @@ async fn without_signing_share(
     members: &[Uuid],
 ) -> AppResult<Vec<Uuid>> {
     Ok(sqlx::query_scalar(
-        "SELECT u.id FROM users u
+        "SELECT u.id FROM accounts u
           WHERE u.id = ANY($3)
             AND NOT EXISTS (
                 SELECT 1 FROM mail_group_signing_shares s
-                 WHERE s.group_id = $1 AND s.signer_public_key = $2 AND s.user_id = u.id
+                 WHERE s.group_id = $1 AND s.signer_public_key = $2 AND s.account_id = u.id
                    AND s.member_incarnation_id = u.account_incarnation_id)",
     )
     .bind(group_id)
@@ -590,7 +591,7 @@ async fn without_signing_share(
 /// again if it comes back.
 async fn active_of(conn: &mut sqlx::PgConnection, ids: &[Uuid]) -> AppResult<Vec<Uuid>> {
     let mut active: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE id = ANY($1) AND is_active")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = ANY($1) AND state = 'active'")
             .bind(ids)
             .fetch_all(&mut *conn)
             .await?;
@@ -609,8 +610,8 @@ fn sorted_ids(shares: &[ShareInput]) -> AppResult<Vec<Uuid>> {
     let mut ids = shares
         .iter()
         .map(|share| {
-            Uuid::parse_str(&share.user_id)
-                .map_err(|_| AppError::bad_request("userId must be an account id"))
+            Uuid::parse_str(&share.account_id)
+                .map_err(|_| AppError::bad_request("accountId must be an account id"))
         })
         .collect::<AppResult<Vec<_>>>()?;
     ids.sort();
@@ -638,7 +639,7 @@ async fn check_signer_changes(
     let before: Vec<Uuid> = current
         .iter()
         .filter(|member| signs(&member.role) && member.active)
-        .map(|member| member.user_id)
+        .map(|member| member.account_id)
         .collect();
     let signing: Vec<Uuid> = after
         .iter()
@@ -716,13 +717,13 @@ async fn check_key_changes(
             .await?;
     let added: Vec<Uuid> = after
         .iter()
-        .filter(|id| !current.iter().any(|m| m.user_id == **id))
+        .filter(|id| !current.iter().any(|m| m.account_id == **id))
         .copied()
         .collect();
     let removed: Vec<Uuid> = current
         .iter()
-        .filter(|m| !after.contains(&m.user_id))
-        .map(|m| m.user_id)
+        .filter(|m| !after.contains(&m.account_id))
+        .map(|m| m.account_id)
         .collect();
     let staying: Vec<Uuid> = after
         .iter()
@@ -751,7 +752,7 @@ async fn check_key_changes(
             .collect();
         let mut covered: Vec<Uuid> = for_key
             .iter()
-            .filter_map(|s| Uuid::parse_str(&s.user_id).ok())
+            .filter_map(|s| Uuid::parse_str(&s.account_id).ok())
             .collect();
         covered.sort();
         if covered.windows(2).any(|pair| pair[0] == pair[1]) || covered.len() != for_key.len() {
@@ -781,7 +782,7 @@ async fn check_key_changes(
             let mut covered: Vec<Uuid> = key
                 .shares
                 .iter()
-                .filter_map(|s| Uuid::parse_str(&s.user_id).ok())
+                .filter_map(|s| Uuid::parse_str(&s.account_id).ok())
                 .collect();
             covered.sort();
             covered.dedup();
@@ -806,13 +807,13 @@ async fn check_key_changes(
     })
 }
 
-/// `PUT /api/mail/groups/{id}/members` — the whole member list. Owners and
+/// `PUT /api/v1/mail/groups/{id}/members` — the whole member list. Owners and
 /// administrators change anyone; managers change members and managers, but
 /// neither add, remove nor change owners. A group other than a role address
 /// keeps at least one owner.
 #[utoipa::path(
     put,
-    path = "/api/mail/groups/{id}/members",
+    path = "/api/v1/mail/groups/{id}/members",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -825,11 +826,11 @@ async fn check_key_changes(
 )]
 pub async fn set_members(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(input): Json<SetMailGroupMembers>,
 ) -> AppResult<Json<MailGroupDetail>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, user_id, id).await?;
     let standing = standing(&state, user_id, &group).await?;
@@ -848,8 +849,8 @@ pub async fn set_members(
     }
     let mut wanted: Vec<(Uuid, String, bool)> = Vec::with_capacity(input.members.len());
     for member in &input.members {
-        let member_id = Uuid::parse_str(&member.user_id)
-            .map_err(|_| AppError::bad_request("userId must be an account id"))?;
+        let member_id = Uuid::parse_str(&member.account_id)
+            .map_err(|_| AppError::bad_request("accountId must be an account id"))?;
         if !ROLES.contains(&member.role.as_str()) {
             return Err(AppError::bad_request(
                 "role must be owner, manager or member",
@@ -862,7 +863,7 @@ pub async fn set_members(
     }
     let ids: Vec<Uuid> = wanted.iter().map(|(id, _, _)| *id).collect();
     let known: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE id = ANY($1) AND username IS NOT NULL",
+        "SELECT COUNT(*) FROM accounts WHERE id = ANY($1) AND username IS NOT NULL",
     )
     .bind(&ids)
     .fetch_one(&state.pool)
@@ -888,7 +889,7 @@ pub async fn set_members(
         let owners_before: Vec<Uuid> = current
             .iter()
             .filter(|m| m.role == "owner")
-            .map(|m| m.user_id)
+            .map(|m| m.account_id)
             .collect();
         let owners_after: Vec<Uuid> = wanted
             .iter()
@@ -934,16 +935,18 @@ pub async fn set_members(
         None
     };
 
-    sqlx::query("DELETE FROM mail_group_members WHERE group_id = $1 AND NOT (user_id = ANY($2))")
-        .bind(id)
-        .bind(&ids)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "DELETE FROM mail_group_members WHERE group_id = $1 AND NOT (account_id = ANY($2))",
+    )
+    .bind(id)
+    .bind(&ids)
+    .execute(&mut *tx)
+    .await?;
     for (member, role, can_send_as) in &wanted {
         sqlx::query(
-            "INSERT INTO mail_group_members (group_id, user_id, role, can_send_as, added_by)
+            "INSERT INTO mail_group_members (group_id, account_id, role, can_send_as, added_by_account_id)
              VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (group_id, user_id) DO UPDATE SET role = EXCLUDED.role, can_send_as = EXCLUDED.can_send_as",
+             ON CONFLICT (group_id, account_id) DO UPDATE SET role = EXCLUDED.role, can_send_as = EXCLUDED.can_send_as",
         )
         .bind(id)
         .bind(member)
@@ -957,7 +960,7 @@ pub async fn set_members(
         // Who left keeps nothing of the group keys; who joined gets them all.
         sqlx::query(
             "DELETE FROM mail_group_key_shares
-              WHERE user_id = ANY($1)
+              WHERE account_id = ANY($1)
                 AND group_key_id IN (SELECT id FROM mail_group_keys WHERE group_id = $2)",
         )
         .bind(&changes.removed)
@@ -992,18 +995,18 @@ pub async fn set_members(
     // id; the address is a snapshot (docs/plans/account-ids.md).
     let removed: Vec<Uuid> = current
         .iter()
-        .filter(|m| !ids.contains(&m.user_id))
-        .map(|m| m.user_id)
+        .filter(|m| !ids.contains(&m.account_id))
+        .map(|m| m.account_id)
         .collect();
     let added: Vec<Uuid> = ids
         .iter()
-        .filter(|id| !current.iter().any(|m| m.user_id == **id))
+        .filter(|id| !current.iter().any(|m| m.account_id == **id))
         .copied()
         .collect();
     audit(
         &state.pool,
-        &user.user_id,
-        "mail_group.members",
+        &user.account_id,
+        AdminAction::MailGroupUpdateMembers,
         None,
         json!({
             "groupId": group.id, "address": group.address, "added": added, "removed": removed, "count": ids.len(),
@@ -1015,19 +1018,19 @@ pub async fn set_members(
 
 // --- Administrators ---------------------------------------------------------
 
-/// `GET /api/admin/mail/groups` — every group, role addresses first.
+/// `GET /api/v1/admin/mail/groups` — every group, role addresses first.
 #[utoipa::path(
     get,
-    path = "/api/admin/mail/groups",
+    path = "/api/v1/admin/mail/groups",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Every group", body = Vec<MailGroup>))
 )]
 pub async fn admin_list(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
 ) -> AppResult<Json<Vec<MailGroup>>> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let groups = sqlx::query_as(&format!(
         "SELECT {GROUP_COLUMNS} FROM mail_groups g
           ORDER BY (g.system_role IS NULL), g.address"
@@ -1094,10 +1097,10 @@ pub(crate) async fn group_name_free(state: &AppState, name: &str) -> AppResult<S
     }
 }
 
-/// `POST /api/admin/mail/groups` — creates a group.
+/// `POST /api/v1/admin/mail/groups` — creates a group.
 #[utoipa::path(
     post,
-    path = "/api/admin/mail/groups",
+    path = "/api/v1/admin/mail/groups",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = CreateMailGroup,
@@ -1109,10 +1112,10 @@ pub(crate) async fn group_name_free(state: &AppState, name: &str) -> AppResult<S
 )]
 pub async fn admin_create(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(input): Json<CreateMailGroup>,
 ) -> AppResult<Json<MailGroupDetail>> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let requested_id = Uuid::parse_str(&input.id)
         .ok()
         .filter(|id| id.hyphenated().to_string() == input.id)
@@ -1148,7 +1151,7 @@ pub async fn admin_create(
         return Err(AppError::bad_request("a group needs at least one owner"));
     }
     let known: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT id) FROM users WHERE id = ANY($1) AND username IS NOT NULL",
+        "SELECT COUNT(DISTINCT id) FROM accounts WHERE id = ANY($1) AND username IS NOT NULL",
     )
     .bind(&owners)
     .fetch_one(&state.pool)
@@ -1163,7 +1166,7 @@ pub async fn admin_create(
             let mut covered: Vec<Uuid> = key
                 .shares
                 .iter()
-                .filter_map(|s| Uuid::parse_str(&s.user_id).ok())
+                .filter_map(|s| Uuid::parse_str(&s.account_id).ok())
                 .collect();
             covered.sort();
             covered.dedup();
@@ -1204,7 +1207,7 @@ pub async fn admin_create(
 
     let mut tx = state.pool.begin().await?;
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO mail_groups (id, address, display_name, description, kind, post_policy, storage_quota_bytes, created_by)
+        "INSERT INTO mail_groups (id, address, display_name, description, kind, post_policy, storage_quota_bytes, created_by_account_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
     )
     .bind(requested_id)
@@ -1241,7 +1244,7 @@ pub async fn admin_create(
         })?;
     for owner in &owners {
         sqlx::query(
-            "INSERT INTO mail_group_members (group_id, user_id, role, can_send_as, added_by)
+            "INSERT INTO mail_group_members (group_id, account_id, role, can_send_as, added_by_account_id)
              VALUES ($1, $2, 'owner', true, $3)",
         )
         .bind(id)
@@ -1256,8 +1259,8 @@ pub async fn admin_create(
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
-        "mail_group.create",
+        &admin.account_id,
+        AdminAction::MailGroupCreate,
         None,
         json!({
             "groupId": id, "address": address, "kind": input.kind, "quota": input.storage_quota_bytes,
@@ -1276,11 +1279,11 @@ pub struct AdminUpdateMailGroup {
     pub post_policy: Option<String>,
 }
 
-/// `PATCH /api/admin/mail/groups/{id}` — quota, name, description and who
+/// `PATCH /api/v1/admin/mail/groups/{id}` — quota, name, description and who
 /// may post.
 #[utoipa::path(
     patch,
-    path = "/api/admin/mail/groups/{id}",
+    path = "/api/v1/admin/mail/groups/{id}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -1289,11 +1292,11 @@ pub struct AdminUpdateMailGroup {
 )]
 pub async fn admin_update(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(change): Json<AdminUpdateMailGroup>,
 ) -> AppResult<Json<MailGroupDetail>> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, admin_id, id).await?;
     if let Some(quota) = change.storage_quota_bytes {
@@ -1318,19 +1321,19 @@ pub async fn admin_update(
         },
     )
     .await?;
-    audit(&state.pool, &admin.user_id, "mail_group.update", None, json!({
+    audit(&state.pool, &admin.account_id, AdminAction::MailGroupUpdate, None, json!({
         "groupId": group.id, "address": group.address, "quota": change.storage_quota_bytes, "postPolicy": change.post_policy,
     }))
     .await;
     Ok(Json(detail(&state, admin_id, id).await?))
 }
 
-/// `DELETE /api/admin/mail/groups/{id}` — deletes a group (not a role
+/// `DELETE /api/v1/admin/mail/groups/{id}` — deletes a group (not a role
 /// address). Members keep the copies they already received; its address
 /// becomes free.
 #[utoipa::path(
     delete,
-    path = "/api/admin/mail/groups/{id}",
+    path = "/api/v1/admin/mail/groups/{id}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -1341,10 +1344,10 @@ pub async fn admin_update(
 )]
 pub async fn admin_delete(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<axum::http::StatusCode> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, admin_id, id).await?;
     if group.system_role.is_some() {
@@ -1354,7 +1357,7 @@ pub async fn admin_delete(
     // alive, and the orphan sweep removes each once its last row is gone. A
     // shared mailbox's own messages go with it.
     let mut tx = state.pool.begin().await?;
-    sqlx::query("DELETE FROM mail_messages WHERE group_id = $1 AND user_id IS NULL")
+    sqlx::query("DELETE FROM mail_messages WHERE group_id = $1 AND account_id IS NULL")
         .bind(id)
         .execute(&mut *tx)
         .await?;
@@ -1374,8 +1377,8 @@ pub async fn admin_delete(
     }
     audit(
         &state.pool,
-        &admin.user_id,
-        "mail_group.delete",
+        &admin.account_id,
+        AdminAction::MailGroupDelete,
         None,
         json!({ "groupId": group.id, "address": group.address }),
     )
@@ -1443,11 +1446,11 @@ pub struct MailGroupKeys {
     pub signing_share: Option<String>,
 }
 
-/// `GET /api/mail/groups/{id}/keys` — a shared mailbox's keys, primary
+/// `GET /api/v1/mail/groups/{id}/keys` — a shared mailbox's keys, primary
 /// first, with the caller's shares, for its members.
 #[utoipa::path(
     get,
-    path = "/api/mail/groups/{id}/keys",
+    path = "/api/v1/mail/groups/{id}/keys",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -1458,11 +1461,11 @@ pub struct MailGroupKeys {
 )]
 pub async fn group_keys(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailGroupKeys>> {
     use base64::Engine as _;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, user_id, id).await?;
     if group.my_role.is_none() || group.kind != "shared" {
@@ -1472,9 +1475,9 @@ pub async fn group_keys(
         "SELECT k.fingerprint, k.sha256_fingerprint, k.public_key, k.is_primary, k.flags,
                     s.share
                FROM mail_group_keys k
-               LEFT JOIN mail_group_key_shares s ON s.group_key_id = k.id AND s.user_id = $2
+               LEFT JOIN mail_group_key_shares s ON s.group_key_id = k.id AND s.account_id = $2
                     AND s.member_incarnation_id =
-                        (SELECT account_incarnation_id FROM users WHERE id = $2)
+                        (SELECT account_incarnation_id FROM accounts WHERE id = $2)
               WHERE k.group_id = $1
               ORDER BY k.is_primary DESC, k.created_at DESC",
     )
@@ -1485,20 +1488,19 @@ pub async fn group_keys(
     let b64 = base64::engine::general_purpose::STANDARD;
     let mut conn = state.pool.acquire().await?;
     let signer = group_keys::current_signer(&mut conn, id).await?;
-    let signing_share: Option<Vec<u8>> =
-        match &signer {
-            Some(signer) => sqlx::query_scalar(
-                "SELECT s.share FROM mail_group_signing_shares s JOIN users u ON u.id = s.user_id
-                  WHERE s.group_id = $1 AND s.signer_public_key = $2 AND s.user_id = $3
+    let signing_share: Option<Vec<u8>> = match &signer {
+        Some(signer) => sqlx::query_scalar(
+            "SELECT s.share FROM mail_group_signing_shares s JOIN accounts u ON u.id = s.account_id
+                  WHERE s.group_id = $1 AND s.signer_public_key = $2 AND s.account_id = $3
                     AND s.member_incarnation_id = u.account_incarnation_id",
-            )
-            .bind(id)
-            .bind(signer.as_slice())
-            .bind(user_id)
-            .fetch_optional(&mut *conn)
-            .await?,
-            None => None,
-        };
+        )
+        .bind(id)
+        .bind(signer.as_slice())
+        .bind(user_id)
+        .fetch_optional(&mut *conn)
+        .await?,
+        None => None,
+    };
     Ok(Json(MailGroupKeys {
         keys: rows
             .into_iter()
@@ -1524,12 +1526,12 @@ pub struct RotateGroupKey {
     pub key: NewGroupKey,
 }
 
-/// `POST /api/mail/groups/{id}/keys` — a new primary key for a shared
+/// `POST /api/v1/mail/groups/{id}/keys` — a new primary key for a shared
 /// mailbox, with a share for every member (owners and managers): older keys
 /// stay to open older mail.
 #[utoipa::path(
     post,
-    path = "/api/mail/groups/{id}/keys",
+    path = "/api/v1/mail/groups/{id}/keys",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -1542,11 +1544,11 @@ pub struct RotateGroupKey {
 )]
 pub async fn rotate_group_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(input): Json<RotateGroupKey>,
 ) -> AppResult<Json<String>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, user_id, id).await?;
     let standing = standing(&state, user_id, &group).await?;
@@ -1569,13 +1571,13 @@ pub async fn rotate_group_key(
     let members: Vec<Uuid> = current
         .iter()
         .filter(|m| m.active)
-        .map(|m| m.user_id)
+        .map(|m| m.account_id)
         .collect();
     let mut covered: Vec<Uuid> = input
         .key
         .shares
         .iter()
-        .filter_map(|s| Uuid::parse_str(&s.user_id).ok())
+        .filter_map(|s| Uuid::parse_str(&s.account_id).ok())
         .collect();
     covered.sort();
     covered.dedup();
@@ -1594,7 +1596,7 @@ pub async fn rotate_group_key(
             let mut holders: Vec<Uuid> = current
                 .iter()
                 .filter(|member| signs(&member.role) && member.active)
-                .map(|member| member.user_id)
+                .map(|member| member.account_id)
                 .collect();
             holders.sort();
             if sorted_ids(&signer.shares)? != holders {
@@ -1620,8 +1622,8 @@ pub async fn rotate_group_key(
     tx.commit().await?;
     audit(
         &state.pool,
-        &user.user_id,
-        "mail_group.key",
+        &user.account_id,
+        AdminAction::MailGroupSetKey,
         None,
         json!({ "groupId": group.id, "address": group.address, "fingerprint": fingerprint }),
     )
@@ -1638,17 +1640,17 @@ pub struct ResolveQuery {
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MailAccountRef {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub username: String,
     pub address: String,
 }
 
-/// `GET /api/mail/accounts?address=` — the active account with this Kutup
+/// `GET /api/v1/mail/accounts?address=` — the active account with this Kutup
 /// address and a mail key (the address is public anyway, through key
 /// lookup), so a group can be given members by address.
 #[utoipa::path(
     get,
-    path = "/api/mail/accounts",
+    path = "/api/v1/mail/accounts",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("address" = String, Query, description = "A Kutup address")),
@@ -1659,15 +1661,15 @@ pub struct MailAccountRef {
 )]
 pub async fn resolve_account(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Query(query): Query<ResolveQuery>,
 ) -> AppResult<Json<MailAccountRef>> {
     let address = crate::mail::typed_address(&query.address)
         .ok_or_else(|| AppError::not_found("not found"))?;
     let row: Option<(Uuid, String, String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT u.id AS user_id, COALESCE(u.username, '') AS username, a.address, a.domain_id
+        "SELECT u.id AS account_id, COALESCE(u.username, '') AS username, a.address, a.domain_id
            FROM mail_addresses a
-           JOIN users u ON u.id = a.user_id AND u.is_active
+           JOIN accounts u ON u.id = a.account_id AND u.state = 'active'
           WHERE a.folded = kutup_address_folded($1)
             AND a.state = 'active'
             AND EXISTS (SELECT 1 FROM mail_address_keys k WHERE k.address_id = a.id AND k.is_primary)",
@@ -1679,7 +1681,7 @@ pub async fn resolve_account(
         return Err(AppError::not_found("not found"));
     };
     let account = MailAccountRef {
-        user_id,
+        account_id: user_id,
         username,
         address,
     };
@@ -1708,12 +1710,12 @@ pub struct MailGroupEntry {
     pub kind: String,
 }
 
-/// `GET /api/mail/groups/directory?q=` — up to 10 groups whose address or
+/// `GET /api/v1/mail/groups/directory?q=` — up to 10 groups whose address or
 /// name starts with `q` and that take the caller's mail (anyone, Kutup
 /// users, or the caller's own groups), for the composer's suggestions.
 #[utoipa::path(
     get,
-    path = "/api/mail/groups/directory",
+    path = "/api/v1/mail/groups/directory",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("q" = String, Query, description = "The start of an address or name")),
@@ -1721,10 +1723,10 @@ pub struct MailGroupEntry {
 )]
 pub async fn directory(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<DirectoryQuery>,
 ) -> AppResult<Json<Vec<MailGroupEntry>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let q: String = query.q.trim().to_lowercase().chars().take(100).collect();
     if q.is_empty() {
         return Ok(Json(Vec::new()));
@@ -1741,7 +1743,7 @@ pub async fn directory(
               WHERE (g.address LIKE $1 OR lower(g.display_name) LIKE $1)
                 AND (g.post_policy IN ('anyone', 'local')
                      OR EXISTS (SELECT 1 FROM mail_group_members m
-                                 WHERE m.group_id = g.id AND m.user_id = $2
+                                 WHERE m.group_id = g.id AND m.account_id = $2
                                    AND (g.post_policy = 'members' OR m.role IN ('owner', 'manager'))))
               ORDER BY g.address
               LIMIT 10",

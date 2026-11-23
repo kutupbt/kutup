@@ -67,7 +67,7 @@ impl KeyOwner {
 
 /// Every table of data keys, with the column naming the owner.
 const TABLES: [(&str, &str); 2] = [
-    ("account_keys.account_data_keys", "user_id"),
+    ("account_keys.account_data_keys", "account_id"),
     ("account_keys.mail_group_data_keys", "group_id"),
 ];
 
@@ -166,7 +166,7 @@ fn lost(owner: KeyOwner, wrapped: &[u8]) {
     if let Some(pool) = POOL.get().cloned() {
         tokio::spawn(async move {
             let _ = sqlx::query(
-                "UPDATE users SET data_key_lost_at = now()
+                "UPDATE accounts SET data_key_lost_at = now()
                   WHERE id = $1 AND data_key_lost_at IS NULL",
             )
             .bind(user_id)

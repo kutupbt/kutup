@@ -43,7 +43,8 @@ pub struct RegisterRequest {
     /// The account's root records, sealed under its master key
     /// (docs/plans/identity-root.md).
     pub account_roots: Vec<String>,
-    pub public_key: String,
+    /// The account's Drive key (X-Wing).
+    pub drive_xwing_public_key: String,
     pub account_authority_public_key: String,
     pub account_authority_key_id: String,
     pub account_incarnation_id: String,
@@ -63,11 +64,12 @@ pub struct LoginResponse {
     #[serde(default)]
     pub refresh_token: String,
     #[serde(default)]
-    pub user_id: String,
+    pub account_id: String,
     #[serde(default)]
     pub username: String,
+    /// `member`, `admin` or `breakGlassAdmin`; none on the setup/2FA steps.
     #[serde(default)]
-    pub is_admin: bool,
+    pub role: Option<String>,
     #[serde(default)]
     pub storage_quota_bytes: i64,
     #[serde(default)]
@@ -87,7 +89,7 @@ pub struct LoginResponse {
     #[serde(default)]
     pub master_keyring: Vec<String>,
     #[serde(default)]
-    pub public_key: String,
+    pub drive_xwing_public_key: String,
     /// What the account's sealed keys are bound to; only with a session.
     #[serde(default, rename = "keyBinding")]
     pub envelope_binding: String,
@@ -174,7 +176,7 @@ pub struct SetupTotpResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserMe {
+pub struct AccountMe {
     pub id: String,
     /// The account's permanent id and its server.
     pub account_id: String,
@@ -186,10 +188,12 @@ pub struct UserMe {
     /// What the account's envelopes are bound to now.
     #[serde(default)]
     pub envelope_binding: String,
+    /// `member`, `admin` or `breakGlassAdmin`.
     #[serde(default)]
-    pub is_admin: bool,
+    pub role: String,
+    /// The authenticator app: `on`, `pending` (not confirmed yet) or `off`.
     #[serde(default)]
-    pub totp_enabled: bool,
+    pub two_factor: String,
     /// Security keys the account has: two-step sign-in is on with them too.
     #[serde(default)]
     pub security_keys: i64,
@@ -206,7 +210,7 @@ pub struct UserMe {
 pub struct Collection {
     pub id: String,
     #[serde(default)]
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     #[serde(default)]
     pub name_envelope: String,
     #[serde(default)]
@@ -221,7 +225,7 @@ pub struct Collection {
     pub epoch_statement: String,
     #[serde(default)]
     pub epoch_statement_hash: String,
-    /// A shared folder's owner's server; with `owner_user_id`, the owner.
+    /// A shared folder's owner's server; with `owner_account_id`, the owner.
     #[serde(default)]
     pub owner_server: Option<String>,
     /// Shown only: the owner's address now.
@@ -320,7 +324,7 @@ pub struct File {
     pub encrypted_size_bytes: i64,
     #[serde(default)]
     pub created_at: String,
-    /// The key generation of what `/files/{id}/download` serves (its latest
+    /// The key generation of what `/drive/files/{id}/download` serves (its latest
     /// whole-file version, else the upload).
     pub content_key_generation: u32,
     /// The key generation the original upload was sealed at.
@@ -419,7 +423,7 @@ pub struct UploadResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareRequest {
-    pub recipient_user_id: String,
+    pub recipient_account_id: String,
     pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
@@ -471,7 +475,7 @@ pub struct PublicShareResponse {
     pub token: String,
 }
 
-/// An account and its keys, as `/users/by-address` and `/users/by-id` both
+/// An account and its keys, as `/accounts/by-address` and `/accounts/by-id` both
 /// answer it, here or on its server.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -483,7 +487,7 @@ pub struct AccountLookup {
     #[serde(default)]
     pub account: String,
     #[serde(default)]
-    pub drive_hpke_public_key: String,
+    pub drive_xwing_public_key: String,
     #[serde(default)]
     pub account_incarnation_id: String,
     #[serde(default)]

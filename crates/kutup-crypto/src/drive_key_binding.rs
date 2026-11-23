@@ -34,14 +34,14 @@ pub const SUITE: u16 = crate::identity::IDENTITY_SUITE;
 /// the suite upgrade.
 pub const FIRST_DRIVE_KEY_BINDING_EPOCH: u32 = 1;
 
-type HpkePublic = [u8; crate::hpke_xwing::PUBLIC_KEY_LEN];
+type XwingPublic = [u8; crate::hpke_xwing::PUBLIC_KEY_LEN];
 
 /// The bytes the authority signs.
 pub fn binding_bytes(
     account: &AccountRef,
     authority_public: &[u8; 32],
     epoch: u32,
-    drive_hpke_public: &HpkePublic,
+    drive_xwing_public: &XwingPublic,
     drive_signing_public: &[u8; 32],
 ) -> Result<Vec<u8>> {
     if epoch == 0 {
@@ -52,15 +52,16 @@ pub fn binding_bytes(
     let account = account.id_bytes();
     let incarnation = hex::decode(incarnation_id_from_authority_public(authority_public))
         .map_err(|_| CryptoError::Backend("incarnation hex".into()))?;
-    let mut out =
-        Vec::with_capacity(DOMAIN.len() + account.len() + 32 * 3 + 2 + 4 + drive_hpke_public.len());
+    let mut out = Vec::with_capacity(
+        DOMAIN.len() + account.len() + 32 * 3 + 2 + 4 + drive_xwing_public.len(),
+    );
     out.extend_from_slice(DOMAIN);
     out.extend_from_slice(&account);
     out.extend_from_slice(&incarnation);
     out.extend_from_slice(authority_public);
     out.extend_from_slice(&SUITE.to_be_bytes());
     out.extend_from_slice(&epoch.to_be_bytes());
-    out.extend_from_slice(drive_hpke_public);
+    out.extend_from_slice(drive_xwing_public);
     out.extend_from_slice(drive_signing_public);
     Ok(out)
 }
@@ -75,7 +76,7 @@ pub fn sign(
         account,
         &identity.authority_public_key(),
         epoch,
-        &identity.drive_hpke_public_key(),
+        &identity.drive_xwing_public_key(),
         &identity.drive_signing_public_key(),
     )?;
     Ok(identity.authority_signing_key().sign_array(&bytes))
@@ -88,7 +89,7 @@ pub fn verify(
     account: &AccountRef,
     authority_public: &[u8; 32],
     epoch: u32,
-    drive_hpke_public: &HpkePublic,
+    drive_xwing_public: &XwingPublic,
     drive_signing_public: &[u8; 32],
     signature: &[u8],
 ) -> Result<()> {
@@ -102,7 +103,7 @@ pub fn verify(
         account,
         authority_public,
         epoch,
-        drive_hpke_public,
+        drive_xwing_public,
         drive_signing_public,
     )?;
     VerifyingKey::from_bytes(Suite::V1, authority_public)
@@ -133,7 +134,7 @@ mod tests {
         let signature = sign(&alice, &account, 1).unwrap();
         let (authority, hpke, signing) = (
             alice.authority_public_key(),
-            alice.drive_hpke_public_key(),
+            alice.drive_xwing_public_key(),
             alice.drive_signing_public_key(),
         );
         verify(&account, &authority, 1, &hpke, &signing, &signature).unwrap();
@@ -175,7 +176,7 @@ mod tests {
             &account,
             &authority,
             1,
-            &mallory.drive_hpke_public_key(),
+            &mallory.drive_xwing_public_key(),
             &signing,
             &signature
         )

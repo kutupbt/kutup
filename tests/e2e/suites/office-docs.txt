@@ -1,0 +1,14 @@
+# Office, notes and whiteboards: editing, formatting, history,
+# collaboration and the Office home.
+# Spec 114 runs only with KUTUP_CLI (the kutup binary) set; CI skips it.
+specs/02-note-collaboration.spec.ts
+specs/03-office-editing.spec.ts
+specs/13-office-formatting.spec.ts
+specs/19-office-version-history.spec.ts
+specs/20-whiteboard.spec.ts
+specs/21-whiteboard-collab.spec.ts
+specs/24-whiteboard-image-quota.spec.ts
+specs/29-two-user-collab.spec.ts
+specs/43-office-home.spec.ts
+specs/45-note-code-blocks.spec.ts
+specs/114-note-cli-interop.spec.ts

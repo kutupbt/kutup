@@ -1,3 +1,4 @@
+import { storageReady } from '@kutup/crypto/storageGate'
 const ZERO_DIGEST = '0'.repeat(64)
 
 export interface StoredBackupRecord<T> {
@@ -92,9 +93,10 @@ export interface BackupLocalState {
   recordsRevision: number
 }
 
-export function openBackupStore(name: string): Promise<IDBDatabase> {
+export async function openBackupStore(name: string): Promise<IDBDatabase> {
+  await storageReady()
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(`${name}:continuous-backup`, 2)
+    const request = indexedDB.open(name.replace('kutup.chat.store:', 'kutup.chat.backup:'), 2)
     request.onupgradeneeded = () => {
       const db = request.result
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' })

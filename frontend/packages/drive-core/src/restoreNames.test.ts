@@ -19,7 +19,7 @@ import { atTopLevel, nameHashIn } from './names'
 import { RestoreCancelled, restoreEntry, type TrashEntry } from './trash'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
-const me = { userId: '33333333-3333-4333-8333-333333333333', masterKey: new Uint8Array(32).fill(9), roots: testRoots(0) } as DriveIdentity
+const me = { accountId: '33333333-3333-4333-8333-333333333333', masterKey: new Uint8Array(32).fill(9), roots: testRoots(0) } as DriveIdentity
 const top = atTopLevel(me.roots)
 
 const conflict = (data: object) =>
@@ -33,7 +33,7 @@ const folder: TrashEntry = {
   kind: 'folder',
   size: null,
   deletedAt: '2026-10-13T00:00:00Z',
-  renamable: { key: new Uint8Array(32).fill(5), keyEpoch: 1, nameRevision: 1, ownerUserId: me.userId, parentCollectionId: null },
+  renamable: { key: new Uint8Array(32).fill(5), keyEpoch: 1, nameRevision: 1, ownerAccountId: me.accountId, parentCollectionId: null },
 }
 
 beforeEach(() => {
@@ -45,7 +45,7 @@ describe('restoring at the top level', () => {
     post.mockResolvedValue({ data: {} })
     await restoreEntry(folder, me, new QueryClient())
     expect(post).toHaveBeenCalledTimes(1)
-    expect(post.mock.calls[0]).toEqual([`/trash/${folder.id}/restore`, { nameHash: await nameHashIn(top, 'Projects'), nameHashGeneration: 1 }])
+    expect(post.mock.calls[0]).toEqual([`/drive/trash/${folder.id}/restore`, { nameHash: await nameHashIn(top, 'Projects'), nameHashGeneration: 1 }])
   })
 
   it('offers the first free name when its own is taken, and renames it on the way back', async () => {
@@ -53,14 +53,14 @@ describe('restoring at the top level', () => {
     let restores = 0
     post.mockImplementation((path: string, body?: { hashes?: string[] }) => {
       if (path.endsWith('available-hashes')) return { data: { available: body!.hashes!.filter((h) => !taken.has(h)) } }
-      if (restores++ === 0) throw conflict({ code: 'name_taken', holder: { kind: 'folder', id: 'x' } })
+      if (restores++ === 0) throw conflict({ code: 'nameTaken', holder: { kind: 'folder', id: 'x' } })
       return { data: {} }
     })
     const ask = vi.fn().mockResolvedValue(true)
     await restoreEntry(folder, me, new QueryClient(), ask)
     expect(ask).toHaveBeenCalledWith({ name: 'Projects', suggested: 'Projects (3)' })
     const last = post.mock.calls.at(-1)!
-    expect(last[0]).toBe(`/trash/${folder.id}/restore`)
+    expect(last[0]).toBe(`/drive/trash/${folder.id}/restore`)
     expect(last[1]).toMatchObject({ nameHash: await nameHashIn(top, 'Projects (3)'), nameHashGeneration: 1, nameRevision: 2 })
     expect(typeof last[1].nameEnvelope).toBe('string')
   })
@@ -68,7 +68,7 @@ describe('restoring at the top level', () => {
   it('leaves it in the trash when the person says so', async () => {
     post.mockImplementation((path: string, body?: { hashes?: string[] }) => {
       if (path.endsWith('available-hashes')) return { data: { available: body!.hashes } }
-      throw conflict({ code: 'name_taken' })
+      throw conflict({ code: 'nameTaken' })
     })
     await expect(restoreEntry(folder, me, new QueryClient(), () => Promise.resolve(false))).rejects.toBeInstanceOf(RestoreCancelled)
   })
@@ -82,7 +82,7 @@ describe('restoring at the top level', () => {
       return { data: {} }
     })
     await restoreEntry(inside, me, new QueryClient())
-    expect(post.mock.calls[0]).toEqual([`/trash/${folder.id}/restore`, undefined])
-    expect(post.mock.calls.at(-1)).toEqual([`/trash/${folder.id}/restore`, { nameHash: await nameHashIn(top, 'Projects'), nameHashGeneration: 1 }])
+    expect(post.mock.calls[0]).toEqual([`/drive/trash/${folder.id}/restore`, undefined])
+    expect(post.mock.calls.at(-1)).toEqual([`/drive/trash/${folder.id}/restore`, { nameHash: await nameHashIn(top, 'Projects'), nameHashGeneration: 1 }])
   })
 })

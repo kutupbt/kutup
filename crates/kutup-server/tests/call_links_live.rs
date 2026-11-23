@@ -40,17 +40,20 @@ fn create_link(c: &Client, base: &str, owner: &User, waiting_room: bool) -> Link
         access_token: b64(&access),
         host_token: b64(&host),
     };
-    let r = bearer(c.post(format!("{base}/api/chat/call-links")), &owner.token)
-        .json(&json!({
-            "roomId": link.room_id,
-            "nonce": hex(&random::<16>()),
-            "accessTokenHash": b64(&hash(Suite::V1, access)),
-            "info": b64(&[7u8; 552]),
-            "hostTokenHash": b64(&hash(Suite::V1, host)),
-            "waitingRoom": waiting_room,
-        }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/chat/call-links")),
+        &owner.token,
+    )
+    .json(&json!({
+        "roomId": link.room_id,
+        "nonce": hex(&random::<16>()),
+        "accessTokenHash": b64(&hash(Suite::V1, access)),
+        "info": b64(&[7u8; 552]),
+        "hostTokenHash": b64(&hash(Suite::V1, host)),
+        "waitingRoom": waiting_room,
+    }))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::CREATED, "{}", r.text().unwrap());
     link
 }
@@ -68,7 +71,7 @@ fn renamed(c: &Client, base: &str, user: &mut User) -> String {
         kutup_crypto::primitives::random_below(1_000_000_000)
     );
     let check: Value = bearer(
-        c.get(format!("{base}/api/user/rename/check?name={to}")),
+        c.get(format!("{base}/api/v1/account/rename/check?name={to}")),
         &user.token,
     )
     .send()
@@ -83,7 +86,7 @@ fn renamed(c: &Client, base: &str, user: &mut User) -> String {
 
 fn server_name(c: &Client, base: &str) -> String {
     let settings: Value = c
-        .get(format!("{base}/api/auth/settings"))
+        .get(format!("{base}/api/v1/auth/settings"))
         .send()
         .unwrap()
         .json()
@@ -112,7 +115,7 @@ fn a_seat_shows_the_accounts_current_name() {
     let label = b64(&[1u8; 168]);
     let token = |user: Option<&User>| {
         let request = c
-            .post(format!("{base}/api/chat/call-links/token"))
+            .post(format!("{base}/api/v1/chat/call-links/token"))
             .json(&json!({
                 "roomId": link.room_id,
                 "accessToken": link.access_token,
@@ -158,7 +161,7 @@ fn a_knock_shows_the_accounts_current_name() {
     let link = create_link(&c, &base, &owner, true);
 
     let r = bearer(
-        c.post(format!("{base}/api/chat/call-links/knock")),
+        c.post(format!("{base}/api/v1/chat/call-links/knock")),
         &knocker.token,
     )
     .json(&json!({
@@ -181,7 +184,7 @@ fn a_knock_shows_the_accounts_current_name() {
         "hostToken": link.host_token,
     });
     let waiting: Value = c
-        .post(format!("{base}/api/chat/call-links/knocks"))
+        .post(format!("{base}/api/v1/chat/call-links/knocks"))
         .json(&host)
         .send()
         .unwrap()
@@ -195,7 +198,7 @@ fn a_knock_shows_the_accounts_current_name() {
 
     // Let in: the token minted then carries the current name too.
     let r = c
-        .post(format!("{base}/api/chat/call-links/knocks/decide"))
+        .post(format!("{base}/api/v1/chat/call-links/knocks/decide"))
         .json(&json!({
             "roomId": link.room_id,
             "accessToken": link.access_token,
@@ -207,7 +210,7 @@ fn a_knock_shows_the_accounts_current_name() {
         .unwrap();
     assert!(r.status().is_success(), "{}", r.text().unwrap());
     let status: Value = c
-        .post(format!("{base}/api/chat/call-links/knock/status"))
+        .post(format!("{base}/api/v1/chat/call-links/knock/status"))
         .json(&json!({
             "roomId": link.room_id,
             "accessToken": link.access_token,

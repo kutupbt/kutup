@@ -15,6 +15,7 @@ pub mod chat_link_preview;
 pub mod chat_media;
 pub mod chat_multi;
 pub mod chat_provisioning;
+pub mod client_versions;
 pub mod closing;
 pub mod collab;
 pub mod collections;
@@ -101,7 +102,7 @@ pub(crate) async fn can_access_collection(
 ) -> Result<bool, sqlx::Error> {
     // Trashed collections are invisible to normal access; only the trash endpoints see them.
     let owner: Option<i64> = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL",
+        "SELECT COUNT(*) FROM drive_collections WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL",
     )
     .bind(coll_id)
     .bind(user_id)
@@ -111,9 +112,9 @@ pub(crate) async fn can_access_collection(
         return Ok(true);
     }
     let shared: Option<i64> = sqlx::query_scalar(
-        r#"SELECT COUNT(*) FROM collection_shares cs
-           JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
-           WHERE cs.collection_id = $1 AND cs.recipient_user_id = $2"#,
+        r#"SELECT COUNT(*) FROM drive_collection_shares cs
+           JOIN drive_collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
+           WHERE cs.collection_id = $1 AND cs.recipient_account_id = $2"#,
     )
     .bind(coll_id)
     .bind(user_id)
@@ -131,20 +132,20 @@ pub(crate) async fn can_access_file(
     file_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
     let row: Option<(Uuid, bool)> = sqlx::query_as(
-        r#"SELECT c.owner_user_id,
-                  EXISTS(SELECT 1 FROM collection_shares cs
-                         WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
-                  OR EXISTS(SELECT 1 FROM file_shares fs
-                            WHERE fs.file_id = f.id AND fs.recipient_user_id = $2)
-                  -- A photo in an album its owner or a member can open
+        r#"SELECT c.owner_account_id,
+                  EXISTS(SELECT 1 FROM drive_collection_shares cs
+                         WHERE cs.collection_id = c.id AND cs.recipient_account_id = $2)
+                  OR EXISTS(SELECT 1 FROM drive_file_shares fs
+                            WHERE fs.file_id = f.id AND fs.recipient_account_id = $2)
+                  -- A photo in an album its mailbox_owner or a member can open
                   -- (docs/plans/photos.md): reading only.
-                  OR EXISTS(SELECT 1 FROM album_items ai
-                            JOIN collections a ON a.id = ai.album_id AND a.deleted_at IS NULL
+                  OR EXISTS(SELECT 1 FROM photos_album_items ai
+                            JOIN drive_collections a ON a.id = ai.album_id AND a.deleted_at IS NULL
                             WHERE ai.file_id = f.id
-                              AND (a.owner_user_id = $2 OR EXISTS(
-                                  SELECT 1 FROM collection_shares acs
-                                  WHERE acs.collection_id = a.id AND acs.recipient_user_id = $2)))
-           FROM files f JOIN collections c ON c.id = f.collection_id
+                              AND (a.owner_account_id = $2 OR EXISTS(
+                                  SELECT 1 FROM drive_collection_shares acs
+                                  WHERE acs.collection_id = a.id AND acs.recipient_account_id = $2)))
+           FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
            WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
     )
     .bind(file_id)

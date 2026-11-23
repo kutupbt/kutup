@@ -20,7 +20,7 @@ export class SealedStorage {
 
   /** The storage key a value is kept under, for cross-tab `storage` events. */
   key(name: string): string {
-    return `${PREFIX}${this.scope}:${name}`
+    return `${PREFIX}${name}:${this.scope}`
   }
 
   /**
@@ -75,7 +75,7 @@ export class SealedStorage {
   }
 }
 
-const PREFIX = 'kutup.sealed.v1:'
+const PREFIX = 'kutup.chat.'
 
 function toBase64(bytes: Uint8Array): string {
   let binary = ''

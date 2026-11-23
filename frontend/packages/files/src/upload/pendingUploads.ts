@@ -13,6 +13,7 @@
 // modified pick out the same file when it is chosen again.
 
 import type { ContentCommitment } from '@kutup/crypto'
+import { storageReady } from '@kutup/crypto/storageGate'
 
 export interface PendingUpload {
   fileId: string
@@ -57,10 +58,11 @@ export interface PendingUpload {
  */
 export const PENDING_UPLOAD_LIFETIME_MS = 24 * 60 * 60 * 1000
 
-const DATABASE = 'kutup-pending-uploads'
+const DATABASE = 'kutup.drive.pendingUploads'
 const STORE = 'uploads'
 
-function open(): Promise<IDBDatabase> {
+async function open(): Promise<IDBDatabase> {
+  await storageReady()
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE, 1)
     request.onupgradeneeded = () => {
@@ -96,6 +98,12 @@ export const pendingUploads = {
     await run('readwrite', (store) => store.delete(fileId))
   },
 
+  /** Every upload of `owner` (sign-out). */
+  async removeOwner(owner: string): Promise<void> {
+    const all = (await run<PendingUpload[]>('readonly', (store) => store.index('owner').getAll(owner))) ?? []
+    for (const upload of all) await pendingUploads.remove(upload.fileId)
+  },
+
   /** This account's, newest first; ones the server has reaped by now are dropped. */
   async list(owner: string, now = Date.now()): Promise<PendingUpload[]> {
     const all = (await run<PendingUpload[]>('readonly', (store) => store.index('owner').getAll(owner))) ?? []
@@ -110,7 +118,7 @@ export const pendingUploads = {
   },
 }
 
-const LOCK_PREFIX = 'kutup-upload:'
+const LOCK_PREFIX = 'kutup.drive.upload:'
 
 /**
  * Mark an upload as running in this tab until `done` settles: a Web Lock,

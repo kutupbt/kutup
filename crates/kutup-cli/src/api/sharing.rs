@@ -12,7 +12,10 @@ impl Client {
     /// Shares a collection with another local user. Mirrors `ShareCollection`.
     pub fn share_collection(&self, collection_id: &str, req: &ShareRequest) -> Result<()> {
         let resp = self
-            .request(Method::POST, &format!("/collections/{collection_id}/share"))
+            .request(
+                Method::POST,
+                &format!("/drive/collections/{collection_id}/share"),
+            )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(req)
             .send()?;
@@ -28,7 +31,7 @@ impl Client {
         let resp = self
             .request(
                 Method::POST,
-                &format!("/collections/{collection_id}/federated-shares"),
+                &format!("/drive/collections/{collection_id}/federated-shares"),
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(req)
@@ -39,7 +42,7 @@ impl Client {
     /// Creates a public link share. Mirrors `CreatePublicShare`.
     pub fn create_public_share(&self, req: &PublicShareRequest) -> Result<PublicShareResponse> {
         let resp = self
-            .request(Method::POST, "/share/")
+            .request(Method::POST, "/drive/public-links/")
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(req)
             .send()?;
@@ -52,7 +55,7 @@ impl Client {
         let resp = self
             .request(
                 Method::GET,
-                &format!("/users/by-address/{}", super::path_segment(address)),
+                &format!("/accounts/by-address/{}", super::path_segment(address)),
             )
             .send()?;
         super::decode_json(resp)
@@ -67,7 +70,7 @@ impl Client {
         let resp = self
             .request(
                 Method::GET,
-                &format!("/users/by-id/{}", super::path_segment(&person.account_id)),
+                &format!("/accounts/{}", super::path_segment(&person.account_id)),
             )
             .query(&[("server", person.server.as_str())])
             .send()?;

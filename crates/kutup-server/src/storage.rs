@@ -31,7 +31,7 @@ pub struct ObjectInfo {
 }
 
 /// The `{PartNumber, ETag}` pair S3 needs at finalize time — mirrors
-/// `services.CompletedPart`. Serialised into the `uploads.s3_part_etags` JSONB column;
+/// `services.CompletedPart`. Serialised into the `drive_uploads.s3_part_etags` JSONB column;
 /// the snake_case field names match the Go `json:"part_number"`/`json:"etag"` tags so a
 /// row written by either backend round-trips through the other.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -119,13 +119,9 @@ pub struct StorageService {
     /// For requests without a body: also a limit per try and in all.
     quick: Client,
     bucket: String,
-    /// Whether the store reads an object by its version id: learned on the
-    /// first one it refuses (Cloudflare R2 returns a version id for every
-    /// upload, then answers `NotImplemented` to a GET by it).
-    versioned_reads: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Where deletes wait before they reach the store (`None`: they go at
     /// once). The server defers them for at least the site setting
-    /// `storage_deleted_blob_retention_seconds`, so a database dump restored
+    /// `server.storage.deleted_blob_retention_seconds`, so a database dump restored
     /// from before a delete never names a purged blob
     /// (docs/plans/restore-drill-and-alerting.md, gap 5; `crate::blob_purge`).
     deferred: Option<sqlx::PgPool>,
@@ -134,13 +130,8 @@ pub struct StorageService {
 /// What a deferred delete removes, as `storage_pending_deletions.kind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PendingKind {
-    /// Every stored version of the key ([`StorageService::delete`]).
+    /// The key ([`StorageService::delete`]).
     Object,
-    /// That version where the store deletes by version, else the key
-    /// ([`StorageService::delete_stored`]).
-    Stored,
-    /// Exactly that version ([`StorageService::delete_object_version`]).
-    Version,
     /// Every object under the prefix ([`StorageService::delete_prefix`]).
     Prefix,
 }
@@ -149,8 +140,6 @@ impl PendingKind {
     pub fn as_str(self) -> &'static str {
         match self {
             PendingKind::Object => "object",
-            PendingKind::Stored => "stored",
-            PendingKind::Version => "version",
             PendingKind::Prefix => "prefix",
         }
     }
@@ -158,18 +147,10 @@ impl PendingKind {
     pub fn parse(value: &str) -> Option<PendingKind> {
         Some(match value {
             "object" => PendingKind::Object,
-            "stored" => PendingKind::Stored,
-            "version" => PendingKind::Version,
             "prefix" => PendingKind::Prefix,
             _ => return None,
         })
     }
-}
-
-/// Whether a GET by version id failed because the store doesn't read by
-/// version (`NotImplemented`, HTTP 501), not because of the object.
-pub(crate) fn version_reads_unsupported(code: Option<&str>, status: Option<u16>) -> bool {
-    code == Some("NotImplemented") || status == Some(501)
 }
 
 impl StorageService {
@@ -227,7 +208,6 @@ impl StorageService {
             client: Client::from_conf(conf),
             quick: Client::from_conf(quick),
             bucket: bucket.to_string(),
-            versioned_reads: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             deferred: None,
         }
     }
@@ -250,24 +230,17 @@ impl StorageService {
 
     /// Queues deletes for the purge job. A key already waiting keeps its
     /// first time (the earlier one is the one a dump could name).
-    async fn defer(
-        &self,
-        pool: &sqlx::PgPool,
-        kind: PendingKind,
-        keys: &[String],
-        version_id: &str,
-    ) -> Result<()> {
+    async fn defer(&self, pool: &sqlx::PgPool, kind: PendingKind, keys: &[String]) -> Result<()> {
         if keys.is_empty() {
             return Ok(());
         }
         sqlx::query(
-            "INSERT INTO storage_pending_deletions (kind, key, version_id)
-             SELECT $1, key, $3 FROM UNNEST($2::text[]) AS key
-             ON CONFLICT (kind, key, version_id) DO NOTHING",
+            "INSERT INTO storage_pending_deletions (kind, key)
+             SELECT $1, key FROM UNNEST($2::text[]) AS key
+             ON CONFLICT (kind, key) DO NOTHING",
         )
         .bind(kind.as_str())
         .bind(keys)
-        .bind(version_id)
         .execute(pool)
         .await
         .context("queue storage delete")?;
@@ -283,7 +256,7 @@ impl StorageService {
         };
         sqlx::query(
             "DELETE FROM storage_pending_deletions
-             WHERE key = $1 AND kind IN ('object', 'stored')",
+             WHERE key = $1 AND kind = 'object'",
         )
         .bind(key)
         .execute(pool)
@@ -305,28 +278,6 @@ impl StorageService {
             .await
             .context("s3 put")?;
         Ok(())
-    }
-
-    /// Puts an object and returns the SeaweedFS version id (empty if unversioned) —
-    /// mirrors `PutObjectVersioned`.
-    pub async fn put_object_versioned(
-        &self,
-        key: &str,
-        body: ByteStream,
-        size: i64,
-    ) -> Result<String> {
-        self.cancel_pending(key).await?;
-        let out = self
-            .client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .body(body)
-            .content_length(size)
-            .send()
-            .await
-            .context("s3 put versioned")?;
-        Ok(out.version_id().unwrap_or("").to_string())
     }
 
     /// An object's length as the store holds it now, or `None` when there is
@@ -397,41 +348,6 @@ impl StorageService {
         Ok(out.body)
     }
 
-    /// Deletes a specific (noncurrent) object version — mirrors `DeleteObjectVersion`.
-    /// Used by the version-cleanup job.
-    pub async fn delete_object_version(&self, key: &str, version_id: &str) -> Result<()> {
-        if let Some(pool) = &self.deferred {
-            return self
-                .defer(pool, PendingKind::Version, &[key.to_owned()], version_id)
-                .await;
-        }
-        self.quick
-            .delete_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .version_id(version_id)
-            .send()
-            .await
-            .context("s3 delete version")?;
-        Ok(())
-    }
-
-    /// Removes an object whose upload returned `version_id`: that exact
-    /// version where the store deletes by version, otherwise the object.
-    /// Some stores (Cloudflare R2) return a version id for every upload and
-    /// then refuse to delete by it.
-    pub async fn delete_stored(&self, key: &str, version_id: &str) -> Result<()> {
-        if let Some(pool) = &self.deferred {
-            return self
-                .defer(pool, PendingKind::Stored, &[key.to_owned()], version_id)
-                .await;
-        }
-        if !version_id.is_empty() && self.delete_object_version(key, version_id).await.is_ok() {
-            return Ok(());
-        }
-        self.delete(key).await
-    }
-
     /// Lists one page (≤1000 keys) under `prefix`, returning the objects + the continuation
     /// token for the next page (`None` when exhausted) — the paged half of Go's
     /// `ListObjectsPaged`. The orphan sweep drives the loop so it can do per-page DB work +
@@ -475,141 +391,22 @@ impl StorageService {
         Ok((objs, next))
     }
 
-    /// Reads an object whose upload returned `version_id`: that exact version
-    /// where the store reads by version (a versioned bucket), otherwise the
-    /// object. Some stores (Cloudflare R2) return a version id for every
-    /// upload and then refuse to read by it; once one does, this reads the
-    /// object, which is the same bytes: every key read this way is written
-    /// once (mail messages, held sends), as `delete_stored` deletes.
-    pub async fn get_stored(&self, key: &str, version_id: &str) -> Result<(ByteStream, i64)> {
-        use std::sync::atomic::Ordering;
-        if version_id.is_empty() || !self.versioned_reads.load(Ordering::Relaxed) {
-            return self.get_object(key).await;
-        }
-        let read = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .version_id(version_id)
-            .send()
-            .await;
-        match read {
-            Ok(out) => {
-                let size = out.content_length().unwrap_or(0);
-                Ok((out.body, size))
-            }
-            Err(error) => {
-                use aws_sdk_s3::error::ProvideErrorMetadata as _;
-                let status = error.raw_response().map(|r| r.status().as_u16());
-                if version_reads_unsupported(error.code(), status) {
-                    tracing::warn!(
-                        "storage: the store doesn't read objects by version; reading by key"
-                    );
-                    self.versioned_reads.store(false, Ordering::Relaxed);
-                    return self.get_object(key).await;
-                }
-                Err(error).context("s3 get version")
-            }
-        }
-    }
-
-    /// Whether this store reads objects by version id, as far as known.
-    pub fn reads_versions(&self) -> bool {
-        self.versioned_reads
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Removes an object for good: every stored version of it and any delete
-    /// markers. On a versioned bucket a plain DELETE only hides the bytes behind
-    /// a marker, so "delete" would not delete (docs/plans/drive-versions-v2.md).
+    /// Removes an object. Every key holds one revision of something and is
+    /// never overwritten (docs/architecture.md, "Object storage"), so the
+    /// bucket needs no versioning and a plain delete is final.
     pub async fn delete(&self, path: &str) -> Result<()> {
         if let Some(pool) = &self.deferred {
             return self
-                .defer(pool, PendingKind::Object, &[path.to_owned()], "")
+                .defer(pool, PendingKind::Object, &[path.to_owned()])
                 .await;
         }
-        match self.list_object_versions(path).await {
-            Ok(versions) => {
-                let exact: Vec<(String, String)> = versions
-                    .into_iter()
-                    .filter(|(key, _)| key == path)
-                    .collect();
-                if exact.is_empty() {
-                    return Ok(());
-                }
-                self.delete_versions(&exact).await
-            }
-            // A store without version listing: an unversioned bucket, where a
-            // plain delete is final.
-            Err(_) => {
-                self.quick
-                    .delete_object()
-                    .bucket(&self.bucket)
-                    .key(path)
-                    .send()
-                    .await
-                    .context("s3 delete")?;
-                Ok(())
-            }
-        }
-    }
-
-    /// Every stored version and delete marker under `prefix`, as (key, version id).
-    async fn list_object_versions(&self, prefix: &str) -> Result<Vec<(String, String)>> {
-        let mut out = Vec::new();
-        let mut key_marker: Option<String> = None;
-        let mut version_marker: Option<String> = None;
-        loop {
-            let page = self
-                .quick
-                .list_object_versions()
-                .bucket(&self.bucket)
-                .prefix(prefix)
-                .set_key_marker(key_marker.clone())
-                .set_version_id_marker(version_marker.clone())
-                .send()
-                .await
-                .context("s3 list versions")?;
-            for v in page.versions() {
-                if let (Some(key), Some(id)) = (v.key(), v.version_id()) {
-                    out.push((key.to_string(), id.to_string()));
-                }
-            }
-            for m in page.delete_markers() {
-                if let (Some(key), Some(id)) = (m.key(), m.version_id()) {
-                    out.push((key.to_string(), id.to_string()));
-                }
-            }
-            if page.is_truncated() != Some(true) {
-                return Ok(out);
-            }
-            key_marker = page.next_key_marker().map(String::from);
-            version_marker = page.next_version_id_marker().map(String::from);
-        }
-    }
-
-    /// Deletes exact object versions, 1000 per request.
-    async fn delete_versions(&self, versions: &[(String, String)]) -> Result<()> {
-        for chunk in versions.chunks(1000) {
-            let objects: Vec<ObjectIdentifier> = chunk
-                .iter()
-                .map(|(key, id)| ObjectIdentifier::builder().key(key).version_id(id).build())
-                .collect::<Result<_, _>>()
-                .context("build delete identifiers")?;
-            let delete = Delete::builder()
-                .set_objects(Some(objects))
-                .quiet(true)
-                .build()
-                .context("build delete")?;
-            self.quick
-                .delete_objects()
-                .bucket(&self.bucket)
-                .delete(delete)
-                .send()
-                .await
-                .context("s3 delete versions")?;
-        }
+        self.quick
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(path)
+            .send()
+            .await
+            .context("s3 delete")?;
         Ok(())
     }
 
@@ -619,9 +416,7 @@ impl StorageService {
             return Ok(());
         }
         if let Some(pool) = &self.deferred {
-            // A batch delete removes the current object of each key, as a
-            // queued object delete does (with its older versions too).
-            return self.defer(pool, PendingKind::Object, keys, "").await;
+            return self.defer(pool, PendingKind::Object, keys).await;
         }
         let objects: Vec<ObjectIdentifier> = keys
             .iter()
@@ -649,13 +444,8 @@ impl StorageService {
     pub async fn delete_prefix(&self, prefix: &str) -> Result<()> {
         if let Some(pool) = &self.deferred {
             return self
-                .defer(pool, PendingKind::Prefix, &[prefix.to_owned()], "")
+                .defer(pool, PendingKind::Prefix, &[prefix.to_owned()])
                 .await;
-        }
-        // Every version under the prefix, where the store can list them; the
-        // plain key listing below is the fallback for one that cannot.
-        if let Ok(versions) = self.list_object_versions(prefix).await {
-            return self.delete_versions(&versions).await;
         }
         let mut continuation: Option<String> = None;
         loop {
@@ -876,19 +666,6 @@ impl StorageService {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_store_that_does_not_read_by_version_is_told_from_a_missing_object() {
-        // Cloudflare R2's answer to a GET with versionId.
-        assert!(version_reads_unsupported(Some("NotImplemented"), Some(501)));
-        assert!(version_reads_unsupported(None, Some(501)));
-        // The object or version isn't there: an error, never a read by key
-        // (which could return another version).
-        assert!(!version_reads_unsupported(Some("NoSuchKey"), Some(404)));
-        assert!(!version_reads_unsupported(Some("NoSuchVersion"), Some(404)));
-        assert!(!version_reads_unsupported(Some("AccessDenied"), Some(403)));
-        assert!(!version_reads_unsupported(None, None));
-    }
 
     const MIB: i64 = 1024 * 1024;
 

@@ -46,7 +46,7 @@ pub const ACCOUNT_HEAD_WRITER_V1: &[u8] = b"kutup/account-head/writer/v1\0";
 
 /// `kutup-chat-proto/src/account_identity.rs`
 pub const ACCOUNT_IDENTITY_BINDING_V1: &[u8] = b"kutup/account-identity/binding/v1\0";
-/// `kutup-crypto/src/identity.rs` (`DRIVE_HPKE_INFO`)
+/// `kutup-crypto/src/identity.rs` (`DRIVE_XWING_INFO`)
 pub const ACCOUNT_IDENTITY_DRIVE_HPKE_XWING_V1: &[u8] =
     b"kutup/account-identity/drive-hpke-xwing/v1\0";
 /// `kutup-crypto/src/identity.rs` (`DRIVE_SIGNING_INFO`)
@@ -70,12 +70,10 @@ pub const ACCOUNT_DEVICE_SESSION_V1: &[u8] = b"kutup/account/device-session/v1\0
 pub const ACCOUNT_ID_PROOF_V1: &[u8] = b"kutup/account/id-proof/v1\0";
 /// `kutup-chat-proto/src/account_identity.rs`
 pub const ACCOUNT_INCARNATION_V1: &[u8] = b"kutup/account/incarnation/v1\0";
-/// `kutup-crypto/src/chat_group.rs`
-pub const ACCOUNT_MANIFEST_V1: &[u8] = b"kutup/account/manifest/v1\0";
 /// `kutup-chat-proto/src/account_identity.rs` (`DOMAIN`)
 pub const ACCOUNT_MANIFEST_V3: &[u8] = b"kutup/account/manifest/v3\0";
-/// `kutup-crypto/src/account_rename.rs` (`DOMAIN`)
-pub const ACCOUNT_RENAME_V1: &[u8] = b"kutup/account/rename/v1\0";
+/// `kutup-crypto/src/account_rename.rs` (`DOMAIN`): v2 binds the account id
+pub const ACCOUNT_RENAME_V2: &[u8] = b"kutup/account/rename/v2\0";
 /// `kutup-chat-proto/src/account_identity.rs` (`AccountSuccessionV1`): the
 /// previous authority's signature over an identity rotation's statement.
 pub const ACCOUNT_SUCCESSION_BY_PREVIOUS_V1: &[u8] = b"kutup/account/succession/by-previous/v1\0";
@@ -239,16 +237,6 @@ pub const CONTACT_CONTROL_V1: &[u8] = b"kutup/contact-control/v1\0";
 
 /// `kutup-crypto/src/chat_group.rs`
 pub const CONTACT_SUMMARY_V2: &[u8] = b"kutup/contact-summary/v2\0";
-
-// --- device-registration -----------------------------------------------------
-
-/// `kutup-crypto/src/chat_group.rs`
-pub const DEVICE_REGISTRATION_V1: &[u8] = b"kutup/device-registration/v1\0";
-
-// --- device-revocation -------------------------------------------------------
-
-/// `kutup-crypto/src/chat_group.rs`
-pub const DEVICE_REVOCATION_V1: &[u8] = b"kutup/device-revocation/v1\0";
 
 // --- dkim-key ----------------------------------------------------------------
 
@@ -431,8 +419,6 @@ pub const ORG_MEMBER_ESCROW_V1: &[u8] = b"kutup/org/member-escrow/v1\0";
 
 // --- pass-vault-secret -------------------------------------------------------
 
-/// `kutup-crypto/src/pass_vault.rs`
-pub const PASS_VAULT_SECRET_V1: &[u8] = b"kutup/pass-vault-secret/v1\0";
 /// `kutup-crypto/src/pass_vault.rs` (`DOMAIN`)
 pub const PASS_VAULT_SECRET_V2: &[u8] = b"kutup/pass-vault-secret/v2\0";
 
@@ -473,7 +459,7 @@ pub const SEALED_RECIPIENT_RATE_V1: &[u8] = b"kutup/sealed-recipient-rate/v1\0";
 // --- server ------------------------------------------------------------------
 
 /// `kutup-server/src/audit_log.rs` (`CHAIN_DOMAIN`)
-pub const SERVER_ADMIN_AUDIT_CHAIN_V1: &[u8] = b"kutup/server/admin-audit-chain/v1\0";
+pub const SERVER_ADMIN_AUDIT_CHAIN_V2: &[u8] = b"kutup/server/admin-audit-chain/v2\0";
 /// `kutup-crypto/src/server_data.rs` (`SALT`)
 pub const SERVER_DATA_V1: &[u8] = b"kutup/server/data/v1\0";
 /// `kutup-crypto/src/server_data.rs` (`KEK_INFO`)
@@ -550,7 +536,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 169] = [
+pub const ALL: [&[u8]; 165] = [
     SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1,
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
@@ -585,11 +571,10 @@ pub const ALL: [&[u8]; 169] = [
     ACCOUNT_DEVICE_SESSION_V1,
     ACCOUNT_ID_PROOF_V1,
     ACCOUNT_INCARNATION_V1,
-    ACCOUNT_MANIFEST_V1,
     ACCOUNT_MANIFEST_V3,
     ACCOUNT_SUCCESSION_BY_PREVIOUS_V1,
     ACCOUNT_SUCCESSION_BY_NEW_V1,
-    ACCOUNT_RENAME_V1,
+    ACCOUNT_RENAME_V2,
     CHAT_BACKUP_MEDIA_BLOCKS_BLOCK_KEY_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_MANIFEST_KEY_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_NONCE_KEY_V1,
@@ -641,8 +626,6 @@ pub const ALL: [&[u8]; 169] = [
     COLLAB_FRAME_V3,
     CONTACT_CONTROL_V1,
     CONTACT_SUMMARY_V2,
-    DEVICE_REGISTRATION_V1,
-    DEVICE_REVOCATION_V1,
     DKIM_KEY_V1,
     DRIVE_ENVELOPE_KEY_V1,
     DRIVE_ENVELOPE_THUMBNAIL_V2,
@@ -688,14 +671,13 @@ pub const ALL: [&[u8]; 169] = [
     OPAQUE_MASTER_KEY_KEK_V1,
     OPAQUE_SETUP_V1,
     OPAQUE_V1,
-    PASS_VAULT_SECRET_V1,
     PASS_VAULT_SECRET_V2,
     PROFILE_ENVELOPE_KEY_V1,
     REGISTRATION_CODE_V1,
     SEALED_DELIVERY_CAPABILITY_V1,
     SEALED_ORIGIN_RATE_V1,
     SEALED_RECIPIENT_RATE_V1,
-    SERVER_ADMIN_AUDIT_CHAIN_V1,
+    SERVER_ADMIN_AUDIT_CHAIN_V2,
     SERVER_DATA_V1,
     SERVER_DATA_KEK_V1,
     SERVER_DATA_KEY_WRAP_V1,

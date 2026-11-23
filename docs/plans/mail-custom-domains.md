@@ -11,7 +11,7 @@ later). Nothing is built yet.
     `MXSection`, `SPFSection`, `DKIMSection`, `DMARCSection`, `CatchAllModal`,
     `DeleteDomainModal`, `DomainsSection`);
   - `packages/shared/lib/interfaces/Domain.ts` (states);
-  - `packages/shared/lib/api/domains.ts` (routes);
+  - `packages/shared/lib/api/v1/domains.ts` (routes);
   - `packages/account/domains/actions.ts`, `packages/account/addresses/actions.ts`;
   - `packages/shared/lib/organization/domain.ts` (`getIsDomainActive`).
 - Proton's server isn't public. Where only the server can answer (the
@@ -155,7 +155,7 @@ not left to the build:
 
 Custom-domain addresses are extra addresses, so an account first needs more
 than its username's address, as Proton has.
-- **Route:** `POST /api/mail/addresses {local, domainId | null}` creates an
+- **Route:** `POST /api/v1/mail/addresses {local, domainId | null}` creates an
   address. The client generates its key as now.
   - The server checks that the domain is the caller's and usable (`verified`
     or `warn`).
@@ -211,7 +211,7 @@ UNIQUE (name) WHERE state IN (1, 2)          -- one holder at a time
 
 ### 2. Adding and verifying
 
-- **Add:** `POST /api/mail/domains {name}`.
+- **Add:** `POST /api/v1/mail/domains {name}`.
   - The name is normalized: lowercase, IDNA, no trailing dot.
   - It is refused when it is:
     - the server's own domain or a subdomain of it;
@@ -219,7 +219,7 @@ UNIQUE (name) WHERE state IN (1, 2)          -- one holder at a time
     - an IP address;
     - longer than 253 bytes.
   - The `www.` warning is the client's, as Proton's.
-- **Verify** is `GET /api/mail/domains/{id}?refresh=1`, as Proton.
+- **Verify** is `GET /api/v1/mail/domains/{id}?refresh=1`, as Proton.
   - It does an uncached lookup of TXT `@` through the server's validating
     resolver (§3).
   - It is limited to 30 an hour per account.
@@ -324,7 +324,7 @@ names no domain.
 - **Made while the domain is usable** (`verified` or `warn`, Proton's
   `getIsDomainActive`), within the account's address limit (§0).
 - **Keys as any address:** a key per address, the signed key list, the
-  outside key lookup (`/api/mail/keys/lookup`) and Autocrypt. No WKD (settled
+  outside key lookup (`/api/v1/mail/keys/lookup`) and Autocrypt. No WKD (settled
   above).
 - **Chat and Drive identities don't change.** A person stays `username@server`
   (their `AccountRef`). A custom-domain address is Mail only, as Proton's are.
@@ -353,7 +353,7 @@ names no domain.
 
 As Proton:
 - one address per domain, an active and receiving one on that domain;
-- `PUT /api/mail/domains/{id}/catch-all {addressId | null}`.
+- `PUT /api/v1/mail/domains/{id}/catch-all {addressId | null}`.
 
 The RCPT hook strips a `+tag`, then resolves an unknown local part on a held
 domain to the catch-all. These are caught too:
@@ -392,7 +392,7 @@ defaults:
   console (Mail → Domains) until an administrator approves it. Until then it
   is `pending`, and nothing flows.
 - **Outside sending:** custom domains also follow Mail's outside-sending rule
-  (`mail_outside_sending`, admins only today). An account that may not send
+  (`mail.outside_sending`, admins only today). An account that may not send
   outside may still hold a domain and receive on it. Its sends from that
   domain are refused like any outside send (`403 outsideSendingOff`).
 - **The per-user override** sets an account's domain count, address count
@@ -418,7 +418,7 @@ account.
 **Clients pin the account id.** A new holder of `john@example.com` therefore
 shows as a different person with a changed key, never as inherited trust.
 
-**Removing a domain** (`DELETE /api/mail/domains/{id}`) shows Proton's text:
+**Removing a domain** (`DELETE /api/v1/mail/domains/{id}`) shows Proton's text:
 "all the addresses associated with it will be disabled".
 - The addresses go `freed` as above, with their mail kept in the mailbox.
 - Stalwart's `Domain` and `DkimSignature` go (§10).
@@ -494,7 +494,7 @@ Built (2026-10-22): Mail → Settings → Domain names (the list, Proton's
 seven-tab wizard with its texts, the catch-all and delete modals, the warn
 and stopped banners) and Administration → Mail domains (domains with owners,
 approve, deactivate, the blocked names, the records to publish, every
-`mail_domains.*` setting, and per-user limits on the user page). A lost
+`mail.domains.*` setting, and per-user limits on the user page). A lost
 domain's transfer notice is the inbox notice (`mail::notice`). Addresses on
 a domain are made in Identity and addresses. The browser spec runs on the
 mail gate's stack with CoreDNS: `scripts/test-mail-domains-browser.sh`

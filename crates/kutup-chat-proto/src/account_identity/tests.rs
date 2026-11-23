@@ -71,7 +71,7 @@ fn manifest(devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {
         identity_binding: Some(b64(&[0x5b; 64])),
         drive: AccountManifestDriveKeysV1 {
             suite: AccountIdentitySuiteId::XWingEd25519V2,
-            hpke_public_key: b64(&[9; 1216]),
+            xwing_public_key: b64(&[9; 1216]),
             share_signing_public_key: b64(&drive_signing.verifying_key().to_bytes()),
         },
         devices,
@@ -761,12 +761,14 @@ fn reregistration_lists_this_device_as_its_one_chat_device() {
     other_identity.identity_key = identity(4);
     assert!(other_identity.validate().is_err());
 
-    // The account's other devices stay; this one takes the lowest id they
-    // leave free.
+    // The account's other devices stay; this one takes an id none of them
+    // holds (which one is the server's counter's to say).
     for devices in [
         vec![editor(1), device(2, 10)],
         vec![editor(1), device(2, 10), editor(3)],
         vec![device(1, 10), editor(2)],
+        vec![editor(1), device(3, 10)],
+        vec![device(2, 10)],
     ] {
         registration(DeviceRegistrationV1::Reregistration {
             manifest: Box::new(manifest(devices)),
@@ -774,19 +776,35 @@ fn reregistration_lists_this_device_as_its_one_chat_device() {
         .validate()
         .unwrap();
     }
-    for devices in [
-        vec![device(1, 10), device(2, 20)],
-        vec![device(2, 10)],
-        vec![editor(1), device(3, 10)],
-        vec![editor(1)],
-    ] {
+    for devices in [vec![device(1, 10), device(2, 20)], vec![editor(1)]] {
         let bad = registration(DeviceRegistrationV1::Reregistration {
             manifest: Box::new(manifest(devices)),
         });
         assert!(bad.validate().is_err());
     }
-    assert_eq!(reregistration_device_id(&[]), 1);
-    assert_eq!(reregistration_device_id(&[1, 2, 4]), 3);
+}
+
+/// A new device takes the first free id at or after the account's counter,
+/// wrapping from 127 to 1, so a freed id comes back last.
+#[test]
+fn device_ids_follow_the_accounts_counter_and_wrap() {
+    assert_eq!(next_device_id(1, &[]), Some(1));
+    // A freed id below the counter waits its turn.
+    assert_eq!(next_device_id(4, &[1, 3]), Some(4));
+    assert_eq!(next_device_id(4, &[1, 4, 5]), Some(6));
+    // Past 127 it wraps to the lowest free id at or after 1.
+    assert_eq!(next_device_id(127, &[127]), Some(1));
+    assert_eq!(next_device_id(127, &[1, 2, 127]), Some(3));
+    assert_eq!(next_device_id(126, &[1]), Some(126));
+    // A counter outside the id space counts from 1.
+    assert_eq!(next_device_id(0, &[1]), Some(2));
+    assert_eq!(next_device_id(128, &[]), Some(1));
+    // Every id taken: none.
+    let all: Vec<u32> = (1..=MAX_DEVICE_ID).collect();
+    assert_eq!(next_device_id(50, &all), None);
+    assert_eq!(device_id_after(1), 2);
+    assert_eq!(device_id_after(126), 127);
+    assert_eq!(device_id_after(127), 1);
 }
 
 fn successor(head: &AccountManifestV3, devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {

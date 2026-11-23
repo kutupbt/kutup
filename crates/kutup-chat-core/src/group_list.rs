@@ -36,9 +36,6 @@ use crate::group_engine::GroupSync;
 /// A due write waits a random time up to this long (§5).
 const WRITE_DELAY_MAX_MS: i64 = 10 * 60 * 1000;
 
-/// The list is read again at most this often by a running device.
-const READ_EVERY_MS: i64 = 10 * 60 * 1000;
-
 /// One entry as the list holds it: its revision and what it says (`None`:
 /// an entry of a later version this device can't read, kept as it is and
 /// never overwritten here).
@@ -449,30 +446,6 @@ impl Engine {
             }
             let _ = self.schedule_group_entry(&record.group_id).await;
         }
-        Ok(taken_up)
-    }
-
-    /// [`Self::sync_group_list`] when the last read is a while ago (a running
-    /// device's periodic look), then the writes that are due.
-    pub async fn sync_group_list_if_due<R: Rng + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-    ) -> Result<Vec<String>> {
-        let due = self
-            .group_list
-            .as_ref()
-            .is_some_and(|list| self.now_ms().saturating_sub(list.read_at_ms) >= READ_EVERY_MS);
-        let taken_up = if due {
-            self.sync_group_list(rng).await?
-        } else {
-            Vec::new()
-        };
-        let _ = self.flush_group_list(false).await;
-        // This account's endorsement, once a day whatever its groups (so the
-        // fetch says nothing about them); then each group gets it, and the
-        // members' new ones are read, with this periodic look.
-        let _ = self.refresh_own_group_send_endorsement().await;
-        let _ = self.refresh_all_group_send_endorsements().await;
         Ok(taken_up)
     }
 

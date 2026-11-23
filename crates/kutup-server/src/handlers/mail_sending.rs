@@ -11,11 +11,12 @@ use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
 use crate::handlers::trusted_uuid;
 use crate::mail::safety;
-use crate::middleware::{AdminUser, AuthUser};
+use crate::middleware::{AdminAccount, AuthAccount};
 use crate::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -37,20 +38,20 @@ pub struct MailSendingStatus {
     pub outside_allowed: bool,
 }
 
-/// `GET /api/mail/sending` — your limits on mail to outside addresses, and
+/// `GET /api/v1/mail/sending` — your limits on mail to outside addresses, and
 /// whether sending is paused.
 #[utoipa::path(
     get,
-    path = "/api/mail/sending",
+    path = "/api/v1/mail/sending",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your sending limits", body = MailSendingStatus))
 )]
 pub async fn own_status(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<MailSendingStatus>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let standing = safety::standing(&state, user_id).await?;
     Ok(Json(MailSendingStatus {
         per_hour: standing.limits.per_hour,
@@ -71,7 +72,7 @@ pub async fn own_status(
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MailSender {
-    pub user_id: String,
+    pub account_id: String,
     pub username: String,
     /// Outside recipients in the last day and week.
     pub sent_day: i64,
@@ -112,12 +113,12 @@ struct SenderRow {
     flag_reason: Option<String>,
 }
 
-/// `GET /api/admin/mail/senders?attention=` — accounts that sent outside in
+/// `GET /api/v1/admin/mail/senders?attention=` — accounts that sent outside in
 /// the last week, or have limits, a pause or a flag: paused and flagged
 /// first, then by volume.
 #[utoipa::path(
     get,
-    path = "/api/admin/mail/senders",
+    path = "/api/v1/admin/mail/senders",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(MailSendersQuery),
@@ -125,7 +126,7 @@ struct SenderRow {
 )]
 pub async fn senders(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Query(query): Query<MailSendersQuery>,
 ) -> AppResult<Json<Vec<MailSender>>> {
     let rows = load(&state, query.attention.unwrap_or(false), None).await?;
@@ -135,7 +136,7 @@ pub async fn senders(
 impl From<SenderRow> for MailSender {
     fn from(row: SenderRow) -> Self {
         MailSender {
-            user_id: row.id.to_string(),
+            account_id: row.id.to_string(),
             username: row.username.unwrap_or_default(),
             sent_day: row.sent_day,
             sent_week: row.sent_week,
@@ -154,29 +155,29 @@ impl From<SenderRow> for MailSender {
 async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResult<Vec<SenderRow>> {
     Ok(sqlx::query_as(
         "WITH sent AS (
-             SELECT sender_account AS user_id,
+             SELECT sender_account_id AS account_id,
                     SUM(external_recipients) FILTER (WHERE received_at > now() - interval '1 day')::bigint AS day,
                     SUM(external_recipients)::bigint AS week
                FROM mail_messages
               WHERE external_recipients > 0 AND received_at > now() - interval '7 days'
-              GROUP BY sender_account),
+              GROUP BY sender_account_id),
          events AS (
-             SELECT user_id,
+             SELECT account_id,
                     COUNT(*) FILTER (WHERE kind = 'bounce') AS bounces,
-                    COUNT(*) FILTER (WHERE kind = 'spam_refused') AS spam
+                    COUNT(*) FILTER (WHERE kind = 'spamRefused') AS spam
                FROM mail_sending_events
               WHERE created_at > now() - interval '7 days'
-              GROUP BY user_id)
+              GROUP BY account_id)
          SELECT u.id, u.username,
                 COALESCE(s.day, 0) AS sent_day, COALESCE(s.week, 0) AS sent_week,
                 COALESCE(e.bounces, 0) AS bounces_week, COALESCE(e.spam, 0) AS spam_week,
                 p.per_hour, p.per_day, p.paused_at, p.paused_reason, p.flagged_at, p.flag_reason
-           FROM users u
-           LEFT JOIN sent s ON s.user_id = u.id
-           LEFT JOIN events e ON e.user_id = u.id
-           LEFT JOIN mail_sending_policies p ON p.user_id = u.id
+           FROM accounts u
+           LEFT JOIN sent s ON s.account_id = u.id
+           LEFT JOIN events e ON e.account_id = u.id
+           LEFT JOIN mail_sending_policies p ON p.account_id = u.id
           WHERE CASE WHEN $2::uuid IS NOT NULL THEN u.id = $2
-                     ELSE (s.user_id IS NOT NULL OR e.user_id IS NOT NULL OR p.user_id IS NOT NULL)
+                     ELSE (s.account_id IS NOT NULL OR e.account_id IS NOT NULL OR p.account_id IS NOT NULL)
                           AND (NOT $1 OR p.paused_at IS NOT NULL OR p.flagged_at IS NOT NULL) END
           ORDER BY (p.paused_at IS NOT NULL OR p.flagged_at IS NOT NULL) DESC,
                    COALESCE(s.week, 0) DESC, u.username
@@ -188,11 +189,11 @@ async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResul
     .await?)
 }
 
-/// `GET /api/admin/users/{id}/mail-sending` — one account's sending, even
+/// `GET /api/v1/admin/accounts/{id}/mail-sending` — one account's sending, even
 /// before it has sent anything.
 #[utoipa::path(
     get,
-    path = "/api/admin/users/{id}/mail-sending",
+    path = "/api/v1/admin/accounts/{id}/mail-sending",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -200,7 +201,7 @@ async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResul
 )]
 pub async fn one(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailSender>> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -239,11 +240,11 @@ pub struct UpdateMailSending {
     pub clear_flag: Option<bool>,
 }
 
-/// `PUT /api/admin/users/{id}/mail-sending` — an account's limits, pause and
+/// `PUT /api/v1/admin/accounts/{id}/mail-sending` — an account's limits, pause and
 /// flag. Resuming clears the pause whatever set it.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}/mail-sending",
+    path = "/api/v1/admin/accounts/{id}/mail-sending",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -252,14 +253,14 @@ pub struct UpdateMailSending {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateMailSending>,
 ) -> AppResult<axum::http::StatusCode> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     limit(&request.per_hour)?;
     limit(&request.per_day)?;
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)")
         .bind(target)
         .fetch_one(&state.pool)
         .await?;
@@ -267,7 +268,7 @@ pub async fn update(
         return Err(AppError::not_found("not found"));
     }
     sqlx::query(
-        "INSERT INTO mail_sending_policies (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+        "INSERT INTO mail_sending_policies (account_id) VALUES ($1) ON CONFLICT (account_id) DO NOTHING",
     )
     .bind(target)
     .execute(&state.pool)
@@ -283,7 +284,7 @@ pub async fn update(
              flagged_at = CASE WHEN $7 THEN NULL ELSE flagged_at END,
              flag_reason = CASE WHEN $7 THEN NULL ELSE flag_reason END,
              updated_at = now()
-          WHERE user_id = $1",
+          WHERE account_id = $1",
     )
     .bind(target)
     .bind(request.per_hour.is_some())
@@ -296,8 +297,8 @@ pub async fn update(
     .await?;
     audit(
         &state.pool,
-        &admin.user_id,
-        "mail.sending.update",
+        &admin.account_id,
+        AdminAction::MailUpdateSending,
         Some(target),
         json!({
             "perHour": request.per_hour,
@@ -318,17 +319,17 @@ pub struct OutsideSendingPolicy {
     pub outside_sending: String,
 }
 
-/// `GET /api/admin/mail/outside-sending` — who may send outside Kutup.
+/// `GET /api/v1/admin/mail/outside-sending` — who may send outside Kutup.
 #[utoipa::path(
     get,
-    path = "/api/admin/mail/outside-sending",
+    path = "/api/v1/admin/mail/outside-sending",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The policy", body = OutsideSendingPolicy))
 )]
 pub async fn outside_sending(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<OutsideSendingPolicy>> {
     let policy =
         crate::site_settings::mail_outside_sending(&state.pool, state.config.mail_outside_sending)
@@ -338,11 +339,11 @@ pub async fn outside_sending(
     }))
 }
 
-/// `PUT /api/admin/mail/outside-sending` — sets it, at once and without a
+/// `PUT /api/v1/admin/mail/outside-sending` — sets it, at once and without a
 /// restart; recorded in the audit log.
 #[utoipa::path(
     put,
-    path = "/api/admin/mail/outside-sending",
+    path = "/api/v1/admin/mail/outside-sending",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = OutsideSendingPolicy,
@@ -353,7 +354,7 @@ pub async fn outside_sending(
 )]
 pub async fn set_outside_sending(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(request): Json<OutsideSendingPolicy>,
 ) -> AppResult<Json<OutsideSendingPolicy>> {
     let policy = crate::config::OutsideSending::from_setting(&request.outside_sending)
@@ -372,8 +373,8 @@ pub async fn set_outside_sending(
     if before != policy {
         audit(
             &state.pool,
-            &admin.user_id,
-            "mail.outside_sending.update",
+            &admin.account_id,
+            AdminAction::MailUpdateOutsideSending,
             None,
             json!({ "from": before.as_str(), "to": policy.as_str() }),
         )

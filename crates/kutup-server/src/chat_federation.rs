@@ -68,7 +68,7 @@ pub async fn fetch_remote_bundles(
 ) -> AppResult<AccountPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
-    let path = format!("/api/fed/chat/accounts/{}/keys", account.account_id);
+    let path = format!("/api/fed/v2/chat/accounts/{}/keys", account.account_id);
     let response = federation
         .send(
             destination,
@@ -120,7 +120,10 @@ pub async fn fetch_remote_sealed_bundles(
 ) -> AppResult<AccountPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
-    let path = format!("/api/fed/chat/sealed/accounts/{}/keys", account.account_id);
+    let path = format!(
+        "/api/fed/v2/chat/sealed/accounts/{}/keys",
+        account.account_id
+    );
     let body = serde_json::to_vec(request)
         .map_err(|error| AppError::internal(format!("encode sealed bundle request: {error}")))?;
     let response = federation
@@ -166,7 +169,7 @@ pub async fn fetch_remote_manifest_history(
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
                 path: format!(
-                    "/api/fed/chat/accounts/{}/manifest-history",
+                    "/api/fed/v2/chat/accounts/{}/manifest-history",
                     account.account_id
                 ),
                 query: Some(query_string),
@@ -212,7 +215,7 @@ pub async fn fetch_remote_manifest(
 ) -> AppResult<AccountManifestV3> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
-    let path = format!("/api/fed/chat/accounts/{}/manifest", account.account_id);
+    let path = format!("/api/fed/v2/chat/accounts/{}/manifest", account.account_id);
     let response = federation
         .send(
             destination,
@@ -302,7 +305,7 @@ pub async fn fetch_remote_profile(
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
                 path: format!(
-                    "/api/fed/chat/accounts/{}/profile/{version}",
+                    "/api/fed/v2/chat/accounts/{}/profile/{version}",
                     account.account_id
                 ),
                 query: None,
@@ -667,7 +670,7 @@ fn settled_outcome(
         ("delivered", _) => serde_json::from_value(answer)
             .ok()
             .map(FederatedSealedOutcome::Delivered),
-        ("rejected", Some("device_mismatch")) => match serde_json::from_value(answer) {
+        ("rejected", Some("deviceMismatch")) => match serde_json::from_value(answer) {
             Ok(FederationDeliveryError::DeviceListMismatch { mismatch }) => {
                 Some(FederatedSealedOutcome::Mismatch(mismatch))
             }
@@ -900,7 +903,7 @@ impl SealedFlush {
     }
 
     fn waiting(&self, class: Option<&str>) -> FederatedSealedOutcome {
-        if self.parked || class == Some("peer_unsupported") {
+        if self.parked || class == Some("peerUnsupported") {
             FederatedSealedOutcome::PeerUnsupported
         } else {
             FederatedSealedOutcome::Pending
@@ -1012,7 +1015,7 @@ async fn flush_rounds(
             && trigger == FlushTrigger::Client
             && claim_sealed_probe(&state.pool, *head).await?;
         if !due && !probe {
-            flush.parked = class.as_deref() == Some("peer_unsupported");
+            flush.parked = class.as_deref() == Some("peerUnsupported");
             break;
         }
         // A batch carries consecutive sequences; one an answer already
@@ -1058,7 +1061,7 @@ async fn claim_sealed_probe(pool: &sqlx::PgPool, head: Uuid) -> AppResult<bool> 
     Ok(sqlx::query(
         "UPDATE federation_outbox SET updated_at = now()
          WHERE id = $1 AND kind = 'sealed' AND state = 'pending' AND next_attempt_at > now()
-           AND error_class IS DISTINCT FROM 'peer_unsupported'
+           AND error_class IS DISTINCT FROM 'peerUnsupported'
            AND updated_at <= now() - ($2 * interval '1 second')",
     )
     .bind(head)
@@ -1084,7 +1087,15 @@ async fn send_sealed_run(
     let federation = configured_stack(state)?;
     let mut transactions = Vec::with_capacity(rows.len());
     for row in rows {
-        transactions.push(stored_sealed_transaction(row)?);
+        match stored_sealed_transaction(row) {
+            Ok(transaction) => transactions.push(transaction),
+            // A row this server can no longer read never stalls the queue:
+            // it is settled on its own, and the run goes again from it.
+            Err(_) => {
+                settle_undecodable_sealed(state, row).await?;
+                return Ok(false);
+            }
+        }
     }
     let batch = FederatedSealedBatchV1 {
         version: kutup_chat_proto::SEALED_FEDERATION_VERSION,
@@ -1099,7 +1110,7 @@ async fn send_sealed_run(
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::POST,
-                path: "/api/fed/chat/sealed/batch".into(),
+                path: "/api/fed/v2/chat/sealed/batch".into(),
                 query: None,
                 content_type: JSON_CONTENT_TYPE.into(),
                 body,
@@ -1125,7 +1136,7 @@ async fn send_sealed_run(
     };
     let Ok(answers) = serde_json::from_slice::<FederatedSealedBatchResponseV1>(&response.body)
     else {
-        mark_sealed_retry(&state.pool, &rows[0], "remote_error").await?;
+        mark_sealed_retry(&state.pool, &rows[0], "remoteError").await?;
         return Ok(false);
     };
     let mut answers = answers.results.into_iter();
@@ -1140,7 +1151,7 @@ async fn send_sealed_run(
                         apply_sealed_answer(&state.pool, row, status, &body).await
                     }
                     Err(_) => {
-                        mark_sealed_retry(&state.pool, row, "remote_error").await?;
+                        mark_sealed_retry(&state.pool, row, "remoteError").await?;
                         Ok(FederatedSealedOutcome::Pending)
                     }
                 }
@@ -1178,6 +1189,22 @@ async fn send_sealed_singles(
     Ok(true)
 }
 
+/// [`crate::federation_stream_control::settle_undecodable`] for a sealed row.
+async fn settle_undecodable_sealed(
+    state: &AppState,
+    row: &SealedFederationOutboxRow,
+) -> AppResult<bool> {
+    crate::federation_stream_control::settle_undecodable(
+        state,
+        kutup_chat_proto::FederationStreamV1::Sealed,
+        row.id,
+        &row.destination,
+        row.sequence,
+        row.attempts,
+    )
+    .await
+}
+
 fn stored_sealed_transaction(
     row: &SealedFederationOutboxRow,
 ) -> AppResult<FederatedSealedTransactionV1> {
@@ -1207,7 +1234,17 @@ async fn attempt_sealed_single(
 ) -> (AppResult<AppResult<FederatedSealedOutcome>>, bool) {
     let attempt = async {
         let federation = configured_stack(state)?;
-        let transaction = stored_sealed_transaction(row)?;
+        let Ok(transaction) = stored_sealed_transaction(row) else {
+            let settled = settle_undecodable_sealed(state, row).await?;
+            return Ok((
+                Ok(if settled {
+                    FederatedSealedOutcome::Refused
+                } else {
+                    FederatedSealedOutcome::Pending
+                }),
+                true,
+            ));
+        };
         let body = serde_json::to_vec(&transaction)
             .map_err(|error| AppError::internal(format!("encode sealed transaction: {error}")))?;
         let sent = federation
@@ -1216,7 +1253,7 @@ async fn attempt_sealed_single(
                 FederationRequestSpec {
                     feature: FederationFeature::ChatV2,
                     method: Method::POST,
-                    path: "/api/fed/chat/sealed/messages".into(),
+                    path: "/api/fed/v2/chat/sealed/messages".into(),
                     query: None,
                     content_type: JSON_CONTENT_TYPE.into(),
                     // A retry of the same bytes keeps its request id; a resend
@@ -1291,22 +1328,22 @@ async fn apply_sealed_answer(
                 FederatedSealedOutcome::Delivered(delivered),
             ),
             Err(_) => {
-                mark_sealed_retry(pool, row, "remote_error").await?;
+                mark_sealed_retry(pool, row, "remoteError").await?;
                 return Ok(FederatedSealedOutcome::Pending);
             }
         },
         StatusCode::CONFLICT => match serde_json::from_slice::<FederationDeliveryError>(body) {
             Ok(FederationDeliveryError::DeviceListMismatch { mismatch }) => (
                 "rejected",
-                Some("device_mismatch"),
+                Some("deviceMismatch"),
                 FederatedSealedOutcome::Mismatch(mismatch),
             ),
             Ok(FederationDeliveryError::SequenceGap { .. }) => {
-                mark_sealed_retry(pool, row, "sequence_gap").await?;
+                mark_sealed_retry(pool, row, "sequenceGap").await?;
                 return Ok(FederatedSealedOutcome::Pending);
             }
             Err(_) => {
-                mark_sealed_retry(pool, row, "remote_error").await?;
+                mark_sealed_retry(pool, row, "remoteError").await?;
                 return Ok(FederatedSealedOutcome::Pending);
             }
         },
@@ -1334,7 +1371,7 @@ async fn apply_sealed_answer(
             ("rejected", Some("refused"), FederatedSealedOutcome::Refused)
         }
         _ => {
-            mark_sealed_retry(pool, row, "remote_error").await?;
+            mark_sealed_retry(pool, row, "remoteError").await?;
             return Ok(FederatedSealedOutcome::Pending);
         }
     };
@@ -1438,13 +1475,13 @@ pub async fn enqueue_send(
     let key = plain_key(sender_user_id, request.sender_device_id, &request.send_id);
 
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR SHARE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR SHARE")
         .bind(sender_user_id)
         .execute(&mut *tx)
         .await?;
     let device: Option<i32> = sqlx::query_scalar(
-        "UPDATE devices SET last_seen_at = now()
-             WHERE user_id = $1 AND device_id = $2 RETURNING 1",
+        "UPDATE account_devices SET last_seen_at = now()
+             WHERE account_id = $1 AND device_id = $2 RETURNING 1",
     )
     .bind(sender_user_id)
     .bind(request.sender_device_id as i32)
@@ -1474,27 +1511,27 @@ pub async fn enqueue_send(
                 tx.rollback().await?;
                 return delivered_outcome(row.answer, true);
             }
-            ("rejected", Some("device_mismatch")) if same => {
+            ("rejected", Some("deviceMismatch")) if same => {
                 tx.rollback().await?;
                 return Ok(FederatedSendOutcome::Mismatch(stored_mismatch(row.answer)?));
             }
             // Corrected after a mismatch: again, under the next sequence.
             // Answered long ago, its record gone at the destination: not
             // known to be delivered.
-            ("rejected", Some("record_gone")) => {
+            ("rejected", Some("recordGone")) => {
                 tx.rollback().await?;
                 return Ok(FederatedSendOutcome::Rejected(
                     FederationDeliveryRejection::RecipientUnavailable,
                 ));
             }
-            ("rejected", Some("device_mismatch")) => {
+            ("rejected", Some("deviceMismatch")) => {
                 requeue_plain(&mut tx, row.id, destination, &request_value).await?;
             }
             // Corrected while a mismatch from before wire version 2 is still
             // closing its sequence (its stale content is sent once more under
             // it, so the destination records an answer there): that goes
             // first, then the correction under the next sequence.
-            ("pending", Some("closing_sequence")) if !same => {
+            ("pending", Some("closingSequence")) if !same => {
                 tx.commit().await?;
                 return match attempt_outbox(state, row.id).await? {
                     FederatedSendOutcome::Mismatch(_) => {
@@ -1507,7 +1544,7 @@ pub async fn enqueue_send(
                         .fetch_optional(&mut *tx)
                         .await?
                         .flatten();
-                        if still.as_deref() != Some("device_mismatch") {
+                        if still.as_deref() != Some("deviceMismatch") {
                             return Ok(FederatedSendOutcome::Pending);
                         }
                         requeue_plain(&mut tx, row.id, destination, &request_value).await?;
@@ -1533,7 +1570,7 @@ pub async fn enqueue_send(
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO federation_outbox
-                 (id, kind, destination, sequence, idempotency_key, sender_user_id,
+                 (id, kind, destination, sequence, idempotency_key, sender_account_id,
                   recipient_account_id, payload)
              VALUES ($1, 'chat', $2, $3, $4, $5, $6,
                      jsonb_build_object('request', $7::jsonb, 'sender', $5))",
@@ -1586,7 +1623,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
         .ok_or_else(|| AppError::internal("federation outbox row disappeared"))?;
     match (row.state.as_str(), row.error_class.as_deref()) {
         ("delivered", _) => return delivered_outcome(row.answer, true),
-        ("rejected", Some("device_mismatch")) => {
+        ("rejected", Some("deviceMismatch")) => {
             return Ok(FederatedSendOutcome::Mismatch(stored_mismatch(row.answer)?));
         }
         ("pending", _) => {}
@@ -1608,8 +1645,23 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
         return withdraw_plain(state, &row).await;
     }
 
-    let message: SendMessagesRequest = serde_json::from_value(row.request.clone())
-        .map_err(|error| AppError::internal(format!("invalid federation outbox: {error}")))?;
+    // A row this server can no longer read never stalls the queue.
+    let Ok(message) = serde_json::from_value::<SendMessagesRequest>(row.request.clone()) else {
+        let settled = crate::federation_stream_control::settle_undecodable(
+            state,
+            kutup_chat_proto::FederationStreamV1::Chat,
+            row.id,
+            &row.destination,
+            row.sequence,
+            row.attempts,
+        )
+        .await?;
+        return Ok(if settled {
+            FederatedSendOutcome::Withdrawn
+        } else {
+            FederatedSendOutcome::Pending
+        });
+    };
     let sequence = u64::try_from(row.sequence)
         .map_err(|_| AppError::internal("invalid federation sequence"))?;
     let transaction = FederatedChatTransaction {
@@ -1632,7 +1684,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::POST,
-                path: "/api/fed/chat/messages".into(),
+                path: "/api/fed/v2/chat/messages".into(),
                 query: None,
                 content_type: JSON_CONTENT_TYPE.into(),
                 body,
@@ -1679,7 +1731,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
             retry_plain(
                 state,
                 &row,
-                "remote_error",
+                "remoteError",
                 "remote acknowledged the wrong sequence",
             )
             .await?;
@@ -1707,7 +1759,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
             row.id,
             Some(row.sequence),
             false,
-            Some("record_gone"),
+            Some("recordGone"),
             &answer,
         )
         .await?;
@@ -1756,7 +1808,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                     row.id,
                     Some(row.sequence),
                     false,
-                    Some("device_mismatch"),
+                    Some("deviceMismatch"),
                     &value,
                 )
                 .await?;
@@ -1790,7 +1842,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                 retry_plain(
                     state,
                     &row,
-                    "sequence_gap",
+                    "sequenceGap",
                     &format!("remote expects federation sequence {expected_sequence}"),
                 )
                 .await?;
@@ -1802,7 +1854,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
     retry_plain(
         state,
         &row,
-        "remote_error",
+        "remoteError",
         &format!("remote federation delivery returned {status}"),
     )
     .await?;
@@ -1813,7 +1865,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
 /// one's queued sends still go, as they always did).
 pub(crate) async fn sender_is_off(pool: &sqlx::PgPool, sender: Uuid) -> AppResult<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND federation = 'off')",
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1) AND NOT kutup_account_federates($1)",
     )
     .bind(sender)
     .fetch_one(pool)
@@ -1824,9 +1876,9 @@ pub(crate) async fn sender_is_off(pool: &sqlx::PgPool, sender: Uuid) -> AppResul
 /// off (one try; it waits as any send when the destination doesn't answer).
 async fn withdraw_off_head(state: &AppState, destination: &str) -> AppResult<()> {
     let head: Option<Uuid> = sqlx::query_scalar(
-        "SELECT o.id FROM federation_outbox o JOIN users u ON u.id = (o.payload->>'sender')::uuid
+        "SELECT o.id FROM federation_outbox o JOIN accounts u ON u.id = (o.payload->>'sender')::uuid
           WHERE o.kind = 'chat' AND o.destination = $1 AND o.state = 'pending'
-            AND u.federation = 'off'
+            AND NOT kutup_account_federates(u.id)
             AND o.sequence = (SELECT MIN(sequence) FROM federation_outbox
                                WHERE kind = 'chat' AND destination = $1 AND state = 'pending')",
     )
@@ -1842,7 +1894,7 @@ async fn withdraw_off_head(state: &AppState, destination: &str) -> AppResult<()>
 }
 
 /// Withdraws a queued plain send's sequence: used up at the destination,
-/// nothing of it sent, the row settled as `federation_off`.
+/// nothing of it sent, the row settled as `federationOff`.
 async fn withdraw_plain(
     state: &AppState,
     row: &FederationOutboxRow,
@@ -1863,7 +1915,7 @@ async fn withdraw_plain(
                 row.id,
                 Some(row.sequence),
                 false,
-                Some("federation_off"),
+                Some("federationOff"),
                 &serde_json::json!({ "withdrawn": true }),
             )
             .await?;
@@ -1889,7 +1941,7 @@ async fn withdraw_plain(
             retry_plain(
                 state,
                 row,
-                "sequence_gap",
+                "sequenceGap",
                 &format!("remote expects federation sequence {expected}"),
             )
             .await?;
@@ -2018,8 +2070,8 @@ pub(crate) async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
 /// of a read request cannot exhaust the recipient's prekey pool.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/accounts/{accountId}/keys",
-    tag = "chat federation",
+    path = "/api/fed/v2/chat/accounts/{accountId}/keys",
+    tag = "chat.federation",
     params(
         ("accountId" = String, Path, description = "Recipient's account id on this server")
     ),
@@ -2039,7 +2091,7 @@ pub async fn get_user_bundles(
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
-    let path = format!("/api/fed/chat/accounts/{}/keys", account.account_id);
+    let path = format!("/api/fed/v2/chat/accounts/{}/keys", account.account_id);
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV2)
         .await?;
@@ -2069,7 +2121,10 @@ pub async fn get_sealed_user_bundles(
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = crate::account_ids::remote(federation.server_name(), &account_id)
         .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
-    let path = format!("/api/fed/chat/sealed/accounts/{}/keys", account.account_id);
+    let path = format!(
+        "/api/fed/v2/chat/sealed/accounts/{}/keys",
+        account.account_id
+    );
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -2144,7 +2199,7 @@ pub async fn deliver_sealed_messages(
         .authenticate_inbound(
             &headers,
             "POST",
-            "/api/fed/chat/sealed/messages",
+            "/api/fed/v2/chat/sealed/messages",
             None,
             &body,
             FederationFeature::ChatV2,
@@ -2185,15 +2240,15 @@ pub async fn deliver_sealed_messages(
     }
 }
 
-/// `POST /api/fed/chat/sealed/batch`: several of one origin's sealed
+/// `POST /api/fed/v2/chat/sealed/batch`: several of one origin's sealed
 /// transactions, in sequence order, applied one by one exactly as the single
 /// route applies them. It stops after the first answer that doesn't use up
 /// its sequence (the rest would only meet a gap) and answers each one it
 /// tried.
 #[utoipa::path(
     post,
-    path = "/api/fed/chat/sealed/batch",
-    tag = "chat federation",
+    path = "/api/fed/v2/chat/sealed/batch",
+    tag = "chat.federation",
     request_body = kutup_chat_proto::FederatedSealedBatchV1,
     responses(
         (status = 200, description = "Each tried transaction's answer, in order", body = kutup_chat_proto::FederatedSealedBatchResponseV1),
@@ -2221,7 +2276,7 @@ pub async fn deliver_sealed_batch(
         .authenticate_inbound(
             &headers,
             "POST",
-            "/api/fed/chat/sealed/batch",
+            "/api/fed/v2/chat/sealed/batch",
             None,
             &body,
             FederationFeature::ChatV2,
@@ -2569,7 +2624,7 @@ pub async fn get_manifest_history(
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
     let path = format!(
-        "/api/fed/chat/accounts/{}/manifest-history",
+        "/api/fed/v2/chat/accounts/{}/manifest-history",
         account.account_id
     );
     let query_string = manifest_history_query_string(&query);
@@ -2588,7 +2643,7 @@ pub async fn get_manifest_history(
         return signed_app_error(federation, &authenticated, error);
     };
     let incarnation_id: Option<String> = match sqlx::query_scalar(
-        "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE user_id = $1",
+        "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE account_id = $1",
     )
     .bind(target_id)
     .fetch_optional(&state.pool)
@@ -2621,7 +2676,7 @@ pub async fn get_manifest_history(
     }
     let values: Vec<serde_json::Value> = sqlx::query_scalar(
         "SELECT manifest FROM chat_device_manifest_history
-         WHERE user_id = $1 AND incarnation_id = $2 AND version BETWEEN $3 AND $4
+         WHERE account_id = $1 AND incarnation_id = decode($2, 'hex') AND version BETWEEN $3 AND $4
          ORDER BY version LIMIT 65",
     )
     .bind(target_id)
@@ -2676,7 +2731,7 @@ pub async fn get_manifest(
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
-    let path = format!("/api/fed/chat/accounts/{}/manifest", account.account_id);
+    let path = format!("/api/fed/v2/chat/accounts/{}/manifest", account.account_id);
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV2)
         .await?;
@@ -2685,7 +2740,7 @@ pub async fn get_manifest(
         return signed_app_error(federation, &authenticated, error);
     };
     let value: Option<serde_json::Value> =
-        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
+        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE account_id = $1")
             .bind(target_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -2706,8 +2761,8 @@ pub async fn get_manifest(
 /// destination-binds the proxying homeserver.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/accounts/{accountId}/profile/{version}",
-    tag = "chat federation",
+    path = "/api/fed/v2/chat/accounts/{accountId}/profile/{version}",
+    tag = "chat.federation",
     params(
         ("accountId" = String, Path, description = "Profile owner's account id on this server"),
         ("version" = String, Path, description = "Profile-key-derived version")
@@ -2729,7 +2784,7 @@ pub async fn get_user_profile(
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
     let uri = format!(
-        "/api/fed/chat/accounts/{}/profile/{version}",
+        "/api/fed/v2/chat/accounts/{}/profile/{version}",
         account.account_id
     );
     let authenticated = federation
@@ -2783,8 +2838,8 @@ pub async fn get_user_profile(
 /// transaction and atomically append it to the existing per-device mailbox.
 #[utoipa::path(
     post,
-    path = "/api/fed/chat/messages",
-    tag = "chat federation",
+    path = "/api/fed/v2/chat/messages",
+    tag = "chat.federation",
     request_body = FederatedChatTransaction,
     responses(
         (status = 200, description = "Transaction stored or idempotently replayed", body = FederationDeliveryResponse),
@@ -2811,7 +2866,7 @@ pub async fn deliver_messages(
         .authenticate_inbound(
             &headers,
             "POST",
-            "/api/fed/chat/messages",
+            "/api/fed/v2/chat/messages",
             None,
             &body,
             FederationFeature::ChatV2,
@@ -2905,17 +2960,16 @@ pub async fn deliver_messages(
         );
     }
 
-    let recipient_id: Option<Uuid> =
-        match Uuid::parse_str(&transaction.recipient.account_id) {
-            Ok(id) => sqlx::query_scalar(
-                "SELECT id FROM users WHERE id = $1 AND is_active AND kutup_account_federates(id)
+    let recipient_id: Option<Uuid> = match Uuid::parse_str(&transaction.recipient.account_id) {
+        Ok(id) => sqlx::query_scalar(
+            "SELECT id FROM accounts WHERE id = $1 AND state = 'active' AND kutup_account_federates(id)
                   FOR SHARE",
-            )
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?,
-            Err(_) => None,
-        };
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?,
+        Err(_) => None,
+    };
     let Some(recipient_id) = recipient_id else {
         let response = FederationDeliveryResponse {
             stored: 0,
@@ -2976,9 +3030,9 @@ pub async fn deliver_messages(
     for envelope in &transaction.message.envelopes {
         let (id, cursor, server_ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO chat_mailbox
-                (recipient_user_id, recipient_device_id, sender_server, sender_account_id,
+                (recipient_account_id, recipient_device_id, sender_server, sender_account_id,
                  sender_device_id, envelope_type, suite, content, send_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,kutup_unb64($8),$9)
              RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
@@ -3062,7 +3116,7 @@ async fn charge_sealed_origin(
     .into();
     crate::handlers::chat::consume_anonymous_rate(
         tx,
-        "federation_origin",
+        crate::ratelimit::counters::Scope::AnonymousFederationOrigin,
         &origin_digest,
         crate::ratelimit::Limit::SealedOrigin,
     )
@@ -3323,7 +3377,7 @@ mod tests {
         // it is due, and the other server still is.
         sqlx::query(
             "UPDATE federation_outbox
-                SET next_attempt_at = now() + interval '1 hour', error_class = 'peer_unsupported'
+                SET next_attempt_at = now() + interval '1 hour', error_class = 'peerUnsupported'
               WHERE id = $1",
         )
         .bind(slow_head)
@@ -3491,25 +3545,20 @@ mod sealed_live_tests {
     async fn recipient(pool: &sqlx::PgPool, capability: [u8; 16]) -> Uuid {
         let id = Uuid::new_v4();
         let name = format!("sb{}", &id.simple().to_string()[..12]);
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(id)
+            .bind(&name)
+            .execute(pool)
+            .await
+            .unwrap();
         sqlx::query(
-            "INSERT INTO users (id, master_key_envelope, recovery_key_envelope,
-                 public_key, account_authority_public_key,
-                 account_authority_key_id, account_incarnation_id, drive_signing_public_key,
-                 username)
-             VALUES ($1, '', '', '', '', '', '', '', $2)",
-        )
-        .bind(id)
-        .bind(&name)
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO devices (user_id, device_id, suite, registration_id, identity_key,
+            "INSERT INTO account_devices (account_id, device_id, suite, registration_id, identity_key,
                  signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                  last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
                  last_resort_kyber_pre_key_signature, credential_salt, credential_hash,
                  kind, session_id)
-             VALUES ($1, 1, 1, 77, 'k', 1, 'k', 's', 1, 'k', 's',
+             VALUES ($1, 1, 1, 77, '\\x00'::bytea, 1, '\\x00'::bytea, '\\x00'::bytea, 1,
+                     '\\x00'::bytea, '\\x00'::bytea,
                      decode(repeat('00', 16), 'hex'), decode(repeat('00', 32), 'hex'),
                      'chat', gen_random_uuid())",
         )
@@ -3520,8 +3569,8 @@ mod sealed_live_tests {
         // Listed in the account's manifest: only listed devices are addressed.
         sqlx::query(
             "INSERT INTO chat_device_manifests
-                 (user_id, version, manifest_hash, authority_key_id, manifest)
-             VALUES ($1, 1, repeat('a', 64), repeat('b', 64),
+                 (account_id, version, manifest_hash, authority_key_id, manifest)
+             VALUES ($1, 1, decode(repeat('aa', 32), 'hex'), decode(repeat('bb', 32), 'hex'),
                      '{\"devices\": [{\"deviceId\": 1, \"kind\": \"chat\", \"chat\": {\"directChatSuite\": 1, \"registrationId\": 77}}]}')",
         )
         .bind(id)
@@ -3530,8 +3579,8 @@ mod sealed_live_tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO chat_delivery_capabilities
-                 (user_id, profile_version, profile_revision, capability_hash)
-             VALUES ($1, $2, 1, $3)",
+                 (account_id, profile_version, profile_revision, capability_hash)
+             VALUES ($1, decode($2, 'hex'), 1, $3)",
         )
         .bind(id)
         .bind("71".repeat(32))
@@ -3579,7 +3628,7 @@ mod sealed_live_tests {
     }
 
     async fn stored(pool: &sqlx::PgPool, user: Uuid) -> i64 {
-        sqlx::query_scalar("SELECT COUNT(*) FROM chat_mailbox WHERE recipient_user_id = $1")
+        sqlx::query_scalar("SELECT COUNT(*) FROM chat_mailbox WHERE recipient_account_id = $1")
             .bind(user)
             .fetch_one(pool)
             .await
@@ -3603,7 +3652,7 @@ mod sealed_live_tests {
             .execute(pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        sqlx::query("DELETE FROM accounts WHERE id = ANY($1)")
             .bind(users)
             .execute(pool)
             .await
@@ -3917,7 +3966,7 @@ mod sealed_live_tests {
         age("1 minute").await;
         sqlx::query(
             "UPDATE federation_outbox
-                SET error_class = 'peer_unsupported' WHERE id = $1",
+                SET error_class = 'peerUnsupported' WHERE id = $1",
         )
         .bind(head)
         .execute(&pool)

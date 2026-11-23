@@ -12,7 +12,7 @@ export interface PeerInfo {
   /** The peer's tab (its socket's `tab`): the tabs of one browser share a
    *  device. Absent from an older client. */
   tab?: string
-  userId: string
+  accountId: string
   username?: string
   /** Per-user presence color (hex '#rrggbb'). Drives the foreign-selection
    *  rectangle fill in office docs and the awareness cursor color in notes. */

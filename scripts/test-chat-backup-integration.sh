@@ -66,7 +66,7 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 \
 # within seconds.
 compose exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --quiet -v ON_ERROR_STOP=1 --command "INSERT INTO site_settings (key, value) VALUES
-    ('storage_deleted_blob_retention_seconds', '0'), ('storage_deleted_blob_sweep_seconds', '1')
+    ('server.storage.deleted_blob_retention_seconds', '0'), ('server.storage.deleted_blob_sweep_seconds', '1')
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
 
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
@@ -153,6 +153,12 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test share_controls_live -- --nocapture --test-threads 1
+# Client versions and the instance id (docs/plans/api-surface.md §1, §5).
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test client_versions_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server instance::tests::live_ -- --nocapture
 # Notices and consents (A3, A4): the federation switch follows its consent.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
@@ -285,10 +291,6 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
 # every owner told of a loss.
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server organizations::tests::live_ -- --nocapture
-# The organizations migration on a database with domains and limits (it
-# makes and drops a database of its own on this server).
-KUTUP_TEST_DB="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
-  cargo test -p kutup-server --test organizations_migration_live -- --nocapture
 
 # Federation queues (docs/plans/federation-outbox.md): a backlog for one
 # server does not starve another, and a rejected row never reorders one.
@@ -328,7 +330,7 @@ backup_facts="$(compose exec -T postgres psql \
     (SELECT COUNT(*) FROM chat_backup_media_reconciliations) +
     (SELECT COUNT(*) FROM chat_backup_media_reconciliation_entries) +
     (SELECT COUNT(*) FROM chat_backup_media_reconciliation_pages),
-    COALESCE((SELECT SUM(storage_used_bytes) FROM users), 0);")"
+    COALESCE((SELECT SUM(storage_used_bytes) FROM accounts), 0);")"
 if [[ "$backup_facts" != "0|0" ]]; then
   echo "account purge left backup rows or charged storage bytes: $backup_facts" >&2
   exit 1
@@ -357,3 +359,35 @@ done
 for check in verify-cli verify-pass-sync verify-pass-ssh verify-mk-rotation; do
   KUTUP_SERVER="http://127.0.0.1:$port" "$root_dir/scripts/$check.sh"
 done
+
+# A reset server (docs/plans/api-surface.md §5): another instance id makes
+# the CLI drop what its profile keeps for the server and ask for a new
+# sign-in (exit 3); the profile is then signed out. Last, since it restarts
+# the server.
+cli_tmp="$(mktemp -d)"
+cli() { XDG_DATA_HOME="$cli_tmp/data" KUTUP_PASSWORD="InstanceCheck123!$$" "$root_dir/target/debug/kutup" --profile reset "$@"; }
+cli_user="instance$(date +%s | tail -c 7)"
+cargo build -q -p kutup-cli
+cli register --server "http://127.0.0.1:$port" --username "$cli_user" >/dev/null
+cli login --server "http://127.0.0.1:$port" --username "$cli_user" >/dev/null
+cli ls >/dev/null
+compose exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  -v ON_ERROR_STOP=1 -c "UPDATE server_instance SET id = decode(md5(random()::text), 'hex')" >/dev/null
+compose restart backend >/dev/null
+curl --fail --silent --show-error --retry 30 --retry-delay 1 \
+  --retry-connrefused --retry-all-errors "http://127.0.0.1:$port/api/health" >/dev/null
+set +e
+cli ls >/dev/null 2>"$cli_tmp/err"
+reset_exit=$?
+cli whoami >/dev/null 2>&1
+after_exit=$?
+set -e
+if (( reset_exit != 3 )) || ! grep -q 'was reset' "$cli_tmp/err"; then
+  echo "the CLI did not notice the reset server (exit $reset_exit): $(cat "$cli_tmp/err")" >&2
+  exit 1
+fi
+if (( after_exit != 3 )); then
+  echo "the reset profile still holds a session (whoami exit $after_exit)" >&2
+  exit 1
+fi
+rm -rf "$cli_tmp"

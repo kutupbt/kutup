@@ -481,7 +481,7 @@ core, (b) the server, (c) the app.
   idempotent: an event's id is drawn by the client (a UUID v4, as calendar
   ids in E1), so a create retried with the same id and content answers the
   stored event instead of a second one; the cut names its `baseRevision`,
-  so a retry after it landed is a `revision_conflict` the app reads as done
+  so a retry after it landed is a `revisionConflict` the app reads as done
   (it checks the stored rule) and never cuts twice; a delete of an event
   already gone is done. The series shows as pending until all three have
   landed.

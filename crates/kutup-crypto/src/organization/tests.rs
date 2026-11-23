@@ -46,7 +46,7 @@ fn drive_key(keys: &AccountIdentityKeysV1, party: &Party) -> VerifiedDriveKey {
         &account,
         &keys.authority_public_key(),
         1,
-        &keys.drive_hpke_public_key(),
+        &keys.drive_xwing_public_key(),
         &keys.drive_signing_public_key(),
         &signature,
     )
@@ -110,7 +110,7 @@ fn a_share_opens_for_its_recipient_only_and_names_its_granter() {
         ORG,
         &id,
         &recipient,
-        recipient_keys.drive_hpke_private_key(),
+        recipient_keys.drive_xwing_private_key(),
         &granter_keys.authority_public_key(),
     )
     .unwrap();
@@ -124,7 +124,7 @@ fn a_share_opens_for_its_recipient_only_and_names_its_granter() {
         ORG,
         &id,
         &member,
-        member_keys.drive_hpke_private_key(),
+        member_keys.drive_xwing_private_key(),
         &granter_keys.authority_public_key()
     )
     .is_err());
@@ -133,7 +133,7 @@ fn a_share_opens_for_its_recipient_only_and_names_its_granter() {
         OTHER_ORG,
         &id,
         &recipient,
-        recipient_keys.drive_hpke_private_key(),
+        recipient_keys.drive_xwing_private_key(),
         &granter_keys.authority_public_key()
     )
     .is_err());
@@ -142,7 +142,7 @@ fn a_share_opens_for_its_recipient_only_and_names_its_granter() {
         ORG,
         &[9; 32],
         &recipient,
-        recipient_keys.drive_hpke_private_key(),
+        recipient_keys.drive_xwing_private_key(),
         &granter_keys.authority_public_key()
     )
     .is_err());
@@ -173,7 +173,7 @@ fn a_share_opens_for_its_recipient_only_and_names_its_granter() {
         ORG,
         &id,
         &recipient,
-        recipient_keys.drive_hpke_private_key(),
+        recipient_keys.drive_xwing_private_key(),
         &granter_keys.authority_public_key()
     )
     .is_err());
@@ -186,7 +186,7 @@ fn a_share_opens_for_its_recipient_only_and_names_its_granter() {
         ORG,
         &id,
         &recipient,
-        recipient_keys.drive_hpke_private_key(),
+        recipient_keys.drive_xwing_private_key(),
         &granter_keys.authority_public_key()
     )
     .is_err());

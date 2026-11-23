@@ -19,7 +19,7 @@ export interface CurrentMetadata {
 }
 
 /**
- * A save's metadata lost to someone else's (`409 revision_conflict`):
+ * A save's metadata lost to someone else's (`409 revisionConflict`):
  * `current` is the file's metadata as it is now, when the server sent it,
  * so the save seals on top of it and tries again.
  */

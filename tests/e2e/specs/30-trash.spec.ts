@@ -33,7 +33,24 @@ test('file: move to trash, restore, then delete forever', async ({ browser }) =>
   await expect(item(page, name)).toHaveCount(0, { timeout: 30_000 })
 
   await page.reload()
-  await expect(page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 })
+  try {
+    await expect(page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 })
+  } catch (error) {
+    // Where the reloaded page stood, in numbers and fixed words only (no
+    // names), so the sanitized reporter passes it with
+    // KUTUP_E2E_DRIVE_DIAGNOSTICS=1: its path, the rows it lists, whether
+    // the deleted file is among them, and any alert or reload notice.
+    const path = new URL(page.url()).pathname.replace(/[0-9a-f-]{36}/g, ':id')
+    const rows = await page.getByRole('row').count()
+    const stillListed = await item(page, name).count()
+    const alerts = await page.getByRole('alert').count()
+    const reloadNotice = await page.getByRole('button', { name: /^Reload$/ }).count()
+    const listed = await page.getByRole('main').count()
+    console.log(
+      `DRIVE DIAGNOSTIC 30 after-reload path=${path} main=${listed} rows=${rows} deletedStillListed=${stillListed} alerts=${alerts} reloadButtons=${reloadNotice}`,
+    )
+    throw error
+  }
   await context.close()
 })
 

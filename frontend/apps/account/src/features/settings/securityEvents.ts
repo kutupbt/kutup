@@ -58,11 +58,18 @@ export function securityEventLabel(event: Pick<SecurityEvent, 'kind' | 'oldName'
  * Where it was done, as the session list names devices: the locale key and
  * its values, or null when no session did it (a recovery, an administrator).
  */
+/** The clients that are programs, not browsers, named by what they are: the CLI and the Mail bridge sign in on their own. */
+export const PROGRAM_CLIENTS: Record<string, string> = {
+  cli: 'settings.sessions.cli',
+  'mail-bridge': 'settings.sessions.mailBridge',
+}
+
 export function securityEventDevice(
   event: Pick<SecurityEvent, 'client' | 'browser' | 'browserMajor' | 'os'>,
 ): { key: string; values?: Record<string, string> } | null {
   if (!event.client) return null
-  if (event.client === 'cli') return { key: 'settings.sessions.cli' }
+  const program = PROGRAM_CLIENTS[event.client]
+  if (program) return { key: program }
   const { browser, os } = clientName(event)
   if (browser && os) return { key: 'settings.sessions.browserOn', values: { browser, os } }
   const one = browser ?? os

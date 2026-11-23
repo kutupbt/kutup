@@ -98,6 +98,10 @@ chmod -R a+rX "$KUTUP_MAIL_KEYS_DIR"
 
 compose down --volumes --remove-orphans
 compose build backend stalwart-setup
+# Stalwart's setup mounts ./nginx/certs; made here, as the user, so Docker
+# doesn't create it as root (the browser gates write their certificates
+# there next).
+mkdir -p "$root_dir/nginx/certs"
 compose up --detach --wait \
   postgres seaweedfs-master seaweedfs-volume seaweedfs-filer seaweedfs-s3 seaweedfs-init \
   backend stalwart mail-sink mail-keys mail-dns
@@ -133,7 +137,7 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 \
 # within seconds.
 compose exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --quiet -v ON_ERROR_STOP=1 --command "INSERT INTO site_settings (key, value) VALUES
-    ('storage_deleted_blob_retention_seconds', '0'), ('storage_deleted_blob_sweep_seconds', '1')
+    ('server.storage.deleted_blob_retention_seconds', '0'), ('server.storage.deleted_blob_sweep_seconds', '1')
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
 
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
@@ -151,7 +155,7 @@ purged="$(grep -o 'PURGED-USER [0-9a-f-]*' "$output" | cut -d' ' -f2)"
 [[ "$purged" =~ ^[0-9a-f-]{36}$ ]] || { echo "the test did not report its deleted account" >&2; exit 1; }
 mail_rows="$(compose exec -T postgres psql \
   --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align \
-  --command "SELECT COUNT(*) FROM mail_messages WHERE user_id = '$purged';")"
+  --command "SELECT COUNT(*) FROM mail_messages WHERE account_id = '$purged';")"
 if [[ "$mail_rows" != "0" ]]; then
   echo "account purge left $mail_rows mail rows" >&2
   exit 1

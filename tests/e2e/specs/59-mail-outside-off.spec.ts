@@ -45,7 +45,10 @@ test('with outside sending off, Mail offers Kutup addresses only and hides the p
     const notice = "This server doesn't send mail to addresses outside Kutup yet. Mail to Kutup addresses goes as usual."
     await expect(mail.getByRole('status').filter({ hasText: notice })).toBeVisible({ timeout: 30_000 })
     await composer.getByRole('button', { name: 'Send', exact: true }).click()
-    await expect(mail.getByText("Mail to addresses outside Kutup isn't available on this server yet.", { exact: false })).toBeVisible()
+    const refused = mail.getByText("Mail to addresses outside Kutup isn't available on this server yet.", { exact: false })
+    await expect(refused).toBeVisible()
+    // The toast sits over the composer's foot; a pointer over it keeps it open.
+    await expect(refused).toBeHidden({ timeout: 30_000 })
     await composer.getByRole('button', { name: 'Discard draft' }).click()
 
     // An administrator pauses the account: listed as paused, not shown to its owner.

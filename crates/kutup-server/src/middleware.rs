@@ -1,8 +1,8 @@
 //! Auth extractors + rate-limit layers — mirrors `backend/middleware/{auth,admin,ratelimit}.go`.
 //!
 //! Fiber set `c.Locals("userId"/"isAdmin")` in an `authMW.Required()` handler; in Axum the
-//! equivalent is a `FromRequestParts` extractor. `AuthUser` validates the Bearer access
-//! token (rejecting setup/pre-auth tokens, like `Required()`), `AdminUser` additionally
+//! equivalent is a `FromRequestParts` extractor. `AuthAccount` validates the Bearer access
+//! token (rejecting setup/pre-auth tokens, like `Required()`), `AdminAccount` additionally
 //! requires `isAdmin` (like `AdminRequired()`). The rate-limit functions are `from_fn`
 //! layers keyed on the peer IP (Fiber's `c.IP()`).
 
@@ -22,8 +22,8 @@ use crate::{jwt, ratelimit, sessions, AppState};
 /// An authenticated caller: a valid access token whose server-side session is still
 /// live (not revoked, not expired, user active). `is_admin` comes from the database,
 /// not the token, so a demotion applies at once.
-pub struct AuthUser {
-    pub user_id: String,
+pub struct AuthAccount {
+    pub account_id: String,
     pub is_admin: bool,
     pub session: sessions::LiveSession,
 }
@@ -33,7 +33,7 @@ pub struct AuthUser {
 pub async fn authenticate_access_token(
     state: &AppState,
     token: &str,
-) -> Result<AuthUser, AppError> {
+) -> Result<AuthAccount, AppError> {
     let (user_id, session_id) = jwt::validate_access_token(token, &state.config.jwt_secret)
         .map_err(|_| AppError::unauthorized("unauthorized"))?;
     let user_uuid =
@@ -41,15 +41,15 @@ pub async fn authenticate_access_token(
     let session_uuid =
         Uuid::parse_str(&session_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     let session = sessions::live(&state.pool, session_uuid, user_uuid).await?;
-    Ok(AuthUser {
-        user_id,
+    Ok(AuthAccount {
+        account_id: user_id,
         is_admin: session.is_admin,
         session,
     })
 }
 
 #[axum::async_trait]
-impl FromRequestParts<AppState> for AuthUser {
+impl FromRequestParts<AppState> for AuthAccount {
     type Rejection = AppError;
 
     async fn from_request_parts(
@@ -253,26 +253,26 @@ pub async fn session_version_header(mut req: Request, next: Next) -> Response {
 /// An authenticated admin — mirrors `Required()` + `AdminRequired()`.
 /// Consumed by the admin handlers (server slice 7).
 #[allow(dead_code)]
-pub struct AdminUser {
-    pub user_id: String,
+pub struct AdminAccount {
+    pub account_id: String,
     /// The admin's own sign-in (what their reauth grants are bound to).
     pub session_id: uuid::Uuid,
 }
 
 #[axum::async_trait]
-impl FromRequestParts<AppState> for AdminUser {
+impl FromRequestParts<AppState> for AdminAccount {
     type Rejection = AppError;
 
     async fn from_request_parts(
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let user = AuthUser::from_request_parts(parts, state).await?;
+        let user = AuthAccount::from_request_parts(parts, state).await?;
         if !user.is_admin {
             return Err(AppError::forbidden("forbidden"));
         }
-        Ok(AdminUser {
-            user_id: user.user_id,
+        Ok(AdminAccount {
+            account_id: user.account_id,
             session_id: user.session.session_id,
         })
     }
@@ -508,7 +508,7 @@ pub async fn rate_limit_fed_users(
     .await
 }
 
-/// 30/min/IP — `/api/users/by-address/{address}`.
+/// 30/min/IP — `/api/v1/accounts/by-address/{address}`.
 pub async fn rate_limit_user_lookup(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,
@@ -517,7 +517,7 @@ pub async fn rate_limit_user_lookup(
     limit(addr, &ratelimit::USER_LOOKUP, None, req, next).await
 }
 
-/// 10/hr/IP — `/api/auth/register`.
+/// 10/hr/IP — `/api/v1/auth/register`.
 pub async fn rate_limit_register(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,
@@ -544,7 +544,7 @@ pub async fn rate_limit_csp_reports(
     limit(addr, &ratelimit::CSP_REPORTS, None, req, next).await
 }
 
-/// 120/min/IP — every `/api/admin/*` route.
+/// 120/min/IP — every `/api/v1/admin/*` route.
 pub async fn rate_limit_admin(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,

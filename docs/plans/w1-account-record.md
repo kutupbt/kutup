@@ -250,7 +250,7 @@ there.
 - The server: `lock` reads the key binding with the incarnation, under the
   account row's lock; `advance` and `start` refuse another account's head
   (`400`), and `advance` refuses a head whose predecessor is not the newest
-  head kept (`409 head_conflict`), as it did a wrong sequence. Live cases in
+  head kept (`409 headConflict`), as it did a wrong sequence. Live cases in
   `account_heads_live`.
 - The generic WASM account-record path refuses both purposes.
 

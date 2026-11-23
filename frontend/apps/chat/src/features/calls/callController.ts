@@ -91,7 +91,7 @@ export class CallController {
       this.releaseDesk = resolve
     })
     void navigator.locks
-      ?.request(`kutup-chat-call-desk:${account}`, () => {
+      ?.request(`kutup.chat.callDesk:${account}`, () => {
         this.isDesk = true
         return held
       })
@@ -577,7 +577,7 @@ export class CallController {
         this.releaseInCall = resolve
       })
       void navigator.locks
-        ?.request(`kutup-chat-in-call:${this.account}`, { ifAvailable: true }, (lock) => {
+        ?.request(`kutup.chat.inCall:${this.account}`, { ifAvailable: true }, (lock) => {
           granted()
           return lock ? held : undefined
         })
@@ -588,7 +588,7 @@ export class CallController {
 
   private async anotherTabInCall(): Promise<boolean> {
     const snapshot = await navigator.locks?.query()
-    return snapshot?.held?.some((lock) => lock.name === `kutup-chat-in-call:${this.account}`) ?? false
+    return snapshot?.held?.some((lock) => lock.name === `kutup.chat.inCall:${this.account}`) ?? false
   }
 }
 

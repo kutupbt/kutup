@@ -87,7 +87,7 @@ fn unwrap_collection_key(share: &PublicShare, link_key: &[u8]) -> Result<Vec<u8>
         share.collection_key_epoch,
         1,
         &share.target_id,
-        &share.owner_user_id,
+        &share.owner_account_id,
     )?;
     drive_envelope::open_b64(&share.collection_key_envelope, link_key, context)
         .context("unwrap collection key")
@@ -99,9 +99,9 @@ fn link_keyring(client: &Client, p: &PubUrl, share: &PublicShare) -> Result<Keyr
     let col_key = unwrap_collection_key(share, &p.link_key)?;
     Keyring::load_from(
         client,
-        &format!("/share/{}/epochs", p.token),
+        &format!("/drive/public-links/{}/epochs", p.token),
         &share.target_id,
-        &share.owner_user_id,
+        &share.owner_account_id,
         share.collection_key_epoch,
         None,
         &col_key,

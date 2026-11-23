@@ -20,7 +20,7 @@ import { asNameTaken, atTopLevel, availableHashes, findAvailableName, hashGenera
 
 interface TrashFolderRow {
   id: string
-  ownerUserId: string
+  ownerAccountId: string
   nameEnvelope: string
   ownerKeyEnvelope: string
   keyEpoch: number
@@ -42,7 +42,7 @@ interface TrashFileRow {
   keyEpoch: number
   keyGeneration: number
   metadataRevision: number
-  collectionOwnerUserId: string
+  collectionOwnerAccountId: string
   collectionOwnerKeyEnvelope: string
   collectionKeyEpoch: number
   collectionEpochStatement: string
@@ -65,7 +65,7 @@ export interface TrashEntry {
   /** Files: the folder it comes back to, as far as naming it there needs. */
   folder?: KeyringFolder
   /** Folders: what renaming it on the way back needs. */
-  renamable?: { key: Uint8Array; keyEpoch: number; nameRevision: number; ownerUserId: string; parentCollectionId: string | null }
+  renamable?: { key: Uint8Array; keyEpoch: number; nameRevision: number; ownerAccountId: string; parentCollectionId: string | null }
 }
 
 export const trashKey = ['trash'] as const
@@ -78,7 +78,7 @@ export function useTrash() {
     enabled: identity.isSuccess,
     queryFn: async (): Promise<TrashEntry[]> => {
       const me = identity.data!
-      const { data } = await api.get<{ folders: TrashFolderRow[]; files: TrashFileRow[] }>('/trash')
+      const { data } = await api.get<{ folders: TrashFolderRow[]; files: TrashFileRow[] }>('/drive/trash')
       const folders = await Promise.all(
         data.folders.map(async (row): Promise<TrashEntry> => {
           const opened = await openOwnedCollectionV1(row, me).catch(() => null)
@@ -95,7 +95,7 @@ export function useTrash() {
                   key: opened.collectionKey,
                   keyEpoch: row.keyEpoch,
                   nameRevision: row.nameRevision,
-                  ownerUserId: row.ownerUserId,
+                  ownerAccountId: row.ownerAccountId,
                   parentCollectionId: row.parentCollectionId ?? null,
                 }
               : undefined,
@@ -108,7 +108,7 @@ export function useTrash() {
           const opened = await openOwnedCollectionKeyV1(
             {
               id: row.collectionId,
-              ownerUserId: row.collectionOwnerUserId,
+              ownerAccountId: row.collectionOwnerAccountId,
               ownerKeyEnvelope: row.collectionOwnerKeyEnvelope,
               keyEpoch: row.collectionKeyEpoch,
               epochStatement: row.collectionEpochStatement,
@@ -123,7 +123,7 @@ export function useTrash() {
                 source: 'owned',
                 key,
                 keyEpoch: row.collectionKeyEpoch,
-                ownerUserId: row.collectionOwnerUserId,
+                ownerAccountId: row.collectionOwnerAccountId,
                 ownerAuthorityPublicKey: me.authorityPublicKey,
                 epochStatementHash: row.collectionEpochStatementHash,
               }
@@ -135,7 +135,7 @@ export function useTrash() {
                       source: 'owned',
                       key,
                       keyEpoch: row.collectionKeyEpoch,
-                      ownerUserId: row.collectionOwnerUserId,
+                      ownerAccountId: row.collectionOwnerAccountId,
                       ownerAuthorityPublicKey: me.authorityPublicKey,
                       epochStatementHash: row.collectionEpochStatementHash,
                     },
@@ -191,7 +191,7 @@ function useTrashMutation<T>(fn: (input: T) => Promise<void>) {
         queryClient.invalidateQueries({ queryKey: ['storage'] }),
       ])
       // Purging frees quota.
-      const { data } = await api.get<{ storageUsedBytes: number }>('/user/me')
+      const { data } = await api.get<{ storageUsedBytes: number }>('/account')
       updateSession({ storageUsedBytes: data.storageUsedBytes })
     },
   })
@@ -231,7 +231,7 @@ async function placeOf(entry: TrashEntry, me: DriveIdentity, queryClient: QueryC
   if (!parentId) return atTopLevel(me.roots)
   const known = cachedFolderIndex(queryClient)?.byId.get(parentId)
   if (known?.key) return inFolder(known)
-  const { data } = await api.get<CollectionRowWithTimes>(`/collections/${parentId}`)
+  const { data } = await api.get<CollectionRowWithTimes>(`/drive/collections/${parentId}`)
   const parent = await openRow(data, me)
   return parent.key ? inFolder(parent) : null
 }
@@ -251,7 +251,7 @@ async function renameBody(entry: TrashEntry, place: NamePlace, name: string, has
   const folder = entry.renamable
   if (!folder) throw new Error('folder is not open')
   const next = await renameOwnedCollectionV1(
-    { id: entry.id, ownerUserId: folder.ownerUserId, keyEpoch: folder.keyEpoch, nameRevision: folder.nameRevision },
+    { id: entry.id, ownerAccountId: folder.ownerAccountId, keyEpoch: folder.keyEpoch, nameRevision: folder.nameRevision },
     folder.key,
     name,
   )
@@ -273,7 +273,7 @@ export async function restoreEntry(
   ask?: AskRestoreName,
 ): Promise<void> {
   if (typeof entry === 'string') {
-    await api.post(`/trash/${entry}/restore`)
+    await api.post(`/drive/trash/${entry}/restore`)
     return
   }
   const name = entry.name
@@ -282,7 +282,7 @@ export async function restoreEntry(
     top && name ? await nameFieldsIn(atTopLevel(me.roots), name) : undefined
   for (let attempt = 0; ; attempt++) {
     try {
-      await api.post(`/trash/${entry.id}/restore`, body)
+      await api.post(`/drive/trash/${entry.id}/restore`, body)
       // A rename it came back with is the file's newest metadata.
       if (entry.type === 'file' && typeof body?.metadataRevision === 'number') {
         await acceptFileMetadata(entry.id, body.metadataRevision).catch(() => undefined)
@@ -321,12 +321,12 @@ export function useRestore(ask?: AskRestoreName) {
 
 export function usePurge() {
   return useTrashMutation(async (id: string) => {
-    await api.delete(`/trash/${id}`)
+    await api.delete(`/drive/trash/${id}`)
   })
 }
 
 export function useEmptyTrash() {
   return useTrashMutation(async (_: void) => {
-    await api.delete('/trash')
+    await api.delete('/drive/trash')
   })
 }

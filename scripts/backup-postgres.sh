@@ -16,7 +16,7 @@
 # The database holds every account, key envelope and object reference; the
 # object store holds only ciphertext. The account data keys (the schema
 # account_keys, docs/plans/server-personal-data.md, A2) are dumped apart, under
-# "<prefix>-keys", and kept only `key_backup_keep_days` (a site setting,
+# "<prefix>-keys", and kept only `server.retention.key_backup_days` (a site setting,
 # default 7): a deleted account's key is then in no copy, so what was sealed
 # under it can't be read from any backup. The schema also holds the
 # destruction log (A7). A restore takes the keys and the log from the newest
@@ -109,7 +109,7 @@ case "${1:-}" in
     docker compose exec -T postgres pg_restore -U "${database_user:-kutup}" -d "${database:-kutup}" \
       --clean --if-exists --no-owner --section=pre-data --section=data < "$work_dir/keys.dump"
     psql_in -v ON_ERROR_STOP=1 \
-      -c "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = k.user_id)" \
+      -c "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM accounts u WHERE u.id = k.account_id)" \
       -c "DELETE FROM account_keys.mail_group_data_keys k WHERE NOT EXISTS (SELECT 1 FROM mail_groups g WHERE g.id = k.group_id)" \
       >/dev/null
     docker compose exec -T postgres pg_restore -U "${database_user:-kutup}" -d "${database:-kutup}" \
@@ -136,22 +136,27 @@ s3 s3 cp --only-show-errors "/work/$name" "s3://$bucket/$prefix/$name"
 echo "backup: stored $prefix/$name ($size bytes)"
 
 # The account data keys and the destruction log, apart (an empty schema
-# still dumps).
-key_name="kutup-keys-$stamp.dump.age"
-docker compose exec -T postgres pg_dump -U "${database_user:-kutup}" -d "${database:-kutup}" -Fc \
-  --schema=account_keys > "$work_dir/keys.dump"
-[ -s "$work_dir/keys.dump" ] || fail "the key dump is empty"
-encrypt "$work_dir/keys.dump" "$work_dir/$key_name"
-rm -f "$work_dir/keys.dump"
-chmod a+r "$work_dir/$key_name"
-s3 s3 cp --only-show-errors "/work/$key_name" "s3://$bucket/$key_prefix/$key_name"
-echo "backup: stored $key_prefix/$key_name"
+# still dumps). An older chain's database (backed up once, right before a
+# wipe) has no account_keys schema: its whole content is in the dump above.
+if database_predates_baseline; then
+  echo "backup: the database predates the baseline (no account_keys schema); key dump skipped"
+else
+  key_name="kutup-keys-$stamp.dump.age"
+  docker compose exec -T postgres pg_dump -U "${database_user:-kutup}" -d "${database:-kutup}" -Fc \
+    --schema=account_keys > "$work_dir/keys.dump"
+  [ -s "$work_dir/keys.dump" ] || fail "the key dump is empty"
+  encrypt "$work_dir/keys.dump" "$work_dir/$key_name"
+  rm -f "$work_dir/keys.dump"
+  chmod a+r "$work_dir/$key_name"
+  s3 s3 cp --only-show-errors "/work/$key_name" "s3://$bucket/$key_prefix/$key_name"
+  echo "backup: stored $key_prefix/$key_name"
+fi
 # Recorded once both are stored: a database dump without its keys can't be
 # restored.
 record_run database "$name" "$size"
 
 prune 'kutup-' '.dump.age'
-key_keep_days="$(psql_in -tAc "SELECT value FROM site_settings WHERE key = 'key_backup_keep_days'" | tr -d '[:space:]')"
+key_keep_days="$(psql_in -tAc "SELECT value FROM site_settings WHERE key = 'server.retention.key_backup_days'" | tr -d '[:space:]')"
 case "$key_keep_days" in
   ''|*[!0-9]*) key_keep_days=7 ;;
 esac

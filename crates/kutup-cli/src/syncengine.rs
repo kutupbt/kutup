@@ -525,7 +525,7 @@ pub fn sync(
                         leaf,
                         &parent.collection_id,
                         &parent.hash_key,
-                        &sess.user_id,
+                        &sess.account_id,
                         sess,
                     ) {
                         Ok((id, key)) => {
@@ -1751,7 +1751,7 @@ mod tests {
 
     #[test]
     fn a_based_on_refusal_is_the_conflict_copy_path() {
-        let landed = crate::version_upload::Landed::Conflict(anyhow::anyhow!("version_conflict"));
+        let landed = crate::version_upload::Landed::Conflict(anyhow::anyhow!("versionConflict"));
         assert_eq!(pushed(landed), Pushed::Conflict);
         assert_eq!(pushed(crate::version_upload::Landed::Busy), Pushed::Busy);
     }

@@ -111,7 +111,7 @@ export async function hasImage(page: Page): Promise<boolean> {
 
 /** Saves the current state and waits for the server to take it. */
 export async function saveState(page: Page) {
-  const saved = page.waitForResponse((response) => response.request().method() !== 'GET' && /^\/api\/files\/[^/]+/.test(new URL(response.url()).pathname) && response.ok())
+  const saved = page.waitForResponse((response) => response.request().method() !== 'GET' && /^\/api\/v1\/drive\/files\/[^/]+/.test(new URL(response.url()).pathname) && response.ok())
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await saved
 }

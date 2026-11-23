@@ -99,10 +99,10 @@ macro_rules! share_envelope {
                 sender_signing_key: &SigningKey,
                 recipient: &AccountRef,
                 recipient_incarnation_id: &str,
-                recipient_hpke_public_key: &[u8],
+                recipient_xwing_public_key: &[u8],
             ) -> Result<Self> {
                 if object_key.len() != 32
-                    || recipient_hpke_public_key.len() != crate::hpke_xwing::PUBLIC_KEY_LEN
+                    || recipient_xwing_public_key.len() != crate::hpke_xwing::PUBLIC_KEY_LEN
                     || $number == 0
                 {
                     return Err(CryptoError::InvalidInput(
@@ -138,7 +138,7 @@ macro_rules! share_envelope {
                 let aad = envelope.aad_bytes()?;
                 let (encapsulated_key, ciphertext) = crate::primitives::hpke_seal(
                     Suite::V1,
-                    recipient_hpke_public_key,
+                    recipient_xwing_public_key,
                     $info,
                     &aad,
                     object_key,
@@ -504,7 +504,7 @@ mod tests {
             sender.drive_signing_key(),
             &bob_b(),
             &recipient.incarnation_id(),
-            &recipient.drive_hpke_public_key(),
+            &recipient.drive_xwing_public_key(),
         )
         .unwrap();
         let decoded = NamedShareEnvelopeV1::decode_b64(&envelope.encode_b64().unwrap()).unwrap();
@@ -518,7 +518,7 @@ mod tests {
                     &sender.drive_signing_public_key(),
                     &bob_b(),
                     &recipient.incarnation_id(),
-                    recipient.drive_hpke_private_key(),
+                    recipient.drive_xwing_private_key(),
                 )
                 .unwrap(),
             vec![0x55; 32]
@@ -536,7 +536,7 @@ mod tests {
                 &sender.drive_signing_public_key(),
                 &bob_a(),
                 &recipient.incarnation_id(),
-                recipient.drive_hpke_private_key(),
+                recipient.drive_xwing_private_key(),
             )
             .is_ok());
         // Another account id is someone else.
@@ -549,7 +549,7 @@ mod tests {
                 &sender.drive_signing_public_key(),
                 &AccountRef::new("b.test", "00000000-0000-4000-8000-0000000000b1").unwrap(),
                 &recipient.incarnation_id(),
-                recipient.drive_hpke_private_key(),
+                recipient.drive_xwing_private_key(),
             )
             .is_err());
         assert!(decoded
@@ -561,7 +561,7 @@ mod tests {
                 &sender.drive_signing_public_key(),
                 &bob_b(),
                 &recipient.incarnation_id(),
-                recipient.drive_hpke_private_key(),
+                recipient.drive_xwing_private_key(),
             )
             .is_err());
     }
@@ -586,7 +586,7 @@ mod tests {
             sender.drive_signing_key(),
             &alice(),
             &sender.incarnation_id(),
-            &recipient.drive_hpke_public_key(),
+            &recipient.drive_xwing_public_key(),
         )
         .is_err());
         let envelope = NamedShareEnvelopeV1::seal(
@@ -598,7 +598,7 @@ mod tests {
             sender.drive_signing_key(),
             &bob_b(),
             &recipient.incarnation_id(),
-            &recipient.drive_hpke_public_key(),
+            &recipient.drive_xwing_public_key(),
         )
         .unwrap();
         let mut bytes = envelope.encode().unwrap();
@@ -613,7 +613,7 @@ mod tests {
                 &sender.drive_signing_public_key(),
                 &bob_b(),
                 &recipient.incarnation_id(),
-                recipient.drive_hpke_private_key(),
+                recipient.drive_xwing_private_key(),
             )
             .is_err());
         bytes.push(0);
@@ -646,7 +646,7 @@ mod tests {
             sender.drive_signing_key(),
             &bob_a(),
             &recipient.incarnation_id(),
-            &recipient.drive_hpke_public_key(),
+            &recipient.drive_xwing_public_key(),
         )
         .unwrap();
         let encoded = envelope.encode_b64().unwrap();
@@ -662,7 +662,7 @@ mod tests {
                 &signer.drive_signing_public_key(),
                 &bob_a(),
                 &recipient.incarnation_id(),
-                recipient.drive_hpke_private_key(),
+                recipient.drive_xwing_private_key(),
             )
         };
         assert_eq!(open(file, 2, &sender).unwrap(), vec![0x66; 32]);
@@ -686,7 +686,7 @@ mod tests {
             sender.drive_signing_key(),
             &bob_a(),
             &recipient.incarnation_id(),
-            &recipient.drive_hpke_public_key(),
+            &recipient.drive_xwing_public_key(),
         )
         .unwrap();
         assert!(FileShareEnvelopeV1::decode_b64(&folder.encode_b64().unwrap()).is_err());

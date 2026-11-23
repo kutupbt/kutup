@@ -157,13 +157,13 @@ pub struct LoginStartResponse {
     suite: u16,
 }
 
-/// `POST /api/auth/login/start` — the server's half of KE2. A name that is no
+/// `POST /api/v1/auth/login/start` — the server's half of KE2. A name that is no
 /// account (or one held after a rename, or another server's address) gets a
 /// fake answer of the same shape, the same each time for that name, and
 /// meets the same lockout.
 #[utoipa::path(
     post,
-    path = "/api/auth/login/start",
+    path = "/api/v1/auth/login/start",
     tag = "auth",
     request_body = LoginStartRequest,
     responses(
@@ -213,10 +213,10 @@ pub async fn login_start(
     type Account = (Uuid, Option<String>, Option<Vec<u8>>, Option<i16>, String);
     let (canonical, account): (String, Option<Account>) = match &reauth {
         Some((caller, _)) => {
-            let caller_id = crate::handlers::trusted_uuid(&caller.user_id)?;
+            let caller_id = crate::handlers::trusted_uuid(&caller.account_id)?;
             let account: Account = sqlx::query_as(
-                "SELECT u.id, u.key_binding, u.opaque_record, u.opaque_server_key_id, n.folded
-                   FROM users u JOIN account_names n ON n.user_id = u.id AND n.state = 'current'
+                "SELECT u.id, u.key_binding::text, u.opaque_record, u.opaque_server_key_id, n.folded
+                   FROM accounts u JOIN account_names n ON n.account_id = u.id AND n.state = 'current'
                   WHERE u.id = $1",
             )
             .bind(caller_id)
@@ -244,8 +244,8 @@ pub async fn login_start(
                 None
             } else {
                 sqlx::query_as(
-                    "SELECT u.id, u.key_binding, u.opaque_record, u.opaque_server_key_id, n.folded
-                       FROM account_names n JOIN users u ON u.id = n.user_id
+                    "SELECT u.id, u.key_binding::text, u.opaque_record, u.opaque_server_key_id, n.folded
+                       FROM account_names n JOIN accounts u ON u.id = n.account_id
                       WHERE n.folded = $1 AND n.state = 'current'",
                 )
                 .bind(&canonical)
@@ -263,7 +263,7 @@ pub async fn login_start(
     // The attempt counts before any OPAQUE work.
     let mut asker = auth_check::Client::from_headers(&state, &headers, peer).await?;
     if let Some((caller, _)) = &reauth {
-        asker = asker.signed_in_as(crate::handlers::trusted_uuid(&caller.user_id)?);
+        asker = asker.signed_in_as(crate::handlers::trusted_uuid(&caller.account_id)?);
     }
     let epoch = record.map(|(record, _)| auth_check::credential_epoch(record));
     let guard = auth_check::guard(&asker, user_id, &canonical, epoch.as_ref().map(|e| &e[..]))?;
@@ -308,7 +308,7 @@ pub async fn login_start(
         "DELETE FROM opaque_login_states WHERE login_id IN (
              SELECT login_id FROM opaque_login_states WHERE canonical_name = $1
              ORDER BY expires_at DESC OFFSET $2)
-         RETURNING user_id, purpose",
+         RETURNING account_id, purpose",
     )
     .bind(&canonical)
     .bind(PENDING_PER_NAME - 1)
@@ -319,7 +319,7 @@ pub async fn login_start(
             "DELETE FROM opaque_login_states WHERE login_id IN (
                  SELECT login_id FROM opaque_login_states WHERE source = $1
                  ORDER BY expires_at DESC OFFSET $2)
-             RETURNING user_id, purpose",
+             RETURNING account_id, purpose",
         )
         .bind(&source)
         .bind(PENDING_PER_SOURCE - 1)
@@ -327,7 +327,7 @@ pub async fn login_start(
         .await?,
     );
     sqlx::query(
-        "INSERT INTO opaque_login_states (login_id, canonical_name, user_id, purpose, session_id,
+        "INSERT INTO opaque_login_states (login_id, canonical_name, account_id, purpose, session_id,
              grant_for, source, lockout_key, ceiling_account, ceiling_source, server_key_id,
              sealed_state, credential_epoch, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
@@ -400,14 +400,14 @@ pub struct LoginAbortRequest {
     login_id: Uuid,
 }
 
-/// `POST /api/auth/login/abort` — ends a sign-in the client will not finish:
+/// `POST /api/v1/auth/login/abort` — ends a sign-in the client will not finish:
 /// the password did not open the server's answer (a wrong password, or a
 /// name that is no account). A session sign-in of a real account goes into
 /// its security log as a wrong password. Always `204`, whatever the id, so
 /// it tells nothing about the name.
 #[utoipa::path(
     post,
-    path = "/api/auth/login/abort",
+    path = "/api/v1/auth/login/abort",
     tag = "auth",
     request_body = LoginAbortRequest,
     responses((status = 204, description = "Ended, or nothing to end"))
@@ -418,7 +418,7 @@ pub async fn login_abort(
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let dropped: Vec<(Option<Uuid>, String)> = sqlx::query_as(
-        "DELETE FROM opaque_login_states WHERE login_id = $1 RETURNING user_id, purpose",
+        "DELETE FROM opaque_login_states WHERE login_id = $1 RETURNING account_id, purpose",
     )
     .bind(req.login_id)
     .fetch_all(&state.pool)
@@ -427,13 +427,13 @@ pub async fn login_abort(
     Ok(axum::http::StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/auth/login/finish` — checks KE3. A sign-in answers as sign-in
+/// `POST /api/v1/auth/login/finish` — checks KE3. A sign-in answers as sign-in
 /// always has (setup, the second factor, or the session with the account's
 /// envelopes); a reauth answers a grant. Every miss is the same `401`: a
 /// wrong password, an unknown name, a used or expired login id.
 #[utoipa::path(
     post,
-    path = "/api/auth/login/finish",
+    path = "/api/v1/auth/login/finish",
     tag = "auth",
     request_body = LoginFinishRequest,
     responses(
@@ -463,7 +463,7 @@ pub async fn login_finish(
     );
     let pending: Option<Pending> = sqlx::query_as(
         "DELETE FROM opaque_login_states WHERE login_id = $1 AND expires_at > now()
-         RETURNING user_id, purpose, session_id, grant_for, lockout_key, ceiling_account,
+         RETURNING account_id, purpose, session_id, grant_for, lockout_key, ceiling_account,
                    ceiling_source, server_key_id, sealed_state, credential_epoch",
     )
     .bind(req.login_id)
@@ -622,7 +622,7 @@ pub struct RegisterStartResponse {
 
 async fn key_binding_unused(state: &AppState, key_binding: &str) -> AppResult<()> {
     let taken: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE key_binding = $1)")
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE key_binding = $1::uuid)")
             .bind(key_binding)
             .fetch_one(&state.pool)
             .await?;
@@ -633,14 +633,14 @@ async fn key_binding_unused(state: &AppState, key_binding: &str) -> AppResult<()
     Ok(())
 }
 
-/// `POST /api/auth/opaque/register/start` — the server's answer to a
+/// `POST /api/v1/auth/opaque/register/start` — the server's answer to a
 /// registration request: stateless, derived from the setup and the key
 /// binding. Each answer is one query of that key binding's OPRF key, so it
 /// needs a grant for an existing account's, and is rate-limited as a sign-up
 /// for a new one.
 #[utoipa::path(
     post,
-    path = "/api/auth/opaque/register/start",
+    path = "/api/v1/auth/opaque/register/start",
     tag = "auth",
     request_body = RegisterStartRequest,
     responses(
@@ -679,15 +679,15 @@ pub async fn register_start(
             .ok_or_else(grants::invalid)?;
             if purpose == Purpose::AdminReset {
                 // A new key binding for the account the admin may reset.
-                if grant.target_user_id.is_none() {
+                if grant.target_account_id.is_none() {
                     return Err(grants::invalid());
                 }
                 key_binding_unused(&state, &req.key_binding).await?;
             } else {
                 // The account's own key binding: a new password for it.
                 let own: Option<String> =
-                    sqlx::query_scalar("SELECT key_binding FROM users WHERE id = $1")
-                        .bind(grant.user_id)
+                    sqlx::query_scalar("SELECT key_binding::text FROM accounts WHERE id = $1")
+                        .bind(grant.account_id)
                         .fetch_optional(&state.pool)
                         .await?;
                 if own.as_deref() != Some(req.key_binding.as_str()) {
@@ -757,7 +757,7 @@ pub struct RegisterFinishRequest {
     master_key_envelope: String,
 }
 
-/// `POST /api/auth/opaque/register/finish` — a new password for an account:
+/// `POST /api/v1/auth/opaque/register/finish` — a new password for an account:
 /// after a password change (`passwordChange`, from this session), the
 /// recovery phrase (`recovery`) or a silent re-registration under the current
 /// setup at sign-in (`rotate`). The record and the password envelope change
@@ -765,7 +765,7 @@ pub struct RegisterFinishRequest {
 /// change ends the account's other sign-ins, a recovery all of them.
 #[utoipa::path(
     post,
-    path = "/api/auth/opaque/register/finish",
+    path = "/api/v1/auth/opaque/register/finish",
     tag = "auth",
     request_body = RegisterFinishRequest,
     responses(
@@ -816,8 +816,8 @@ pub async fn register_finish(
     .generation
     .get();
     let current: Option<i32> =
-        sqlx::query_scalar("SELECT master_key_generation FROM users WHERE id = $1 FOR UPDATE")
-            .bind(grant.user_id)
+        sqlx::query_scalar("SELECT master_key_generation FROM accounts WHERE id = $1 FOR UPDATE")
+            .bind(grant.account_id)
             .fetch_optional(&mut *tx)
             .await?;
     if current.and_then(|g| u32::try_from(g).ok()) != Some(envelope_generation) {
@@ -827,13 +827,13 @@ pub async fn register_finish(
     // and never a password change in disguise for an account already on the
     // current one.
     let updated = sqlx::query(
-        "UPDATE users SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
-                          master_key_envelope = $6
-         WHERE id = $1 AND key_binding = $2
+        "UPDATE accounts SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
+                          master_key_envelope = kutup_unb64($6)
+         WHERE id = $1 AND key_binding = $2::uuid
            AND (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
            AND (NOT $7 OR opaque_server_key_id IS DISTINCT FROM $5)",
     )
-    .bind(grant.user_id)
+    .bind(grant.account_id)
     .bind(&req.key_binding)
     .bind(&record)
     .bind(kutup_crypto::opaque::SUITE as i16)
@@ -845,24 +845,24 @@ pub async fn register_finish(
     if updated.rows_affected() != 1 {
         return Err(grants::invalid());
     }
-    grants::end_all(&mut tx, grant.user_id).await?;
+    grants::end_all(&mut tx, grant.account_id).await?;
     // The sign-ins it ends end with it, in this transaction.
     let kind = match purpose {
         // This sign-in goes on; the account's others end.
         Purpose::PasswordChange => {
-            crate::sessions::revoke_all_for_user_in(&mut tx, grant.user_id, grant.session_id)
+            crate::sessions::revoke_all_for_user_in(&mut tx, grant.account_id, grant.session_id)
                 .await?;
             security_events::Kind::PasswordChange
         }
         Purpose::Recovery => {
-            crate::sessions::revoke_all_for_user_in(&mut tx, grant.user_id, None).await?;
+            crate::sessions::revoke_all_for_user_in(&mut tx, grant.account_id, None).await?;
             // The recovery phrase also turns every second factor off, as
             // Proton's lost-2FA path does (docs/plans/security-keys.md, D2):
             // a lost authenticator would otherwise lock the account out.
-            if crate::two_factor::turn_off(&mut tx, grant.user_id).await? {
+            if crate::two_factor::turn_off(&mut tx, grant.account_id).await? {
                 security_events::record(
                     &mut tx,
-                    grant.user_id,
+                    grant.account_id,
                     security_events::Kind::TwoFactorOff,
                     grant.session_id,
                     None,
@@ -876,8 +876,8 @@ pub async fn register_finish(
         // one here unseen).
         _ => security_events::Kind::Rotate,
     };
-    security_events::record(&mut tx, grant.user_id, kind, grant.session_id, None).await?;
+    security_events::record(&mut tx, grant.account_id, kind, grant.session_id, None).await?;
     tx.commit().await?;
-    tracing::info!(user_id = %grant.user_id, kind = kind.as_str(), "account credential changed");
+    tracing::info!(user_id = %grant.account_id, kind = kind.as_str(), "account credential changed");
     Ok(axum::http::StatusCode::NO_CONTENT.into_response())
 }

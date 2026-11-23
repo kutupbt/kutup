@@ -45,7 +45,7 @@ export interface FileVersionOptions {
 /**
  * Seals `bytes` as a new revision and stores it as the file's content, with
  * the file's next metadata. When someone else's change to the metadata
- * landed meanwhile (`409 revision_conflict`), the metadata is sealed again
+ * landed meanwhile (`409 revisionConflict`), the metadata is sealed again
  * on top of theirs (as the conflict gives it, or read again from the
  * file's folder), once; anything else is thrown as it came.
  */

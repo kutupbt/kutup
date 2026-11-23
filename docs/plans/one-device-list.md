@@ -160,6 +160,77 @@ collab routes take it in place of `?deviceId=`.
 - `auth_sessions` stays the sign-in list; Settings shows each sign-in with its
   devices under it.
 
+### 3.6 Device ids
+
+Ids are libsignal's `DeviceId`, 1..=127: Chat devices are libsignal
+addresses, and every kind shares the one id space (sealed sender and the
+multi-recipient format carry a byte). So ids are reused, as Signal reuses
+them (`Account.getNextDeviceId()` takes the lowest free id;
+`AccountsManager.addDevice` clears the id's one-time prekeys and messages
+under the account lock). An id that never came back would run out: an
+account takes a device per sign-in and app, so 126 ids last a few dozen
+sign-ins.
+
+What Kutup adds (built 2026-11, pre-wipe):
+- **A counter.** `accounts.next_device_id` (`smallint`, 1..=127, from 1):
+  a new device takes the first id at or after it that no row holds and no
+  head entry lists, wrapping from 127 to 1; the counter moves past it
+  (`account_devices::take_device_id`, under the account's lock, so
+  concurrent registrations each read the last one's counter). A removed
+  device's id comes back only after every other free id has had its turn,
+  never as the next device's. A column, not a sequence: it is per account,
+  wraps, and moves in the registration's transaction.
+- **A hold.** A trigger on every deletion of a row records the id in
+  `account_device_releases`; the allocator passes over an id freed less than
+  a sender certificate's reach ago (lifetime and clock skew: a certificate
+  names `(account, deviceId)` and the account's identity key, and can't be
+  revoked). When only such ids are free it takes one all the same: the cap
+  (`devicesPerAccount`) holds, never a lockout below it.
+- **A re-registration** names its id in the manifest it signs, so the device
+  reads the counter first (`GET /api/v1/account/devices/session` →
+  `nextDeviceId`) and lists itself under `next_device_id(counter, kept
+  entries)`; the server requires exactly that (`409 devicesMismatch`
+  otherwise). Its new identity binds every certificate and session to the
+  new holder, so it needs no hold.
+- **Clearing.** Taking an id clears what an earlier holder left under it that
+  doesn't go with its row: its send records (`chat_sends`; a deterministic
+  `sendId`, a profile key's, would otherwise be answered as a duplicate).
+  Everything else goes with the row (below).
+- The ceiling is explicit: every id held (only with stale head entries, the
+  cap being at most 127) is `409 deviceLimit`, never a held id.
+
+### 3.7 Device id reuse: audit (pre-wipe)
+
+Every place a device id is stored or compared, and why a later holder of
+the id can't be taken for an earlier one.
+
+| Reference | Where | Verdict | Why | Fix |
+|---|---|---|---|---|
+| Chat sessions | chat-core libsignal store (IndexedDB / SQLite), keyed `(account, deviceId)` | SAFE | A sender addresses a device with its registration id; a new holder's is another, so the server answers `staleDevices` and the sender archives the session and fetches a bundle (Signal's contract). A 1-in-16383 equal registration id is Signal's residual too, and the counter and hold make the id itself come back late | — |
+| One-time EC and Kyber prekeys | `chat_one_time_pre_keys`, `chat_one_time_kyber_pre_keys` | SAFE | `ON DELETE CASCADE` from the row: gone before the id can be taken | — |
+| Signed and last-resort prekeys | columns of `account_devices` | SAFE | Part of the row | — |
+| Queued messages to the device | `chat_mailbox.recipient_device_id` | SAFE | `ON DELETE CASCADE` | — |
+| Queued messages from the device | `chat_mailbox.sender_device_id` | SAFE | Attribution only; the envelope opens under the session that sealed it | — |
+| Multi-send ids | `chat_multi_send_ids` | SAFE | `ON DELETE CASCADE` | — |
+| Send records | `chat_sends (sender_account_id, sender_device_id, send_id)` | UNSAFE | Not tied to the row; a new holder's deterministic `sendId` (a profile key's) was answered as a duplicate and never sent | Cleared when the id is taken (`claim_device_id`) |
+| Link tokens | `chat_link_tokens.issued_by_device` | UNSAFE | No foreign key; a token asked by a removed device counted as the new holder's while it was valid | FK to `account_devices` `ON DELETE CASCADE` |
+| Device tickets | `account_device_tickets` | SAFE | `ON DELETE CASCADE` | — |
+| Credentials | `account_devices.credential_hash` | SAFE | A salted hash of 32 random bytes per instance: an earlier holder's credential opens nothing | — |
+| Push subscriptions | `chat_push_subscriptions` | SAFE | `ON DELETE CASCADE` | — |
+| Sealed-sender certificates | issued per `(account, deviceId, identity key)`, 24 h, not revocable | UNSAFE | A removed device's certificate stayed valid; if the id was taken again within its life, recipients took the removed device's messages as the new holder's (same account, same identity key unless it was rotated) | The hold (3.6): an id isn't taken again within a certificate's reach while another is free |
+| Head entry without a row | `chat_device_manifests` (a revoked row, or one ended with its sign-in, until the next manifest) | UNSAFE | The lowest-free search looked at rows only; a new row under a still-listed id was "listed" with the old frame key | The allocator counts head entries as held |
+| Collab peer keys `account#device:tab` | `@kutup/collab` `peerKey`, Office cursors, whiteboard peers (memory) | SAFE | Live only: a removed device's sockets close at removal (`close_device`), and `still_counts` checks the row's frame key and sign-in; a tab id tells pages apart | — |
+| Logged collab frames | `collab_update_log` | SAFE | Each frame is checked against the manifest its `manifestSequence` names, with its frame key (slice 3) | — |
+| Collab replay floors and counters | `collab_sender_floors`, `sender_seq` | SAFE | A new holder starts its tab prefix above the id's highest counter (`mySenderSeqHigh`), a random 31-bit prefix; old floors keep old frames replays | — |
+| Group sender-key books | chat-core `SenderBook` | SAFE | Each entry is `(account, deviceId, registrationId)` | — |
+| Identity pins | `identityPins` (Drive, Mail), sender manifest pins | SAFE | Pin the account's authority and incarnation; no device ids | — |
+| Revisions seen, local head anchors | `kutup.account.revisionsSeen`, `LocalHeadStateV1` | SAFE | Account-scoped; the head's writer id is a random 32-character per-install id, not the device id | — |
+| Chat backup chains | `chat_backup_device_heads`, `chat_backup_segments` | SAFE | One chain per id by design: a new holder adopts the chain's head (`adoptDeviceChain`); keys derive from the object id and the previous digest | — |
+| Profile and contact writes | `chat_profiles.source_device_id`, contact-list `source_device_id` | SAFE | Attribution and a tie-break after the revision | — |
+| This browser's own device | `kutup.chat.deviceId:<account>` (localStorage), the session's sealed editor device | SAFE | Used with its credential; a refused credential sends the page through registration again | — |
+| Calls | `callerDeviceId` / `calleeDeviceId` (memory) | SAFE | One call's life | — |
+| Logs | security log, server logs | SAFE | No device ids in the security log; server logs name `(account, deviceId)` with a time, which the manifest history places | — |
+
 ## 4. What changes
 
 **Removed:** `user_devices`, `device_registration_challenges`,
@@ -254,8 +325,8 @@ What the note leaves open, as built:
    - Every Chat device goes, but the account's non-Chat entries stay.
    - The manifest lists the new Chat device and the head's other entries
      unchanged.
-   - The new device takes the lowest id those entries leave free (1 while the
-     account has only Chat devices).
+   - The new device takes the account's next id those entries leave free
+     (3.6; 1 on a new account).
 5. **Table.**
    - `chat_devices` becomes `devices`, gaining `kind`, `session_id` (the root
      sign-in) and `frame_key`.
@@ -269,8 +340,9 @@ What the note leaves open, as built:
      unlisted row a grace window first, so a concurrent publication by
      another device doesn't drop it.
    - The device header becomes `X-Kutup-Device`.
-   - Registration picks the lowest id no row holds, expired rows included
-     (an expired row keeps its id until the next manifest drops it).
+   - Registration takes the account's next id (3.6): no row holds it,
+     expired rows included (an expired row keeps its id until the next
+     manifest drops it), and no head entry.
 6. **Caps.**
    - `devicesPerAccount` is a new `NumericSetting` (default 32, range
      1..=127) over all entries.
@@ -304,7 +376,7 @@ What the note leaves open, as built:
      the binding that counts is the signature's.
 2. **Registering an editor or CLI device.**
    - `POST /api/devices` with `{ kind, name, frameKey, credential }` gives a
-     row with the lowest free id under the caller's sign-in, within
+     row with the account's next id (3.6) under the caller's sign-in, within
      `devicesPerAccount`.
    - The device then publishes the account's next manifest listing itself
      (`POST /api/chat/manifest`, device-authenticated as `X-Kutup-Device`).
@@ -388,7 +460,7 @@ What the note leaves open, as built:
     it. Slice 3's tests include a home relaying a forged frame that the
     recipient refuses. Slice 2 builds the frame and the home's checks that
     this rests on.
-    - Open for slice 3: device ids are reused, and the head decides. So a
+    - Open for slice 3: device ids are reused (3.6), and the head decides. So a
       logged frame from a device since removed, or from an earlier holder
       of a reused id, needs a rule of its own. One option is to check it
       against the manifest its `manifestSequence` names, from the account's

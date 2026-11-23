@@ -251,6 +251,9 @@ pub struct Engine {
     pub(crate) group_list: Option<crate::group_list::GroupListSync>,
     /// The account's Chat contact list (`enable_contact_list`).
     pub(crate) contact_list: Option<crate::contact_list::ContactListSync>,
+    /// When this device last read the account's lists (`records_sync`; 0:
+    /// not this run).
+    pub(crate) records_read_at_ms: i64,
     /// First-seen identity pins waiting for their delayed write, by peer
     /// (docs/plans/chat-contacts-sync.md, "The pin list follows the same
     /// rule"). A pin lost to a reload is due again at the next contact.
@@ -361,6 +364,7 @@ impl Engine {
             identity_pins: None,
             group_list: None,
             contact_list: None,
+            records_read_at_ms: 0,
             pins_due: BTreeMap::new(),
             group_keys: None,
         }
@@ -1237,7 +1241,7 @@ impl Engine {
                 // says which sign-in this is.
                 let session = match listed {
                     Ok(index) => devices[index].session.clone(),
-                    Err(_) => transport.fetch_device_session().await?,
+                    Err(_) => transport.fetch_device_session().await?.session,
                 };
                 let local = self.session.manifest_device(session);
                 match listed {

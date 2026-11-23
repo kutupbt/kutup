@@ -324,7 +324,7 @@ checks, the V2 manifest, bundles, federation, limits.)
 **Today** (for the record):
 - Every `chat_devices` row has its own `identity_key`, with
   `UNIQUE (user_id, identity_key)`.
-- `POST /api/chat/device` checks only that the fields are base64: it never
+- `POST /api/v1/chat/devices` checks only that the fields are base64: it never
   compares identity keys across an account's devices and never verifies a
   signed or Kyber prekey's signature ("stored and served verbatim for clients
   to verify", `handlers/chat.rs`).
@@ -353,7 +353,7 @@ open PRs when it is pushed):
   expires_at, used_at)`: single use, only the hash stored.
 
 **Device credentials** (Signal's per-device password):
-- `POST /api/chat/device` takes `credential` (32 random bytes, unpadded base64url) and
+- `POST /api/v1/chat/devices` takes `credential` (32 random bytes, unpadded base64url) and
   stores only its salted hash.
 - Device-bound calls carry `X-Kutup-Chat-Device: <deviceId>.<credential>`
   beside the JWT: replenishing keys, `keys/check`, link tokens, identity
@@ -366,33 +366,33 @@ open PRs when it is pushed):
 
 **Linking** (Signal's `/v1/devices/provisioning/code`, provisioning socket,
 `PUT /v1/devices/link`):
-1. The new device signs in (JWT) and opens `GET /api/chat/provisioning`
+1. The new device signs in (JWT) and opens `GET /api/v1/chat/provisioning`
    (WebSocket); the server gives it a random address for the socket's life
    and relays exactly one envelope to it, nothing on disk.
-2. An existing device calls `POST /api/chat/link-tokens`
+2. An existing device calls `POST /api/v1/chat/link-tokens`
    (device-authenticated) and gets a one-time token.
-3. It sends the envelope with `PUT /api/chat/provisioning/{address}`
+3. It sends the envelope with `PUT /api/v1/chat/provisioning/{address}`
    (device-authenticated). The server checks the size and that the address is
    a socket of the same account; "no such socket" and "another account's
    socket" are the same `404`, so addresses can't be probed. It relays the
    envelope and forgets it.
-4. The new device calls `POST /api/chat/device` with `linkToken`, its
+4. The new device calls `POST /api/v1/chat/devices` with `linkToken`, its
    `credential`, its registration id and keys; the token is consumed in the
    insert's transaction. Then a device publishes the V2 manifest listing it.
 
-**Key upload checks** (`POST /api/chat/device`,
-`PUT /api/chat/keys`):
+**Key upload checks** (`POST /api/v1/chat/devices`,
+`PUT /api/v1/chat/keys`):
 - `identityKey` is the account's (33 bytes, a valid point).
 - The signed prekey, the last-resort Kyber key and every one-time Kyber key
   verify against the account identity key (libsignal
   `IdentityKey::verify_signature`, as Signal's `PreKeySignatureValidator`);
   otherwise `400 badSignature`.
-- `POST /api/chat/keys/check` (Signal's `/v2/keys/check`): a digest of the
+- `POST /api/v1/chat/keys/check` (Signal's `/v2/keys/check`): a digest of the
   identity key and the device's repeated-use keys, so the device learns
   whether the server's copy is its own.
 
 **Identity distribution** (Signal's `PUT /v2/accounts/number` key part,
-`PhoneNumberIdentityKeyDistributionRequest`): `PUT /api/chat/account-identity`,
+`PhoneNumberIdentityKeyDistributionRequest`): `PUT /api/v1/chat/account-identity`,
 device-authenticated, one request from one device:
 - `identityKey`: the new account identity;
 - per device the manifest lists (this one included): `signedPreKey`,
@@ -418,7 +418,7 @@ The server, in one transaction:
    listed device row's identity, signed prekey, last-resort key and
    registration id replaced, unlisted rows deleted, every one-time EC and
    Kyber key of the account deleted (Signal's `deleteSingleUsePreKeys`;
-   devices refill through `PUT /api/chat/keys`), the manifest stored as head
+   devices refill through `PUT /api/v1/chat/keys`), the manifest stored as head
    and in history.
 4. The `deviceMessages` queued to their devices' mailboxes in the same
    transaction; then `DevicesChanged`.
@@ -427,7 +427,7 @@ It serves "reset identity, keep my devices" (the lost device left out of the
 manifest), and an account with one device re-keying itself.
 
 **Re-registration** (after every device is lost, and an account's first Chat
-device) is one registration call, `POST /api/chat/device` with
+device) is one registration call, `POST /api/v1/chat/devices` with
 `registration: { type: "reregistration", manifest }` and no link token
 (`RegisterChatDeviceRequestV2`, whose `registration` is exactly one of `link`
 and `reregistration`, beside a required `credential`). The manifest is the
@@ -440,7 +440,7 @@ this one as device 1, sets the account identity and publishes the manifest
 (Signal's `reclaimAccount`). The gate is the account authority, so the master
 key.
 
-**Manifest V2 on publish** (`POST /api/chat/manifest`): its identity key
+**Manifest V2 on publish** (`POST /api/v1/chat/manifest`): its identity key
 equals `chat_account_identities` (a different one only through the
 distribution route); its devices' registration ids equal the rows' (a
 registration id changes only with a manifest that names it, at linking or a
@@ -457,7 +457,7 @@ bundles at once (sends never wait on it, as Signal), and any online device of
 the account, on `DevicesChanged`, publishes the V2 manifest that drops it;
 then the row goes.
 
-**Bundles:** `GET /api/chat/accounts/:id/keys` (local, federated, anonymous)
+**Bundles:** `GET /api/v1/chat/accounts/:id/keys` (local, federated, anonymous)
 answers the account identity once, and each listed device's registration id
 and prekeys (Signal's `/v2/keys`).
 
@@ -480,7 +480,7 @@ identity and the caller's authenticated device id.
 link-token lifetime (10 minutes) and outstanding tokens per account (3); the
 provisioning envelope size (64 KiB), provisioning sockets per address a
 minute and relays per account a minute; distributions per account a day; the
-`deviceMessages` size per device; the device cap (`chat_max_active_devices`).
+`deviceMessages` size per device; the device cap (`chat.max_active_devices`).
 
 **Server tests:**
 - unit: prekey signature checks (good, bad, wrong key); credentials

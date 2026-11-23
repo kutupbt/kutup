@@ -45,7 +45,7 @@ describe('embedded pictures', () => {
       keyGeneration: 1,
     })
     expect(n).toBe(1)
-    expect(uploads).toEqual([{ fileId: 'copy', assetId: 'img-1', base: '/drive/federation/shares/s1/files/copy' }])
+    expect(uploads).toEqual([{ fileId: 'copy', assetId: 'img-1', base: '/drive/federation/folder-shares/s1/files/copy' }])
   })
 
   it('exports a note with its pictures in assets/, links pointing there', async () => {

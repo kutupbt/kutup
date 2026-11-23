@@ -62,7 +62,7 @@ describe('the page’s stream glue', () => {
       openPlayerStream({
         source: {
           family: 'drive',
-          url: '/api/files/x/download',
+          url: '/api/v1/drive/files/x/download',
           fileKey: new Uint8Array(32),
           expected: { fileId: 'x', generation: 1, content: { revisionId: 'r', manifestSha256: 'm' }, size: 1 },
         },

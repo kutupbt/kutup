@@ -25,14 +25,14 @@ const { MembersPendingUpgrade } = await import('./identityPins')
 type FolderAccess = import('./access').FolderAccess
 
 const folder = { id: 'folder', name: 'Shared', key: new Uint8Array(32), keyEpoch: 3, nameRevision: 1, canManage: true, epochStatementHash: 'h3' }
-const me = { userId: 'me', masterKey: new Uint8Array(32), roots: testRoots(0), accountRef: { server: 'kutup.dev', accountId: 'me' }, incarnationId: 'inc-me' }
+const me = { accountId: 'me', masterKey: new Uint8Array(32), roots: testRoots(0), accountRef: { server: 'kutup.dev', accountId: 'me' }, incarnationId: 'inc-me' }
 
-function member(userId: string, identitySuite: number) {
+function member(accountId: string, identitySuite: number) {
   return {
-    userId,
-    account: `${userId}@kutup.dev`,
-    accountIncarnationId: `inc-${userId}`,
-    drivePublicKey: `key-${userId}`,
+    accountId,
+    account: `${accountId}@kutup.dev`,
+    accountIncarnationId: `inc-${accountId}`,
+    drivePublicKey: `key-${accountId}`,
     identitySuite,
     canUpload: false,
     canDelete: false,
@@ -66,7 +66,7 @@ beforeEach(() => {
   http.post.mockReset()
   // The federated recipient is still on identity suite 1 too.
   http.get.mockResolvedValue({
-    data: { server: 'other.example', accountId: 'acct-far', account: 'far@other.example', driveHpkePublicKey: 'key-far', accountIncarnationId: 'inc-far', identitySuite: 1 },
+    data: { server: 'other.example', accountId: 'acct-far', account: 'far@other.example', driveXwingPublicKey: 'key-far', accountIncarnationId: 'inc-far', identitySuite: 1 },
   })
   http.post.mockResolvedValue({ data: null })
 })
@@ -83,9 +83,9 @@ describe('removing someone while others are not yet upgraded', () => {
 
   it('removes them too once the owner confirmed, and seals to everyone else', async () => {
     await rotateFolder(folder as never, me as never, access, removal, undefined, { members: ['old'], federatedShares: ['far'] })
-    const [path, body] = http.post.mock.calls[0] as [string, { members: { userId: string; namedShareEnvelope: string }[]; federatedShares: unknown[]; removed: Record<string, string[]> }]
-    expect(path).toBe('/collections/folder/rotate')
-    expect(body.members).toEqual([{ userId: 'new', namedShareEnvelope: 'sealed-to-key-new' }])
+    const [path, body] = http.post.mock.calls[0] as [string, { members: { accountId: string; namedShareEnvelope: string }[]; federatedShares: unknown[]; removed: Record<string, string[]> }]
+    expect(path).toBe('/drive/collections/folder/rotate')
+    expect(body.members).toEqual([{ accountId: 'new', namedShareEnvelope: 'sealed-to-key-new' }])
     expect(body.federatedShares).toEqual([])
     expect(body.removed).toEqual({ members: ['gone', 'old'], publicLinks: [], federatedShares: ['far'] })
   })

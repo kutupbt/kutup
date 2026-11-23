@@ -1,5 +1,5 @@
 //! Undo send (docs/plans/mail-parity.md, P4), as Proton's DelaySendSeconds:
-//! `POST /api/mail/send` checks a send, then [`hold`]s it; [`spawn`]'s loop
+//! `POST /api/v1/mail/send` checks a send, then [`hold`]s it; [`spawn`]'s loop
 //! sends it when the delay is up through the same `deliver`, unless it was
 //! taken back ([`cancel`]). A send that was going out when the server
 //! stopped is not sent again: it fails, and its draft stays.
@@ -20,7 +20,7 @@ use crate::AppState;
 
 const TICK: Duration = Duration::from_secs(1);
 
-/// A held send, as `POST /api/mail/send` answers 202.
+/// A held send, as `POST /api/v1/mail/send` answers 202.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HeldSend {
@@ -66,21 +66,21 @@ pub async fn hold(
     let bytes = serde_json::to_vec(&encoded).map_err(|_| AppError::internal("outbox encoding"))?;
     let key = object_key(user_id, id);
     let size = bytes.len() as i64;
-    let version = state
+    state
         .storage
-        .put_object_versioned(&key, aws_sdk_s3::primitives::ByteStream::from(bytes), size)
+        .upload(&key, aws_sdk_s3::primitives::ByteStream::from(bytes), size)
         .await
         .map_err(|_| AppError::internal("storage"))?;
     let deliver_at: Result<OffsetDateTime, sqlx::Error> = sqlx::query_scalar(
         "WITH held AS (
-             INSERT INTO mail_outbox (id, user_id, draft_id, is_admin, deliver_at, parts_key,
-                                      parts_version, scheduled)
-             VALUES ($1, $2, $3, $4, COALESCE($8, now() + make_interval(secs => $5)), $6, $7,
-                     $8::timestamptz IS NOT NULL)
+             INSERT INTO mail_outbox (id, account_id, draft_id, is_admin, deliver_at, parts_key,
+                                      scheduled)
+             VALUES ($1, $2, $3, $4, COALESCE($7, now() + make_interval(secs => $5)), $6,
+                     $7::timestamptz IS NOT NULL)
              RETURNING deliver_at
          ), moved AS (
              UPDATE mail_messages SET folder = 'scheduled', folder_changed_at = now()
-              WHERE id = $3 AND user_id = $2 AND folder = 'drafts' AND $8::timestamptz IS NOT NULL
+              WHERE id = $3 AND account_id = $2 AND folder = 'drafts' AND $7::timestamptz IS NOT NULL
          )
          SELECT deliver_at FROM held",
     )
@@ -90,7 +90,6 @@ pub async fn hold(
     .bind(is_admin)
     .bind(f64::from(delay))
     .bind(&key)
-    .bind(&version)
     .bind(at)
     .fetch_one(&state.pool)
     .await;
@@ -100,7 +99,7 @@ pub async fn hold(
             deliver_at,
         }),
         Err(error) => {
-            let _ = state.storage.delete_stored(&key, &version).await;
+            let _ = state.storage.delete(&key).await;
             if error
                 .as_database_error()
                 .is_some_and(|e| e.is_unique_violation())
@@ -114,25 +113,25 @@ pub async fn hold(
 
 /// Takes a held send back: `true` when it had not gone yet.
 pub async fn cancel(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<bool> {
-    let row: Option<(String, String)> = sqlx::query_as(
+    let key: Option<String> = sqlx::query_scalar(
         "WITH taken AS (
              UPDATE mail_outbox SET state = 'cancelled', finished_at = now()
-              WHERE id = $1 AND user_id = $2 AND state = 'pending'
-              RETURNING draft_id, parts_key, parts_version
+              WHERE id = $1 AND account_id = $2 AND state = 'pending'
+              RETURNING draft_id, parts_key
          ), back AS (
              UPDATE mail_messages SET folder = 'drafts', folder_changed_at = now()
               WHERE id IN (SELECT draft_id FROM taken) AND folder = 'scheduled'
          )
-         SELECT parts_key, parts_version FROM taken",
+         SELECT parts_key FROM taken",
     )
     .bind(id)
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((key, version)) = row else {
+    let Some(key) = key else {
         return Ok(false);
     };
-    if let Err(error) = state.storage.delete_stored(&key, &version).await {
+    if let Err(error) = state.storage.delete(&key).await {
         tracing::warn!(error = %error, "mail: a taken-back send's parts left for the sweep");
     }
     Ok(true)
@@ -174,19 +173,19 @@ pub fn spawn(state: AppState) {
 
 async fn send_due(state: &AppState) -> anyhow::Result<()> {
     loop {
-        let due: Option<(Uuid, Uuid, bool, String, String)> = sqlx::query_as(
+        let due: Option<(Uuid, Uuid, bool, String)> = sqlx::query_as(
             "UPDATE mail_outbox SET state = 'sending'
               WHERE id = (SELECT id FROM mail_outbox
                            WHERE state = 'pending' AND deliver_at <= now()
                            ORDER BY deliver_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-              RETURNING id, user_id, is_admin, parts_key, parts_version",
+              RETURNING id, account_id, is_admin, parts_key",
         )
         .fetch_optional(&state.pool)
         .await?;
-        let Some((id, user_id, is_admin, key, version)) = due else {
+        let Some((id, user_id, is_admin, key)) = due else {
             return Ok(());
         };
-        let outcome = send_one(state, user_id, is_admin, &key, &version).await;
+        let outcome = send_one(state, user_id, is_admin, &key).await;
         let (final_state, result) = match outcome {
             Ok(result) => ("sent", json!({ "recipients": result.recipients })),
             Err(error) => {
@@ -226,7 +225,7 @@ async fn send_due(state: &AppState) -> anyhow::Result<()> {
         .bind(result)
         .execute(&state.pool)
         .await?;
-        if let Err(error) = state.storage.delete_stored(&key, &version).await {
+        if let Err(error) = state.storage.delete(&key).await {
             tracing::warn!(error = %error, "mail: a sent message's held parts left for the sweep");
         }
     }
@@ -237,7 +236,7 @@ pub(crate) fn result_field(id: &str) -> (&'static str, &'static str, &str) {
     ("mail_outbox", "result", id)
 }
 
-/// Deletes held sends finished longer ago than `mail_outbox_keep_seconds`.
+/// Deletes held sends finished longer ago than `server.retention.mail_outbox_seconds`.
 async fn sweep_finished(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     let keep = crate::site_settings::MAIL_OUTBOX_KEEP_SECONDS
         .load(pool)
@@ -259,12 +258,11 @@ async fn send_one(
     user_id: Uuid,
     is_admin: bool,
     key: &str,
-    version: &str,
 ) -> Result<crate::handlers::mail_send::SendResult, serde_json::Value> {
     let internal = |what: &str| json!({ "status": 500, "error": what });
     let (stream, _) = state
         .storage
-        .get_stored(key, version)
+        .get_object(key)
         .await
         .map_err(|_| internal("storage"))?;
     let bytes = stream

@@ -21,9 +21,9 @@ compose() {
 # a browser. The browser will publish its real encrypted profile on first open.
 clear_synthetic_chat_profiles() {
   compose exec -T postgres-a psql -U kutup -d kutup -v ON_ERROR_STOP=1 -c \
-    "DELETE FROM chat_profiles p USING users u WHERE p.user_id = u.id AND u.username = 'alicefed' AND p.version = repeat('71', 32)"
+    "DELETE FROM chat_profiles p USING accounts u WHERE p.account_id = u.id AND u.username = 'alicefed' AND p.version = repeat('71', 32)"
   compose exec -T postgres-b psql -U kutup -d kutup -v ON_ERROR_STOP=1 -c \
-    "DELETE FROM chat_profiles p USING users u WHERE p.user_id = u.id AND u.username = 'bobfed' AND p.version = repeat('71', 32)"
+    "DELETE FROM chat_profiles p USING accounts u WHERE p.account_id = u.id AND u.username = 'bobfed' AND p.version = repeat('71', 32)"
 }
 
 if [[ "${KUTUP_FEDERATION_SKIP_BUILD:-0}" != "1" ]]; then

@@ -28,7 +28,7 @@ import {
   type LinkReport,
 } from './api'
 
-const BLOCK_REASONS: BlockReason[] = ['legal_order', 'abuse', 'other']
+const BLOCK_REASONS: BlockReason[] = ['legalOrder', 'abuse', 'other']
 
 type Pending = { kind: 'remove' | 'disable' | 'block'; report: LinkReport }
 
@@ -49,7 +49,7 @@ export function ReportsPage() {
   const block = useBlockLink()
   const unblock = useUnblockLink()
   const [pending, setPending] = useState<Pending | null>(null)
-  const [blockReason, setBlockReason] = useState<BlockReason>('legal_order')
+  const [blockReason, setBlockReason] = useState<BlockReason>('legalOrder')
   const [blockReference, setBlockReference] = useState('')
 
   const close = () => {
@@ -57,7 +57,7 @@ export function ReportsPage() {
     remove.reset()
     update.reset()
     block.reset()
-    setBlockReason('legal_order')
+    setBlockReason('legalOrder')
     setBlockReference('')
   }
 
@@ -178,7 +178,7 @@ export function ReportsPage() {
           errorFallback={t('admin.reports.actionFailed')}
           onConfirm={() =>
             update.mutate(
-              { id: pending.report.ownerUserId, patch: { isActive: false } },
+              { id: pending.report.ownerAccountId, patch: { state: 'suspended' } },
               {
                 onSuccess: () => {
                   toast.success(t('admin.reports.disabled'))
@@ -232,7 +232,7 @@ function ReportCard({
       <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
         <dt className="text-muted-foreground">{t('admin.reports.owner')}</dt>
         <dd className="flex min-w-0 flex-wrap items-center gap-2">
-          <Link to={`/admin/users/${report.ownerUserId}`} className="truncate font-medium hover:underline">
+          <Link to={`/admin/users/${report.ownerAccountId}`} className="truncate font-medium hover:underline">
             {report.ownerUsername}
           </Link>
           {report.ownerIsActive ? null : <Badge variant="neutral">{t('admin.users.disabled')}</Badge>}

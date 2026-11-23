@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::federation::{AuthenticatedFederationRequest, FederationRequestSpec, FederationStack};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
@@ -123,10 +123,10 @@ fn millis(at: OffsetDateTime) -> i64 {
     (at.unix_timestamp_nanos() / 1_000_000) as i64
 }
 
-/// `POST /api/live-locations` — open a stream.
+/// `POST /api/v1/chat/live-locations` — open a stream.
 #[utoipa::path(
     post,
-    path = "/api/live-locations",
+    path = "/api/v1/chat/live-locations",
     tag = "chat",
     security(("BearerAuth" = [])),
     request_body = CreateLiveLocationRequest,
@@ -138,10 +138,10 @@ fn millis(at: OffsetDateTime) -> i64 {
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CreateLiveLocationRequest>,
 ) -> AppResult<Response> {
-    if !CREATE_LIMIT.allow(&user.user_id) {
+    if !CREATE_LIMIT.allow(&user.account_id) {
         return Err(limited());
     }
     let stream_id = stream_id_of(&request.stream_id)
@@ -162,15 +162,15 @@ pub async fn create(
         ));
     }
     let inserted = sqlx::query(
-        "INSERT INTO live_location_streams
-             (stream_id, write_verifier, read_verifier, expires_at, creator_user_id)
+        "INSERT INTO chat_live_location_streams
+             (stream_id, write_verifier, read_verifier, expires_at, created_by_account_id)
          VALUES ($1, $2, $3, $4, $5) ON CONFLICT (stream_id) DO NOTHING",
     )
     .bind(&stream_id)
     .bind(hash(Suite::V1, write).to_vec())
     .bind(hash(Suite::V1, read).to_vec())
     .bind(expires_at)
-    .bind(crate::handlers::trusted_uuid(&user.user_id)?)
+    .bind(crate::handlers::trusted_uuid(&user.account_id)?)
     .execute(&state.pool)
     .await?;
     if inserted.rows_affected() == 0 {
@@ -179,11 +179,11 @@ pub async fn create(
     Ok(StatusCode::CREATED.into_response())
 }
 
-/// `PUT /api/live-locations/{streamId}` — replace the latest update. Needs
+/// `PUT /api/v1/chat/live-locations/{streamId}` — replace the latest update. Needs
 /// the write secret (`x-kutup-live-write`) and a counter above the stored one.
 #[utoipa::path(
     put,
-    path = "/api/live-locations/{streamId}",
+    path = "/api/v1/chat/live-locations/{streamId}",
     tag = "chat",
     security(("BearerAuth" = [])),
     params(("streamId" = String, Path)),
@@ -197,7 +197,7 @@ pub async fn create(
 )]
 pub async fn write(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Path(stream_id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<WriteLiveLocationRequest>,
@@ -216,7 +216,7 @@ pub async fn write(
 
     let mut tx = state.pool.begin().await?;
     let row: Option<(Vec<u8>, i64, Option<OffsetDateTime>, OffsetDateTime)> = sqlx::query_as(
-        "SELECT write_verifier, counter, updated_at, expires_at FROM live_location_streams
+        "SELECT write_verifier, counter, updated_at, expires_at FROM chat_live_location_streams
          WHERE stream_id = $1 FOR UPDATE",
     )
     .bind(&stream_id)
@@ -238,7 +238,7 @@ pub async fn write(
         return Err(limited());
     }
     sqlx::query(
-        "UPDATE live_location_streams SET update_bytes = $2, counter = $3, updated_at = $4
+        "UPDATE chat_live_location_streams SET update_bytes = $2, counter = $3, updated_at = $4
          WHERE stream_id = $1",
     )
     .bind(&stream_id)
@@ -251,10 +251,10 @@ pub async fn write(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/live-locations/{streamId}` — end a stream now (write secret).
+/// `DELETE /api/v1/chat/live-locations/{streamId}` — end a stream now (write secret).
 #[utoipa::path(
     delete,
-    path = "/api/live-locations/{streamId}",
+    path = "/api/v1/chat/live-locations/{streamId}",
     tag = "chat",
     security(("BearerAuth" = [])),
     params(("streamId" = String, Path)),
@@ -262,21 +262,22 @@ pub async fn write(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Path(stream_id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let stream_id = stream_id_of(&stream_id)?;
     let verifier = hashed_secret(&headers, WRITE_HEADER)?;
-    let stored: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT write_verifier FROM live_location_streams WHERE stream_id = $1")
-            .bind(&stream_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let stored: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT write_verifier FROM chat_live_location_streams WHERE stream_id = $1",
+    )
+    .bind(&stream_id)
+    .fetch_optional(&state.pool)
+    .await?;
     if !stored.is_some_and(|stored| kutup_crypto::primitives::ct_eq(&stored, &verifier)) {
         return Err(gone());
     }
-    sqlx::query("DELETE FROM live_location_streams WHERE stream_id = $1")
+    sqlx::query("DELETE FROM chat_live_location_streams WHERE stream_id = $1")
         .bind(&stream_id)
         .execute(&state.pool)
         .await?;
@@ -301,8 +302,8 @@ async fn read_local(
     for_peer: bool,
 ) -> AppResult<LiveLocationResponse> {
     let row: Option<StreamRow> = sqlx::query_as(
-        "SELECT read_verifier, update_bytes, updated_at, expires_at FROM live_location_streams
-         WHERE stream_id = $1 AND (NOT $2 OR kutup_account_federates(creator_user_id))",
+        "SELECT read_verifier, update_bytes, updated_at, expires_at FROM chat_live_location_streams
+         WHERE stream_id = $1 AND (NOT $2 OR kutup_account_federates(created_by_account_id))",
     )
     .bind(stream_id)
     .bind(for_peer)
@@ -323,12 +324,12 @@ async fn read_local(
     })
 }
 
-/// `GET /api/live-locations/{streamId}[?server=]` — the latest update, with
+/// `GET /api/v1/chat/live-locations/{streamId}[?server=]` — the latest update, with
 /// the read capability (`x-kutup-live-read`). A stream on another server is
 /// read through this one over signed federation.
 #[utoipa::path(
     get,
-    path = "/api/live-locations/{streamId}",
+    path = "/api/v1/chat/live-locations/{streamId}",
     tag = "chat",
     security(("BearerAuth" = [])),
     params(
@@ -342,12 +343,12 @@ async fn read_local(
 )]
 pub async fn read(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(stream_id): Path<String>,
     Query(query): Query<ReadQuery>,
     headers: HeaderMap,
 ) -> AppResult<Json<LiveLocationResponse>> {
-    if !READ_LIMIT.allow(&user.user_id) {
+    if !READ_LIMIT.allow(&user.account_id) {
         return Err(limited());
     }
     let stream = stream_id_of(&stream_id)?;
@@ -360,7 +361,7 @@ pub async fn read(
             // account's federation is off.
             crate::federation_switch::ensure_federates(
                 &state.pool,
-                crate::handlers::trusted_uuid(&user.user_id)?,
+                crate::handlers::trusted_uuid(&user.account_id)?,
             )
             .await?;
             let capability = headers
@@ -400,7 +401,7 @@ async fn fetch_remote(
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
-                path: format!("/api/fed/chat/live-locations/{stream_id}"),
+                path: format!("/api/fed/v2/chat/live-locations/{stream_id}"),
                 query: None,
                 content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
@@ -464,8 +465,8 @@ fn signed(
 /// federation signature authenticates the calling server.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/live-locations/{streamId}",
-    tag = "chat federation",
+    path = "/api/fed/v2/chat/live-locations/{streamId}",
+    tag = "chat.federation",
     params(("streamId" = String, Path)),
     responses(
         (status = 200, description = "The latest update", body = LiveLocationResponse),
@@ -479,7 +480,7 @@ pub async fn federated_read(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = stack(&state)?;
-    let uri = format!("/api/fed/chat/live-locations/{stream_id}");
+    let uri = format!("/api/fed/v2/chat/live-locations/{stream_id}");
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &uri, None, &[], FederationFeature::ChatV2)
         .await?;
@@ -510,7 +511,7 @@ pub fn spawn_sweeper(pool: PgPool) {
         let mut tick = tokio::time::interval(SWEEP_INTERVAL);
         loop {
             tick.tick().await;
-            match sqlx::query("DELETE FROM live_location_streams WHERE expires_at <= now()")
+            match sqlx::query("DELETE FROM chat_live_location_streams WHERE expires_at <= now()")
                 .execute(&pool)
                 .await
             {

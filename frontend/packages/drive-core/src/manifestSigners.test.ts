@@ -26,7 +26,7 @@ vi.mock('./identityPins', () => ({
 
 import { manifestSignerVerdict } from './manifestSigners'
 
-const me = { userId: 'me', account: 'me@kutup.dev', incarnationId: 'inc-ME', roots: testRoots(0) } as unknown as DriveIdentity
+const me = { accountId: 'me', account: 'me@kutup.dev', incarnationId: 'inc-ME', roots: testRoots(0) } as unknown as DriveIdentity
 
 function signature(accountId: string, incarnationId: string, key: string): ManifestSignature {
   return { fileId: 'f', revisionId: 'r', accountId, incarnationId, signedBy: (candidate) => candidate === key }

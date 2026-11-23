@@ -8,6 +8,7 @@
 
 import { toBase64Url } from '@kutup/crypto/base64'
 import { randomBytes } from '@kutup/crypto/random'
+import { storageReady } from '@kutup/crypto/storageGate'
 
 /** The scopes of the store (`RecordScope` in kutup-crypto). */
 export type RecordScopeName =
@@ -37,7 +38,7 @@ export interface StoredRecord {
   envelope: string
 }
 
-/** One page, as `GET /api/account/records/{scope}` answers. */
+/** One page, as `GET /api/v1/account/records/{scope}` answers. */
 export interface RecordsPage {
   records: { id: string; revision: number; envelope: string; seq: number }[]
   deleted: { id: string; seq: number }[]
@@ -139,7 +140,7 @@ export class ScopeRecords {
   }
 }
 
-/** The `POST /api/account/records` body. */
+/** The `POST /api/v1/account/records` body. */
 export function batchBody(batch: RecordsBatch, head: string): unknown {
   return {
     head,
@@ -160,6 +161,8 @@ export interface RecordsStore {
   /** Writes what changed since the copy was loaded (`reset`: drop every row first). */
   save(copy: string, cursor: number, changes: { puts: [string, StoredRecord][]; deletes: string[]; reset: boolean }): Promise<void>
   clear(): Promise<void>
+  /** Drops every copy whose name starts with `prefix` (one account's: sign-out). */
+  clearPrefix(prefix: string): Promise<void>
 }
 
 export function memoryRecordsStore(): RecordsStore {
@@ -180,10 +183,14 @@ export function memoryRecordsStore(): RecordsStore {
       copies.clear()
       return Promise.resolve()
     },
+    clearPrefix: (prefix) => {
+      for (const copy of [...copies.keys()]) if (copy.startsWith(prefix)) copies.delete(copy)
+      return Promise.resolve()
+    },
   }
 }
 
-const DB_NAME = 'kutup-account-records'
+const DB_NAME = 'kutup.account.records'
 const RECORDS = 'records'
 const CURSORS = 'cursors'
 
@@ -195,7 +202,7 @@ const CURSORS = 'cursors'
 export function indexedDbRecordsStore(): RecordsStore {
   let opened: Promise<IDBDatabase | null> | null = null
   const db = () =>
-    (opened ??= new Promise<IDBDatabase | null>((resolve) => {
+    (opened ??= storageReady().then(() => new Promise<IDBDatabase | null>((resolve) => {
       try {
         const open = indexedDB.open(DB_NAME, 1)
         open.onupgradeneeded = () => {
@@ -208,7 +215,7 @@ export function indexedDbRecordsStore(): RecordsStore {
       } catch {
         resolve(null)
       }
-    }))
+    })))
   const fallback = memoryRecordsStore()
   // Every record id of a copy: string ids sort below arrays.
   const rangeOf = (copy: string) => IDBKeyRange.bound([copy, ''], [copy, []])
@@ -262,6 +269,22 @@ export function indexedDbRecordsStore(): RecordsStore {
         const tx = handle.transaction([RECORDS, CURSORS], 'readwrite')
         tx.objectStore(RECORDS).clear()
         tx.objectStore(CURSORS).clear()
+        await done(tx)
+      } catch {
+        // Nothing more to do: a copy left behind is checked before any use.
+      }
+    },
+    async clearPrefix(prefix) {
+      const handle = await db()
+      await fallback.clearPrefix(prefix)
+      if (!handle) return
+      try {
+        const tx = handle.transaction([RECORDS, CURSORS], 'readwrite')
+        // Copy names sort as strings: every name with the prefix lies
+        // between it and the prefix followed by the highest code unit.
+        const names = IDBKeyRange.bound(prefix, `${prefix}\uffff`)
+        tx.objectStore(RECORDS).delete(IDBKeyRange.bound([prefix, ''], [`${prefix}\uffff`, []]))
+        tx.objectStore(CURSORS).delete(names)
         await done(tx)
       } catch {
         // Nothing more to do: a copy left behind is checked before any use.

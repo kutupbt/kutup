@@ -1,7 +1,7 @@
 // Typed per-file asset storage (whiteboard images, pictures in notes). Rust
 // owns the DriveEnvelopeV1 purpose, binding hash, KDF, parser and AEAD; this
 // module only moves opaque bytes. `base` is where the file's calls go: here
-// (`/files/:id`) or, for a file on another server, its relay through this
+// (`/drive/files/:id`) or, for a file on another server, its relay through this
 // one (docs/plans/collab-federation.md).
 
 import axios from 'axios'

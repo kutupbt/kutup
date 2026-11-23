@@ -21,7 +21,7 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::site_settings::{
     HEALTH_BACKUP_MAX_AGE_SECONDS, HEALTH_JOB_GRACE_SECONDS, HEALTH_PROBE_TIMEOUT_SECONDS,
 };
@@ -196,7 +196,7 @@ pub async fn ready(State(state): State<AppState>, request: Request) -> Response 
         .get::<ConnectInfo<SocketAddr>>()
         .map(|info| info.0);
     if !from_internal_network(peer, &parts.headers) {
-        if let Err(rejection) = AdminUser::from_request_parts(&mut parts, &state).await {
+        if let Err(rejection) = AdminAccount::from_request_parts(&mut parts, &state).await {
             return rejection.into_response();
         }
     }

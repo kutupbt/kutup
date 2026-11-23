@@ -33,7 +33,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::site_settings::{
     CALENDARS_PER_ACCOUNT, CALENDAR_DEFAULT_REMINDERS, CALENDAR_EVENTS_PAGE,
     CALENDAR_EVENTS_PER_CALENDAR, CALENDAR_MAX_COUNT, CALENDAR_REMINDERS_PER_EVENT,
@@ -91,7 +91,7 @@ fn crypto(error: kutup_crypto::error::CryptoError) -> AppError {
 pub struct CalendarView {
     pub id: Uuid,
     /// The owner's account id (on this server): who shared the passphrase.
-    pub owner_id: Uuid,
+    pub owner_account_id: Uuid,
     pub public_key: String,
     pub fingerprint: String,
     pub locked_secret_key: String,
@@ -127,6 +127,7 @@ pub struct CalendarList {
 #[derive(sqlx::FromRow)]
 struct ViewRow {
     id: Uuid,
+    #[sqlx(rename = "owner_account_id")]
     owner_id: Uuid,
     public_key: Vec<u8>,
     fingerprint: String,
@@ -143,18 +144,29 @@ struct ViewRow {
     updated_at: time::OffsetDateTime,
 }
 
-const VIEW: &str = "SELECT c.id, c.owner_id, c.public_key, c.fingerprint, c.locked_secret_key,
-        c.key_generation, m.passphrase_share,
+/// A calendar as one member sees it: its newest key generation and the
+/// member's share of that generation's passphrase.
+/// A calendar row's key suite (`calendars.suite`): 1 is the current
+/// Ed25519/X25519 calendar key; a post-quantum key is a new value
+/// (docs/plans/calendar.md, M2).
+const CALENDAR_SUITE: i16 = 1;
+
+const VIEW: &str =
+    "SELECT c.id, c.owner_account_id, k.public_key, k.fingerprint, k.locked_secret_key,
+        c.key_generation, s.share AS passphrase_share,
         c.metadata_key_packet, c.metadata_data_packet, c.metadata_signature,
         m.permissions, m.default_reminders_timed, m.default_reminders_all_day,
         c.created_at, c.updated_at
    FROM calendar_members m
-   JOIN calendars c ON c.id = m.calendar_id";
+   JOIN calendars c ON c.id = m.calendar_id
+   JOIN calendar_keys k ON k.calendar_id = c.id AND k.key_generation = c.key_generation
+   JOIN calendar_member_shares s
+     ON s.calendar_id = c.id AND s.account_id = m.account_id AND s.key_generation = c.key_generation";
 
 fn view(row: ViewRow) -> CalendarView {
     CalendarView {
         id: row.id,
-        owner_id: row.owner_id,
+        owner_account_id: row.owner_id,
         public_key: STANDARD.encode(row.public_key),
         fingerprint: row.fingerprint,
         locked_secret_key: STANDARD.encode(row.locked_secret_key),
@@ -177,7 +189,7 @@ fn view(row: ViewRow) -> CalendarView {
 
 async fn fetch(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<CalendarView> {
     let row: Option<ViewRow> = sqlx::query_as(&format!(
-        "{VIEW} WHERE m.user_id = $1 AND m.calendar_id = $2"
+        "{VIEW} WHERE m.account_id = $1 AND m.calendar_id = $2"
     ))
     .bind(user_id)
     .bind(id)
@@ -187,18 +199,21 @@ async fn fetch(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<CalendarV
         .ok_or_else(|| AppError::not_found("not found"))
 }
 
-/// `GET /api/calendar/calendars` — the caller's calendars.
+/// `GET /api/v1/calendar/calendars` — the caller's calendars.
 #[utoipa::path(
     get,
-    path = "/api/calendar/calendars",
+    path = "/api/v1/calendar/calendars",
     tag = "calendar",
     security(("BearerAuth" = [])),
     responses((status = 200, body = CalendarList))
 )]
-pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<CalendarList>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn list(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<CalendarList>> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<ViewRow> = sqlx::query_as(&format!(
-        "{VIEW} WHERE m.user_id = $1 ORDER BY c.created_at, c.id"
+        "{VIEW} WHERE m.account_id = $1 ORDER BY c.created_at, c.id"
     ))
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -223,7 +238,7 @@ async fn address_keys(
     let rows: Vec<(Vec<u8>, bool)> = sqlx::query_as(
         "SELECT k.public_key, k.is_primary FROM mail_address_keys k
            JOIN mail_addresses a ON a.id = k.address_id
-          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active'
+          WHERE a.id = $1 AND a.account_id = $2 AND a.state = 'active'
             AND (k.flags & $3) <> 0
           ORDER BY k.created_at, k.fingerprint",
     )
@@ -256,10 +271,10 @@ pub struct CalendarCreate {
     pub metadata: SealedMetadataV1,
 }
 
-/// `POST /api/calendar/calendars` — makes a calendar the caller owns.
+/// `POST /api/v1/calendar/calendars` — makes a calendar the caller owns.
 #[utoipa::path(
     post,
-    path = "/api/calendar/calendars",
+    path = "/api/v1/calendar/calendars",
     tag = "calendar",
     security(("BearerAuth" = [])),
     request_body = CalendarCreate,
@@ -272,10 +287,10 @@ pub struct CalendarCreate {
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<CalendarCreate>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     limited(user_id)?;
     if input.id.get_version_num() != 4 {
         return Err(AppError::bad_request("a calendar's id is a UUID v4"));
@@ -305,7 +320,7 @@ pub async fn create(
     // The owner's own copy: from the caller's account, as it is now, to
     // itself, for this calendar's first key, signed by its account key.
     let (incarnation, signing): (String, String) = sqlx::query_as(
-        "SELECT account_incarnation_id, drive_signing_public_key FROM users WHERE id = $1",
+        "SELECT encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key) FROM accounts WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -328,10 +343,11 @@ pub async fn create(
             AppError::bad_request("the passphrase share is not the owner's own, for this calendar")
         })?;
     let share = share.encode().map_err(crypto)?;
-    let owned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM calendars WHERE owner_id = $1")
-        .bind(user_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let owned: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM calendars WHERE owner_account_id = $1")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
     if owned >= CALENDARS_PER_ACCOUNT.load_for(&state.pool, user_id).await? {
         return Err(AppError::conflict("calendar limit reached")
             .with_details(serde_json::json!({ "code": "calendarLimit" })));
@@ -343,38 +359,60 @@ pub async fn create(
         + metadata.data_packet.len()
         + metadata.signature.len()) as i64;
     crate::storage_pool::charge_within_quota(&mut tx, user_id, bytes).await?;
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO calendars (id, owner_id, public_key, fingerprint, locked_secret_key,
-             key_generation, metadata_key_packet, metadata_data_packet, metadata_signature, bytes)
-         VALUES ($10, $1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING id",
-    )
-    .bind(user_id)
-    .bind(&public_key)
-    .bind(hex::encode(fingerprint))
-    .bind(&locked)
-    .bind(cal::FIRST_KEY_GENERATION as i32)
-    .bind(&metadata.key_packet)
-    .bind(&metadata.data_packet)
-    .bind(&metadata.signature)
-    .bind(bytes)
-    .bind(input.id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|error| match &error {
+    let taken = |error: sqlx::Error| match &error {
         sqlx::Error::Database(db) if db.is_unique_violation() => {
             AppError::conflict("this calendar id or key is in use")
                 .with_details(serde_json::json!({ "code": "calendarExists" }))
         }
         _ => error.into(),
-    })?;
+    };
+    let generation = cal::FIRST_KEY_GENERATION as i32;
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO calendars (id, owner_account_id, suite, key_generation,
+             metadata_key_packet, metadata_data_packet, metadata_signature, bytes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id",
+    )
+    .bind(input.id)
+    .bind(user_id)
+    .bind(CALENDAR_SUITE)
+    .bind(generation)
+    .bind(&metadata.key_packet)
+    .bind(&metadata.data_packet)
+    .bind(&metadata.signature)
+    .bind(bytes)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(taken)?;
+    // The first key generation, the owner as a member, and the owner's
+    // share of that generation's passphrase.
     sqlx::query(
-        "INSERT INTO calendar_members (calendar_id, user_id, permissions, passphrase_share)
-         VALUES ($1, $2, $3, $4)",
+        "INSERT INTO calendar_keys (calendar_id, key_generation, public_key, fingerprint, locked_secret_key)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(id)
+    .bind(generation)
+    .bind(&public_key)
+    .bind(hex::encode(fingerprint))
+    .bind(&locked)
+    .execute(&mut *tx)
+    .await
+    .map_err(taken)?;
+    sqlx::query(
+        "INSERT INTO calendar_members (calendar_id, account_id, permissions) VALUES ($1, $2, $3)",
     )
     .bind(id)
     .bind(user_id)
     .bind(OWNS)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO calendar_member_shares (calendar_id, account_id, key_generation, share)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(generation)
     .bind(&share)
     .execute(&mut *tx)
     .await?;
@@ -394,10 +432,10 @@ pub struct CalendarUpdate {
     pub default_reminders: Option<DefaultReminders>,
 }
 
-/// `PUT /api/calendar/calendars/{id}`
+/// `PUT /api/v1/calendar/calendars/{id}`
 #[utoipa::path(
     put,
-    path = "/api/calendar/calendars/{id}",
+    path = "/api/v1/calendar/calendars/{id}",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path)),
@@ -409,11 +447,11 @@ pub struct CalendarUpdate {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<Uuid>,
     Json(input): Json<CalendarUpdate>,
 ) -> AppResult<Json<CalendarView>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     limited(user_id)?;
     if let Some(defaults) = &input.default_reminders {
         let most =
@@ -429,9 +467,10 @@ pub async fn update(
         .transpose()?;
     let mut tx = state.pool.begin().await?;
     let member: Option<(i32, Uuid, Vec<u8>, i64)> = sqlx::query_as(
-        "SELECT m.permissions, c.owner_id, c.public_key, c.bytes
+        "SELECT m.permissions, c.owner_account_id, k.public_key, c.bytes
            FROM calendar_members m JOIN calendars c ON c.id = m.calendar_id
-          WHERE m.calendar_id = $1 AND m.user_id = $2
+           JOIN calendar_keys k ON k.calendar_id = c.id AND k.key_generation = c.key_generation
+          WHERE m.calendar_id = $1 AND m.account_id = $2
           FOR UPDATE OF m, c",
     )
     .bind(id)
@@ -481,7 +520,7 @@ pub async fn update(
     if let Some(defaults) = &input.default_reminders {
         sqlx::query(
             "UPDATE calendar_members SET default_reminders_timed = $3, default_reminders_all_day = $4
-              WHERE calendar_id = $1 AND user_id = $2",
+              WHERE calendar_id = $1 AND account_id = $2",
         )
         .bind(id)
         .bind(user_id)
@@ -499,11 +538,11 @@ pub async fn update(
     Ok(Json(fetch(&state, user_id, id).await?))
 }
 
-/// `DELETE /api/calendar/calendars/{id}` — the owner deletes a calendar and
+/// `DELETE /api/v1/calendar/calendars/{id}` — the owner deletes a calendar and
 /// every event in it.
 #[utoipa::path(
     delete,
-    path = "/api/calendar/calendars/{id}",
+    path = "/api/v1/calendar/calendars/{id}",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path)),
@@ -511,17 +550,20 @@ pub async fn update(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     limited(user_id)?;
     let mut tx = state.pool.begin().await?;
     let found: Option<(i32, Uuid, i64)> = sqlx::query_as(
-        "SELECT m.permissions, c.owner_id,
-                (c.bytes + COALESCE((SELECT SUM(bytes) FROM calendar_events e WHERE e.calendar_id = c.id), 0))::bigint
+        "SELECT m.permissions, c.owner_account_id,
+                (c.bytes
+                 + COALESCE((SELECT SUM(bytes) FROM calendar_events e WHERE e.calendar_id = c.id), 0)
+                 + COALESCE((SELECT SUM(bytes) FROM calendar_shared_events se
+                              WHERE se.home_calendar_id = c.id), 0))::bigint
            FROM calendar_members m JOIN calendars c ON c.id = m.calendar_id
-          WHERE m.calendar_id = $1 AND m.user_id = $2
+          WHERE m.calendar_id = $1 AND m.account_id = $2
           FOR UPDATE OF c",
     )
     .bind(id)
@@ -628,17 +670,18 @@ struct EventRow {
 /// the caller's id is bind parameter `$caller`.
 fn event_view_sql(caller: u8) -> String {
     format!(
-        "SELECT e.id, e.calendar_id, e.uid, a.address AS author_address,
+        "SELECT e.id, e.calendar_id, se.uid, a.address AS author_address,
         e.shared_key_packet, e.calendar_key_packet,
-        e.shared_signed, e.shared_signed_signature,
-        e.shared_encrypted, e.shared_encrypted_signature,
+        se.shared_signed, se.shared_signed_signature,
+        se.shared_encrypted, se.shared_encrypted_signature,
         e.calendar_signed, e.calendar_signed_signature,
         e.calendar_encrypted, e.calendar_encrypted_signature,
-        e.start_utc, e.end_utc, e.full_day, e.range_end_utc, e.sequence, e.revision,
-        e.modified_at, r.reminders
+        se.start_utc, se.end_utc, se.full_day, se.range_end_utc, se.sequence, e.revision,
+        GREATEST(e.modified_at, se.modified_at) AS modified_at, r.reminders
    FROM calendar_events e
-   LEFT JOIN mail_addresses a ON a.id = e.author_address_id
-   LEFT JOIN calendar_event_reminders r ON r.event_id = e.id AND r.user_id = ${caller}"
+   JOIN calendar_shared_events se ON se.id = e.shared_event_id
+   LEFT JOIN mail_addresses a ON a.id = se.author_address_id
+   LEFT JOIN calendar_event_reminders r ON r.event_id = e.id AND r.account_id = ${caller}"
     )
 }
 
@@ -694,7 +737,7 @@ async fn member_permissions(
     calendar: Uuid,
 ) -> AppResult<i32> {
     sqlx::query_scalar(
-        "SELECT permissions FROM calendar_members WHERE calendar_id = $1 AND user_id = $2",
+        "SELECT permissions FROM calendar_members WHERE calendar_id = $1 AND account_id = $2",
     )
     .bind(calendar)
     .bind(user_id)
@@ -720,11 +763,11 @@ fn instant(value: &str, what: &str) -> AppResult<time::OffsetDateTime> {
         .map_err(|_| AppError::bad_request(format!("{what} is not an RFC 3339 time")))
 }
 
-/// `GET /api/calendar/calendars/{id}/events?start&end` — the events that
+/// `GET /api/v1/calendar/calendars/{id}/events?start&end` — the events that
 /// meet a window, oldest start first, paged.
 #[utoipa::path(
     get,
-    path = "/api/calendar/calendars/{id}/events",
+    path = "/api/v1/calendar/calendars/{id}/events",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path), EventsQuery),
@@ -732,11 +775,11 @@ fn instant(value: &str, what: &str) -> AppResult<time::OffsetDateTime> {
 )]
 pub async fn events(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<Uuid>,
     Query(query): Query<EventsQuery>,
 ) -> AppResult<Json<EventPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let (start, end) = (instant(&query.start, "start")?, instant(&query.end, "end")?);
     let window_days = CALENDAR_WINDOW_DAYS.load(&state.pool).await?;
     if end <= start || end - start > time::Duration::days(window_days) {
@@ -764,10 +807,10 @@ pub async fn events(
     // client's cursor by (start, id).
     let mut rows: Vec<EventRow> = sqlx::query_as(&format!(
         "{}
-          WHERE e.calendar_id = $1 AND e.start_utc < $3
-            AND COALESCE(e.range_end_utc, 'infinity'::timestamptz) >= $2
-            AND ($4::timestamptz IS NULL OR (e.start_utc, e.id) > ($4, $5))
-          ORDER BY e.start_utc, e.id
+          WHERE e.calendar_id = $1 AND se.start_utc < $3
+            AND COALESCE(se.range_end_utc, 'infinity'::timestamptz) >= $2
+            AND ($4::timestamptz IS NULL OR (se.start_utc, e.id) > ($4, $5))
+          ORDER BY se.start_utc, e.id
           LIMIT $6",
         event_view_sql(7)
     ))
@@ -793,10 +836,10 @@ pub async fn events(
     }))
 }
 
-/// `GET /api/calendar/calendars/{id}/events/{eventId}`
+/// `GET /api/v1/calendar/calendars/{id}/events/{eventId}`
 #[utoipa::path(
     get,
-    path = "/api/calendar/calendars/{id}/events/{eventId}",
+    path = "/api/v1/calendar/calendars/{id}/events/{eventId}",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path), ("eventId" = Uuid, Path)),
@@ -804,10 +847,10 @@ pub async fn events(
 )]
 pub async fn event(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((id, event_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<Json<EventView>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut conn = state.pool.acquire().await?;
     if member_permissions(&mut conn, user_id, id).await? & READ == 0 {
         return Err(AppError::forbidden("this calendar shows busy times only"));
@@ -843,7 +886,7 @@ pub enum EventChange {
         reminders: Option<Vec<crate::calendar_reminders::Reminder>>,
     },
     /// `base_revision`: the event's stored revision the change was made
-    /// from; another is `409 revision_conflict`.
+    /// from; another is `409 revisionConflict`.
     #[serde(rename_all = "camelCase")]
     Update {
         id: Uuid,
@@ -888,7 +931,7 @@ async fn reminders_then_alarms(
         RemindersChange::Keep => {}
         RemindersChange::Defaults => {
             sqlx::query(
-                "DELETE FROM calendar_event_reminders WHERE event_id = $1 AND user_id = $2",
+                "DELETE FROM calendar_event_reminders WHERE event_id = $1 AND account_id = $2",
             )
             .bind(event)
             .bind(user_id)
@@ -897,9 +940,9 @@ async fn reminders_then_alarms(
         }
         RemindersChange::Own(list) => {
             sqlx::query(
-                "INSERT INTO calendar_event_reminders (event_id, user_id, reminders)
+                "INSERT INTO calendar_event_reminders (event_id, account_id, reminders)
                  VALUES ($1, $2, $3)
-                 ON CONFLICT (event_id, user_id) DO UPDATE SET reminders = EXCLUDED.reminders",
+                 ON CONFLICT (event_id, account_id) DO UPDATE SET reminders = EXCLUDED.reminders",
             )
             .bind(event)
             .bind(user_id)
@@ -962,6 +1005,10 @@ struct Checked {
     range_end: Option<time::OffsetDateTime>,
     /// A changed occurrence: the instant it replaces.
     recurrence_id: Option<time::OffsetDateTime>,
+    /// What the shared row holds (the shared parts) and the calendar's own
+    /// row (its key packets and its parts); `bytes` is both.
+    shared_bytes: i64,
+    own_bytes: i64,
     bytes: i64,
 }
 
@@ -1062,18 +1109,21 @@ fn check_event(
         None if shared.dtstart.is_date() => start + time::Duration::days(1),
         None => start,
     };
-    let bytes = (event.shared_key_packet.len()
+    let size = |parts: &[Option<&cal::EventPart>]| -> usize {
+        parts
+            .iter()
+            .flatten()
+            .map(|part| part.data.len() + part.signature.len())
+            .sum()
+    };
+    let shared_bytes = size(&[Some(&event.shared_signed), Some(&event.shared_encrypted)]) as i64;
+    let own_bytes = (event.shared_key_packet.len()
         + event.calendar_key_packet.len()
-        + [
-            Some(&event.shared_signed),
-            Some(&event.shared_encrypted),
+        + size(&[
             Some(&event.calendar_signed),
             event.calendar_encrypted.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .map(|part| part.data.len() + part.signature.len())
-        .sum::<usize>()) as i64;
+        ])) as i64;
+    let bytes = shared_bytes + own_bytes;
     Ok(Checked {
         event,
         shared,
@@ -1081,6 +1131,8 @@ fn check_event(
         end,
         range_end,
         recurrence_id,
+        shared_bytes,
+        own_bytes,
         bytes,
     })
 }
@@ -1103,11 +1155,11 @@ async fn check_event_blocking(
         .map_err(|error| AppError::internal(error.to_string()))?
 }
 
-/// `POST /api/calendar/calendars/{id}/events/sync` — creates, changes and
+/// `POST /api/v1/calendar/calendars/{id}/events/sync` — creates, changes and
 /// deletes events, each alone (Proton's sync): one result per change.
 #[utoipa::path(
     post,
-    path = "/api/calendar/calendars/{id}/events/sync",
+    path = "/api/v1/calendar/calendars/{id}/events/sync",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path)),
@@ -1120,11 +1172,11 @@ async fn check_event_blocking(
 )]
 pub async fn sync(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<Uuid>,
     Json(input): Json<EventSync>,
 ) -> AppResult<Json<EventSyncResults>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     limited(user_id)?;
     let batch = CALENDAR_SYNC_BATCH.load(&state.pool).await?;
     if input.changes.is_empty() || input.changes.len() as i64 > batch {
@@ -1139,10 +1191,14 @@ pub async fn sync(
                 "you may not change this calendar's events",
             ));
         }
-        sqlx::query_as("SELECT public_key, owner_id FROM calendars WHERE id = $1")
-            .bind(id)
-            .fetch_one(&mut *conn)
-            .await?
+        sqlx::query_as(
+            "SELECT k.public_key, c.owner_account_id FROM calendars c
+               JOIN calendar_keys k ON k.calendar_id = c.id AND k.key_generation = c.key_generation
+              WHERE c.id = $1",
+        )
+        .bind(id)
+        .fetch_one(&mut *conn)
+        .await?
     };
     let author_keys = {
         let mut conn = state.pool.acquire().await?;
@@ -1241,7 +1297,7 @@ async fn apply(
     // deleted or a member removed since the sync began is 404 or 403.
     let permissions: Option<i32> = sqlx::query_scalar(
         "SELECT m.permissions FROM calendars c
-           JOIN calendar_members m ON m.calendar_id = c.id AND m.user_id = $2
+           JOIN calendar_members m ON m.calendar_id = c.id AND m.account_id = $2
           WHERE c.id = $1
           FOR UPDATE OF c",
     )
@@ -1268,9 +1324,10 @@ async fn apply(
             // is taken all the same (the insert says so).
             type Stored = (String, String, String, String, Vec<u8>);
             let stored: Option<Stored> = sqlx::query_as(
-                "SELECT shared_signed, shared_signed_signature,
-                        calendar_signed, calendar_signed_signature, shared_encrypted
-                   FROM calendar_events WHERE id = $1 AND calendar_id = $2",
+                "SELECT se.shared_signed, se.shared_signed_signature,
+                        e.calendar_signed, e.calendar_signed_signature, se.shared_encrypted
+                   FROM calendar_events e JOIN calendar_shared_events se ON se.id = e.shared_event_id
+                  WHERE e.id = $1 AND e.calendar_id = $2",
             )
             .bind(id)
             .bind(calendar)
@@ -1323,6 +1380,7 @@ async fn apply(
                 most_reminders,
             )?;
             type Current = (
+                Uuid,
                 String,
                 i64,
                 time::OffsetDateTime,
@@ -1330,15 +1388,21 @@ async fn apply(
                 i32,
                 Option<time::OffsetDateTime>,
             );
+            // Only an event this calendar is home to is changed here (E1/E2:
+            // every event is; an attendee's copy comes with E4).
             let current: Option<Current> = sqlx::query_as(
-                "SELECT uid, bytes, created_at, revision, sequence, recurrence_id FROM calendar_events
-                  WHERE id = $1 AND calendar_id = $2 FOR UPDATE",
+                "SELECT se.id, se.uid, (e.bytes + se.bytes)::bigint, e.created_at, e.revision,
+                        se.sequence, se.recurrence_id
+                   FROM calendar_events e JOIN calendar_shared_events se ON se.id = e.shared_event_id
+                  WHERE e.id = $1 AND e.calendar_id = $2 AND se.home_calendar_id = $2
+                  FOR UPDATE OF e, se",
             )
             .bind(id)
             .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            let Some((uid, old_bytes, created_at, revision, sequence, recurrence_id)) = current
+            let Some((shared_id, uid, old_bytes, created_at, revision, sequence, recurrence_id)) =
+                current
             else {
                 return Err(AppError::not_found("not found"));
             };
@@ -1372,20 +1436,26 @@ async fn apply(
                 .await?;
             // Every member's own reminders outlive the rewrite below.
             let kept: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
-                "SELECT user_id, reminders FROM calendar_event_reminders WHERE event_id = $1",
+                "SELECT account_id, reminders FROM calendar_event_reminders WHERE event_id = $1",
             )
             .bind(id)
             .fetch_all(&mut *tx)
             .await?;
-            sqlx::query("DELETE FROM calendar_events WHERE id = $1")
-                .bind(id)
+            // The shared row goes, and the calendar's row with it.
+            sqlx::query("DELETE FROM calendar_shared_events WHERE id = $1")
+                .bind(shared_id)
                 .execute(&mut *tx)
                 .await?;
             // Written again whole (its columns all come from the new
-            // parts), keeping its id and when it was made.
+            // parts), keeping its ids and when it was made.
             insert_as(
                 &mut tx,
-                Some((*id, created_at, revision + 1)),
+                Kept {
+                    id: *id,
+                    shared_id,
+                    created_at,
+                    revision: revision + 1,
+                },
                 calendar,
                 user_id,
                 address_id,
@@ -1394,7 +1464,7 @@ async fn apply(
             .await?;
             for (member, list) in kept {
                 sqlx::query(
-                    "INSERT INTO calendar_event_reminders (event_id, user_id, reminders)
+                    "INSERT INTO calendar_event_reminders (event_id, account_id, reminders)
                      VALUES ($1, $2, $3)",
                 )
                 .bind(id)
@@ -1413,15 +1483,17 @@ async fn apply(
         }
         EventChange::Delete { id, base_revision } => {
             debug_assert!(checked.is_none());
-            let current: Option<(i64, i64)> = sqlx::query_as(
-                "SELECT revision, bytes FROM calendar_events
-                  WHERE id = $1 AND calendar_id = $2 FOR UPDATE",
+            let current: Option<(i64, i64, Uuid, i64, bool)> = sqlx::query_as(
+                "SELECT e.revision, e.bytes, se.id, se.bytes, se.home_calendar_id = e.calendar_id
+                   FROM calendar_events e JOIN calendar_shared_events se ON se.id = e.shared_event_id
+                  WHERE e.id = $1 AND e.calendar_id = $2
+                  FOR UPDATE OF e, se",
             )
             .bind(id)
             .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            let Some((revision, bytes)) = current else {
+            let Some((revision, own_bytes, shared_id, shared_bytes, home)) = current else {
                 return Err(AppError::not_found("not found"));
             };
             if revision != *base_revision {
@@ -1430,10 +1502,21 @@ async fn apply(
                     revision,
                 ));
             }
-            sqlx::query("DELETE FROM calendar_events WHERE id = $1")
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+            // Deleted in its home calendar, the shared row goes (with every
+            // calendar's copy); elsewhere only this calendar's copy.
+            let bytes = if home {
+                sqlx::query("DELETE FROM calendar_shared_events WHERE id = $1")
+                    .bind(shared_id)
+                    .execute(&mut *tx)
+                    .await?;
+                own_bytes + shared_bytes
+            } else {
+                sqlx::query("DELETE FROM calendar_events WHERE id = $1")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                own_bytes
+            };
             crate::storage_pool::charge(
                 &mut *tx,
                 crate::storage_pool::Payer::Account(owner),
@@ -1463,8 +1546,10 @@ async fn check_parent(
         return Ok(());
     };
     let parent: Option<String> = sqlx::query_scalar(
-        "SELECT shared_signed FROM calendar_events
-          WHERE calendar_id = $1 AND uid = $2 AND recurrence_id IS NULL AND rrule IS NOT NULL",
+        "SELECT se.shared_signed FROM calendar_events e
+           JOIN calendar_shared_events se ON se.id = e.shared_event_id
+          WHERE e.calendar_id = $1 AND se.uid = $2 AND se.recurrence_id IS NULL
+            AND se.rrule IS NOT NULL",
     )
     .bind(calendar)
     .bind(&checked.shared.uid)
@@ -1511,6 +1596,14 @@ async fn check_parent(
     Ok(())
 }
 
+/// The ids, creation time and next revision of an event written again.
+struct Kept {
+    id: Uuid,
+    shared_id: Uuid,
+    created_at: time::OffsetDateTime,
+    revision: i64,
+}
+
 async fn insert(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
@@ -1519,23 +1612,21 @@ async fn insert(
     address_id: Uuid,
     checked: &Checked,
 ) -> AppResult<Uuid> {
-    let now = time::OffsetDateTime::now_utc();
-    insert_as(
-        tx,
-        Some((id, now, 1)),
-        calendar,
-        user_id,
-        address_id,
-        checked,
-    )
-    .await
+    // A new event's shared row takes its id: the calendar is its home.
+    let kept = Kept {
+        id,
+        shared_id: id,
+        created_at: time::OffsetDateTime::now_utc(),
+        revision: 1,
+    };
+    insert_as(tx, kept, calendar, user_id, address_id, checked).await
 }
 
-/// Inserts a checked event; `kept` is the id and creation time of the
-/// version it replaces, and the new version's revision.
+/// Inserts a checked event in the calendar it is home to: its shared row,
+/// then the calendar's own.
 async fn insert_as(
     tx: &mut Transaction<'_, Postgres>,
-    kept: Option<(Uuid, time::OffsetDateTime, i64)>,
+    kept: Kept,
     calendar: Uuid,
     user_id: Uuid,
     address_id: Uuid,
@@ -1544,30 +1635,73 @@ async fn insert_as(
     let event = &checked.event;
     let text = |data: &[u8]| String::from_utf8(data.to_vec()).expect("checked as text");
     let shared = &checked.shared;
-    sqlx::query_scalar(
-        "INSERT INTO calendar_events (id, calendar_id, uid, author_address_id, author_user_id,
-             shared_key_packet, calendar_key_packet,
-             shared_signed, shared_signed_signature, shared_encrypted, shared_encrypted_signature,
-             calendar_signed, calendar_signed_signature,
-             calendar_encrypted, calendar_encrypted_signature,
+    let taken = |error: sqlx::Error| match &error {
+        // The id is another calendar's event's.
+        sqlx::Error::Database(db)
+            if db.is_unique_violation()
+                && matches!(
+                    db.constraint(),
+                    Some("calendar_shared_events_pkey" | "calendar_events_pkey")
+                ) =>
+        {
+            coded(
+                AppError::conflict("another event has this id"),
+                "eventIdTaken",
+            )
+        }
+        sqlx::Error::Database(db) if db.is_unique_violation() => {
+            AppError::conflict("an event with this UID is in the calendar")
+                .with_details(serde_json::json!({ "code": "uidTaken" }))
+        }
+        _ => error.into(),
+    };
+    sqlx::query(
+        "INSERT INTO calendar_shared_events (id, home_calendar_id, uid, author_address_id,
+             author_account_id, shared_signed, shared_signed_signature,
+             shared_encrypted, shared_encrypted_signature,
              start_utc, end_utc, start_tz, end_tz, full_day, rrule, recurrence_id, range_end_utc,
-             sequence, bytes, created_at, revision)
-         VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                 $13, $14, $15, $16, $17, $18, $19, $20, $25, $26, $27, $21, $22,
-                 COALESCE($23, now()), COALESCE($24, 1))
-         RETURNING id",
+             sequence, revision, bytes, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                 $18, $19, $20, $21)",
     )
-    .bind(kept.map(|(id, _, _)| id))
+    .bind(kept.shared_id)
     .bind(calendar)
     .bind(&shared.uid)
     .bind(address_id)
     .bind(user_id)
-    .bind(&event.shared_key_packet)
-    .bind(&event.calendar_key_packet)
     .bind(text(&event.shared_signed.data))
     .bind(&event.shared_signed.signature)
     .bind(&event.shared_encrypted.data)
     .bind(&event.shared_encrypted.signature)
+    .bind(checked.start)
+    .bind(checked.end)
+    .bind(shared.dtstart.tzid())
+    .bind(shared.dtend.as_ref().and_then(EventTime::tzid))
+    .bind(shared.dtstart.is_date())
+    .bind(&shared.rrule)
+    .bind(checked.recurrence_id)
+    .bind(checked.range_end)
+    .bind(shared.sequence.min(i32::MAX as u32) as i32)
+    .bind(kept.revision)
+    .bind(checked.shared_bytes)
+    .bind(kept.created_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(taken)?;
+    sqlx::query_scalar(
+        "INSERT INTO calendar_events (id, calendar_id, shared_event_id,
+             shared_key_packet, calendar_key_packet,
+             calendar_signed, calendar_signed_signature,
+             calendar_encrypted, calendar_encrypted_signature,
+             revision, bytes, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id",
+    )
+    .bind(kept.id)
+    .bind(calendar)
+    .bind(kept.shared_id)
+    .bind(&event.shared_key_packet)
+    .bind(&event.calendar_key_packet)
     .bind(text(&event.calendar_signed.data))
     .bind(&event.calendar_signed.signature)
     .bind(
@@ -1582,34 +1716,10 @@ async fn insert_as(
             .as_ref()
             .map(|part| part.signature.clone()),
     )
-    .bind(checked.start)
-    .bind(checked.end)
-    .bind(shared.dtstart.tzid())
-    .bind(shared.dtend.as_ref().and_then(EventTime::tzid))
-    .bind(shared.dtstart.is_date())
-    .bind(shared.sequence.min(i32::MAX as u32) as i32)
-    .bind(checked.bytes)
-    .bind(kept.map(|(_, created_at, _)| created_at))
-    .bind(kept.map(|(_, _, revision)| revision))
-    .bind(&shared.rrule)
-    .bind(checked.recurrence_id)
-    .bind(checked.range_end)
+    .bind(kept.revision)
+    .bind(checked.own_bytes)
+    .bind(kept.created_at)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|error| match &error {
-        // The id is another calendar's event's.
-        sqlx::Error::Database(db)
-            if db.is_unique_violation() && db.constraint() == Some("calendar_events_pkey") =>
-        {
-            coded(
-                AppError::conflict("another event has this id"),
-                "eventIdTaken",
-            )
-        }
-        sqlx::Error::Database(db) if db.is_unique_violation() => {
-            AppError::conflict("an event with this UID is in the calendar")
-                .with_details(serde_json::json!({ "code": "uidTaken" }))
-        }
-        _ => error.into(),
-    })
+    .map_err(taken)
 }

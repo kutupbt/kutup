@@ -169,10 +169,13 @@ impl StreamControlRange {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum FederationStreamV1 {
-    /// Plain Chat sends (`/api/fed/chat/messages`).
+    /// Plain Chat sends (`/api/fed/v2/chat/messages`).
     Chat,
-    /// Chat media offers (`/api/fed/chat/media/offers`).
+    /// Chat media offers (`/api/fed/v2/chat/media/offers`).
     Media,
+    /// Sealed-sender Chat sends (`/api/fed/v2/chat/sealed/messages` and
+    /// `…/batch`).
+    Sealed,
 }
 
 /// A control message on a sequenced federation stream: it uses up one

@@ -78,7 +78,7 @@ impl Client {
         .join(",");
 
         let resp = self
-            .upload_request(Method::POST, "/uploads/")
+            .upload_request(Method::POST, "/drive/uploads/")
             .header("Tus-Resumable", TUS_VERSION)
             .header("Upload-Length", total_bytes.to_string())
             .header("Upload-Metadata", upload_meta)
@@ -109,7 +109,7 @@ impl Client {
     /// the session no longer exists (finished or swept). Mirrors `TusHead`.
     pub fn tus_head(&self, upload_id: &str) -> Result<Option<(i64, i64)>> {
         let resp = self
-            .request(Method::HEAD, &format!("/uploads/{upload_id}"))
+            .request(Method::HEAD, &format!("/drive/uploads/{upload_id}"))
             .header("Tus-Resumable", TUS_VERSION)
             .send()?;
         match resp.status().as_u16() {
@@ -134,7 +134,7 @@ impl Client {
     pub fn tus_patch_landed(&self, upload_id: &str, offset: i64, body: Vec<u8>) -> Result<Patched> {
         let len = body.len();
         let resp = self
-            .upload_request(Method::PATCH, &format!("/uploads/{upload_id}"))
+            .upload_request(Method::PATCH, &format!("/drive/uploads/{upload_id}"))
             .header("Tus-Resumable", TUS_VERSION)
             .header("Upload-Offset", offset.to_string())
             .header("Content-Type", "application/offset+octet-stream")
@@ -173,7 +173,7 @@ impl Client {
             upload_meta.push(format!("basedOn {}", b64(based_on.as_bytes())));
         }
         let resp = self
-            .upload_request(Method::POST, "/uploads/")
+            .upload_request(Method::POST, "/drive/uploads/")
             .header("Tus-Resumable", TUS_VERSION)
             .header("Upload-Length", total_bytes.to_string())
             .header("Upload-Metadata", upload_meta.join(","))
@@ -197,7 +197,7 @@ impl Client {
         body: &CommitRevision,
     ) -> Result<()> {
         let resp = self.post_json(
-            &format!("/files/{file_id}/revisions/{revision_id}/commit"),
+            &format!("/drive/files/{file_id}/revisions/{revision_id}/commit"),
             body,
         )?;
         if resp.status().as_u16() >= 400 {
@@ -209,7 +209,7 @@ impl Client {
     /// Cancels an in-flight upload (best-effort). Mirrors `TusDelete`.
     pub fn tus_delete(&self, upload_id: &str) -> Result<()> {
         let resp = self
-            .request(Method::DELETE, &format!("/uploads/{upload_id}"))
+            .request(Method::DELETE, &format!("/drive/uploads/{upload_id}"))
             .header("Tus-Resumable", TUS_VERSION)
             .send()?;
         let code = resp.status().as_u16();

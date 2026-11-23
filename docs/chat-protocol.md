@@ -107,7 +107,12 @@ An account may have 1-10 active Chat devices. The site setting
 `chatMaxActiveDevices` may lower that limit but cannot exceed ten. Its
 devices of every kind (Chat, editing apps, the CLI) share one id space
 (1-127) and are at most `devicesPerAccount` (default 32); see
-[`plans/one-device-list.md`](plans/one-device-list.md).
+[`plans/one-device-list.md`](plans/one-device-list.md). A new device takes the
+first free id at or after the account's counter (`accounts.next_device_id`),
+wrapping from 127 to 1, so a removed device's id comes back only after every
+other free id has had its turn. Ids are reused, as in Signal; what a peer
+keeps under an id is bound to the device's registration id (a new holder is
+`staleDevices`), and the server's rows under it go with the device.
 
 ### 4.1 One identity per account, and web installations
 
@@ -228,7 +233,7 @@ the account identity) resets the identity and keeps the devices: one device
 makes a new identity, and for every device it keeps a registration id and
 signed and last-resort keys, an `accountIdentity` sync sealed to each other
 kept device on its current session, and the next manifest listing exactly
-them; `PUT /api/chat/account-identity` stores it all in one transaction
+them; `PUT /api/v1/chat/account-identity` stores it all in one transaction
 (`409` for devices that aren't the manifest's, `410` for a stale
 registration id), drops the devices left out, clears the account's one-time
 keys and queues the syncs. Each other device keeps its sync in its store in
@@ -354,28 +359,28 @@ Relevant routes:
 
 | Route | Meaning |
 |---|---|
-| `POST /api/chat/device` | restart-safe device registration (`RegisterChatDeviceRequestV2`: a link token or a re-registration manifest, and the device credential) |
-| `POST /api/chat/link-tokens` | one single-use token for linking a new device |
-| `POST /api/chat/provisioning/ticket` | a single-use ticket for the new device's provisioning socket |
-| `GET /api/chat/provisioning?ticket=` | the provisioning socket: an address, then at most one envelope |
-| `PUT /api/chat/provisioning/{address}` | relay one provisioning envelope to a socket of the same account |
-| `PUT /api/chat/account-identity` | the identity distribution |
-| `POST /api/chat/keys/check` | whether the server holds this device's identity and repeated-use keys |
-| `PATCH /api/chat/device/{deviceId}` | rename the account-private device label without changing its identity |
-| `DELETE /api/chat/device/{deviceId}` | revoke one device |
-| `POST/GET /api/chat/backup` | provision or inspect the encrypted history archive |
-| `POST/GET /api/chat/backup/segments` | append or restore ordered encrypted event segments |
-| `POST /api/chat/backup/bases` | stage a client-compacted encrypted base |
-| `GET /api/chat/backup/bases/{id}` | stream the currently committed encrypted base |
-| `PUT /api/chat/backup/manifest` | atomically CAS-commit a signed restore point |
-| `POST /api/chat/backup/media/copy` | outer-encrypt an existing Chat-media ciphertext for history |
-| `POST/GET /api/chat/backup/media[/{id}]` | upload or lazily restore backup-media ciphertext |
-| `POST /api/chat/backup/media/reconciliation` | page the exact next restore-point media reference set |
-| `POST /api/chat/manifest` | publish exact next signed manifest |
-| `GET /api/chat/accounts/{accountId}/manifest?server=` | current local/federated manifest |
-| `GET /api/chat/accounts/{accountId}/manifest-history?server=` | bounded complete history page |
-| `GET /api/fed/chat/accounts/{accountId}/manifest` | signed-federation current manifest |
-| `GET /api/fed/chat/accounts/{accountId}/manifest-history` | signed-federation history page |
+| `POST /api/v1/chat/devices` | restart-safe device registration (`RegisterChatDeviceRequestV2`: a link token or a re-registration manifest, and the device credential) |
+| `POST /api/v1/chat/link-tokens` | one single-use token for linking a new device |
+| `POST /api/v1/chat/provisioning/ticket` | a single-use ticket for the new device's provisioning socket |
+| `GET /api/v1/chat/provisioning?ticket=` | the provisioning socket: an address, then at most one envelope |
+| `PUT /api/v1/chat/provisioning/{address}` | relay one provisioning envelope to a socket of the same account |
+| `PUT /api/v1/chat/account-identity` | the identity distribution |
+| `POST /api/v1/chat/keys/check` | whether the server holds this device's identity and repeated-use keys |
+| `PATCH /api/v1/chat/devices/{deviceId}` | rename the account-private device label without changing its identity |
+| `DELETE /api/v1/chat/devices/{deviceId}` | revoke one device |
+| `POST/GET /api/v1/chat/backup` | provision or inspect the encrypted history archive |
+| `POST/GET /api/v1/chat/backup/segments` | append or restore ordered encrypted event segments |
+| `POST /api/v1/chat/backup/bases` | stage a client-compacted encrypted base |
+| `GET /api/v1/chat/backup/bases/{id}` | stream the currently committed encrypted base |
+| `PUT /api/v1/chat/backup/manifest` | atomically CAS-commit a signed restore point |
+| `POST /api/v1/chat/backup/media/copy` | outer-encrypt an existing Chat-media ciphertext for history |
+| `POST/GET /api/v1/chat/backup/media[/{id}]` | upload or lazily restore backup-media ciphertext |
+| `POST /api/v1/chat/backup/media/reconciliation` | page the exact next restore-point media reference set |
+| `POST /api/v1/chat/manifest` | publish exact next signed manifest |
+| `GET /api/v1/chat/accounts/{accountId}/manifest?server=` | current local/federated manifest |
+| `GET /api/v1/chat/accounts/{accountId}/manifest-history?server=` | bounded complete history page |
+| `GET /api/fed/v2/chat/accounts/{accountId}/manifest` | signed-federation current manifest |
+| `GET /api/fed/v2/chat/accounts/{accountId}/manifest-history` | signed-federation history page |
 
 ## 6. Direct Chat and Note to Self
 
@@ -393,7 +398,7 @@ its manifest lists.
 Registration publishes the signed EC prekey and the last-resort ML-KEM prekey
 as id 1, with a pool of one-time EC and ML-KEM prekeys. The client tops
 each pool back up to its target whenever the server reports it below the low
-watermark (`PUT /api/chat/keys`); replenished ids are random.
+watermark (`PUT /api/v1/chat/keys`); replenished ids are random.
 
 The signed and last-resort pair is used by every first message that finds no
 one-time key left, so it is replaced on a schedule, as Signal does
@@ -401,13 +406,13 @@ one-time key left, so it is replaced on a schedule, as Signal does
 
 - **Every two days** (checked at start, on each reconnect and hourly while
   open) the client generates a new pair, signs both with the
-  identity key, and uploads it in the same `PUT /api/chat/keys` request as
+  identity key, and uploads it in the same `PUT /api/v1/chat/keys` request as
   any top-up. The pair and the upload are staged in one transaction before
   the request, so a client that crashes or goes offline mid-upload sends the
   same pair again; it becomes current only when the server accepts it.
 - **A replaced pair is kept** for as long as a first message made with it can
   still sit in the mailbox: the server's `mailboxRetentionDays` (from
-  `GET /api/chat/capabilities`) plus seven days for clocks, late delivery
+  `GET /api/v1/chat/capabilities`) plus seven days for clocks, late delivery
   and devices that were offline. A server that keeps mail for ever (`0`)
   means replaced pairs are kept for ever too.
 - **A used one-time ML-KEM prekey is deleted** 14 days after a message first
@@ -736,7 +741,7 @@ of messages (docs/plans/maps.md "Live location"):
   the write secret (kept by the sharing device) and of `readCapability`,
   the update and times; no account, conversation or position.
 - Readers poll every 10 s while the message is on screen; a reader on
-  another server reads through its own (`/api/fed/chat/live-locations`).
+  another server reads through its own (`/api/fed/v2/chat/live-locations`).
   After a new generation the old stream is deleted, so someone who left has
   a key to nothing new.
 - The sharing device writes about every 15–30 s while moving and every
@@ -866,7 +871,7 @@ requests/minute, 120 sealed sends/minute and 10,000/day/capability, 600
 federated sends/minute/origin, 32 envelopes and 1 MiB/request. Unknown recipient
 and invalid capability return the same response shape.
 
-**Sealed batches.** `POST /api/chat/anonymous/messages/batch?server=` carries
+**Sealed batches.** `POST /api/v1/chat/anonymous/messages/batch?server=` carries
 1–64 sealed sends to accounts of one server (`SealedBatchSubmissionV1`: each
 recipient's `accountId` and its single-route submission), at most 4 MiB, in one
 request: a group message reaches every member device without one request per
@@ -897,7 +902,7 @@ whole request, which is safe to repeat because `sendId`s dedupe.
 
 **Multi-recipient sends** (docs/plans/pairwise-groups.md, slice 2; Signal's
 `PUT /v1/messages/multi_recipient`). `POST
-/api/chat/anonymous/messages/multi?server=` carries one group message to
+/api/v1/chat/anonymous/messages/multi?server=` carries one group message to
 member accounts of one server, sent once: `SealedMultiSubmissionV1` with
 `sendId`, `payload` (libsignal's sent sealed-sender v2 message, version
 `0x23`, recipients as 17-byte account service ids, no excluded recipients),
@@ -940,9 +945,9 @@ or the maintenance sweep).
 
 **The client side** (group send endorsements,
 docs/plans/group-send-endorsements.md). Each device fetches its account's
-daily endorsement from its own server (`GET /api/chat/group-send/endorsement`)
+daily endorsement from its own server (`GET /api/v1/chat/group-send/endorsement`)
 when the one it holds has less than 25 hours left, at most hourly, and checks
-it against the server's published key (`GET /api/chat/group-send/params`)
+it against the server's published key (`GET /api/v1/chat/group-send/params`)
 before keeping it. The fetch runs from the account's periodic sync, whether
 or not the account is in any group, and never from a send, so its timing says
 nothing about the account's groups.
@@ -953,7 +958,7 @@ pseudonym as subject. It reads the other members' blobs from each home
 (`GetEndorsements`, paged after a cursor) with every send that needs one and
 every periodic look, and keeps a blob only when it opens, names the member's
 own server, and holds a response for that member under that server's key
-(another server's keys come from `GET /api/chat/group-send/params?server=`;
+(another server's keys come from `GET /api/v1/chat/group-send/params?server=`;
 a key id this device doesn't hold fetches them again, once). The read cursor
 moves past every blob it reads. One whose check can't finish (its server's
 keys unreachable) goes on the group's retry list, one per pseudonym and
@@ -984,7 +989,7 @@ good, as a refused pairwise copy does; `rateLimited` sends that member's copy
 pairwise later, and `429` waits.
 
 For another server's members, this server forwards the send at once to that
-server's `POST /api/fed/chat/sealed/multi` (signed federation), waits for its
+server's `POST /api/fed/v2/chat/sealed/multi` (signed federation), waits for its
 answer (the usual federation timeout) and relays it as it is: `200`, `409`,
 `410`, the destination's `400`/`413`, or its `401 groupSendTokenInvalid` (the
 destination verifies the token with its own keys; the origin never does). A destination that is slow,
@@ -1020,7 +1025,7 @@ at most once every 5 seconds per head whichever backend asks
 is noticed at once, and the rest of the queue follows when the head settles.
 Otherwise it sends the run of
 consecutive pending sends from the head, sized before it is loaded, in signed
-`POST /api/fed/chat/sealed/batch` requests (`FederatedSealedBatchV1`, at most
+`POST /api/fed/v2/chat/sealed/batch` requests (`FederatedSealedBatchV1`, at most
 64 transactions and 4 MiB). The destination checks the batch's shape first
 (one origin, consecutive sequences) and refuses a malformed batch before
 applying any of it. Otherwise it applies the transactions one by one as
@@ -1114,7 +1119,7 @@ with the session repair and the visible record described in §6.
 
 The browser store is encrypted at rest (`kutup-chat-core/src/db/store_cipher.rs`,
 `docs/research/16-browser-storage-architecture.md`). A random 256-bit store key
-is kept as an account record (purpose 28, `ChatStoreKey`) under the account
+is kept as an account record (purpose 21, `ChatStoreKey`) under the account
 master key, its header naming the key's generation so it opens across a
 master-key rotation, bound to the account's key binding and, by its object (the
 SHA-256 of the name), to the database name;

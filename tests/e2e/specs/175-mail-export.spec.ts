@@ -28,6 +28,8 @@ test('the Inbox exported as a zip of .eml files', async ({ browser, request }) =
   await composer.getByRole('textbox', { name: 'Subject' }).fill(subject)
   await mail.getByRole('textbox', { name: 'Message' }).fill('Bu ileti zip içinde olmalı.')
   await mail.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
+  // Sent before openWhenArrived reloads the page, which would abort the send.
+  await expect(mail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
   await openWhenArrived(mail, new RegExp(subject))
 
   await mail.goto(appUrl('mail', '/settings/general'))

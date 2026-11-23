@@ -76,7 +76,7 @@ async fn deliver(state: &AppState, user: Uuid, subject: &str, body: &str) -> any
     // The account's own address on the server's domain, the oldest first.
     let address: Option<String> = sqlx::query_scalar(
         "SELECT address FROM mail_addresses
-          WHERE user_id = $1 AND domain_id IS NULL AND state = 'active'
+          WHERE account_id = $1 AND domain_id IS NULL AND state = 'active'
           ORDER BY created_at LIMIT 1",
     )
     .bind(user)

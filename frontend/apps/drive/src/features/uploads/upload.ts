@@ -81,7 +81,7 @@ async function uploadRemote(
   form.append('fileKeyEnvelope', record.fileKeyEnvelope)
   form.append('nameHash', nameHash)
   form.append('file', sealed.blob, 'encrypted')
-  await api.post(`/drive/federation/shares/${shareId}/files`, form, {
+  await api.post(`/drive/federation/folder-shares/${shareId}/files`, form, {
     signal,
     onUploadProgress: (e) => progress(Math.round((e.progress ?? 0) * file.size), file.size),
   })
@@ -130,7 +130,7 @@ async function sealToBlob(
  * as "Keep both" does), so the server keeps the name unique, and its
  * content hash is recorded once it is stored
  * (docs/plans/drive-unique-names.md). `sha256`: the content's, when it was
- * read already. A taken name rejects with the server's `name_taken`
+ * read already. A taken name rejects with the server's `nameTaken`
  * (`asNameTaken`).
  */
 export async function uploadOne(
@@ -159,7 +159,7 @@ export async function uploadOne(
     )
     return null
   }
-  const owner = getSession()?.userId
+  const owner = getSession()?.accountId
   const uploaded = await streamUpload({
     file,
     collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },

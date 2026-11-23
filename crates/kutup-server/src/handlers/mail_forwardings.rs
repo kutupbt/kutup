@@ -1,5 +1,5 @@
 //! Mail forwarding's API (docs/plans/mail-forwarding.md), Proton's shape
-//! under `/api/mail/forwardings`: the forwarder sets a forwarding up with
+//! under `/api/v1/mail/forwardings`: the forwarder sets a forwarding up with
 //! the material its client made, the forwardee accepts or declines it, and
 //! either side ends it. The proxy factors are sealed at once and no answer
 //! ever carries one, the forwarder's included.
@@ -28,7 +28,7 @@ use crate::handlers::trusted_uuid;
 use crate::mail::filters::{self, Condition, Field, Match};
 use crate::mail::forwarding::{self, MAX_PER_ACCOUNT, MAX_PER_ADDRESS, PENDING_DAYS};
 use crate::mail::forwarding_code;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const MAX_ACTIVATION_CHARS: usize = 65536;
@@ -38,7 +38,7 @@ const MAX_ACTIVATION_CHARS: usize = 65536;
 #[serde(rename_all = "camelCase")]
 pub struct MailForwarding {
     pub id: String,
-    /// `end_to_end` or `outside`.
+    /// `endToEnd` or `outside`.
     pub kind: String,
     /// `pending`, `active`, `outdated`, `paused` or `rejected`.
     pub state: String,
@@ -340,7 +340,7 @@ const SELECT: &str = "SELECT f.id, f.kind, f.state, a.address, f.forwardee_email
                              f.conditions, f.skipped, f.created_at, f.expires_at,
                              f.notice, f.verified_at IS NOT NULL,
                              CASE WHEN f.code_expires_at > now() THEN f.code_expires_at END,
-                             f.code_attempts, f.user_id
+                             f.code_attempts, f.account_id
                         FROM mail_forwardings f JOIN mail_addresses a ON a.id = f.forwarder_address_id";
 
 fn view(row: Row) -> MailForwarding {
@@ -396,28 +396,28 @@ fn incoming_view(row: Row) -> MailForwarding {
     }
 }
 
-/// `GET /api/mail/forwardings` — the caller's forwardings both ways.
+/// `GET /api/v1/mail/forwardings` — the caller's forwardings both ways.
 #[utoipa::path(
     get,
-    path = "/api/mail/forwardings",
+    path = "/api/v1/mail/forwardings",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Both ways", body = MailForwardings))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<MailForwardings>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let outgoing: Vec<Row> = sqlx::query_as(&format!(
-        "{SELECT} WHERE f.user_id = $1 ORDER BY f.created_at"
+        "{SELECT} WHERE f.account_id = $1 ORDER BY f.created_at"
     ))
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
     let incoming: Vec<Row> = sqlx::query_as(&format!(
         "{SELECT} JOIN mail_addresses b ON b.id = f.forwardee_address_id
-          WHERE b.user_id = $1 AND f.state <> 'rejected'
+          WHERE b.account_id = $1 AND f.state <> 'rejected'
             AND (f.verified_at IS NOT NULL OR f.state <> 'pending')
           ORDER BY f.created_at"
     ))
@@ -441,8 +441,8 @@ async fn local_person(
         return Ok(None);
     }
     Ok(sqlx::query_as(
-        "SELECT a.id, a.user_id, a.address, a.disabled_at IS NOT NULL FROM mail_addresses a
-           JOIN users u ON u.id = a.user_id AND u.is_active
+        "SELECT a.id, a.account_id, a.address, a.disabled_at IS NOT NULL FROM mail_addresses a
+           JOIN accounts u ON u.id = a.account_id AND u.state = 'active'
           WHERE a.folded = kutup_address_folded($1)
             AND a.state = 'active' AND a.group_id IS NULL",
     )
@@ -451,12 +451,12 @@ async fn local_person(
     .await?)
 }
 
-/// `POST /api/mail/forwardings` — sets a forwarding of one of the caller's
+/// `POST /api/v1/mail/forwardings` — sets a forwarding of one of the caller's
 /// addresses up. To a Kutup address on this server it is end to end, and
 /// the body carries the material the forwarder's client made.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings",
+    path = "/api/v1/mail/forwardings",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = CreateMailForwarding,
@@ -469,10 +469,10 @@ async fn local_person(
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<CreateMailForwarding>,
 ) -> AppResult<(StatusCode, Json<MailForwarding>)> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address_id =
         Uuid::parse_str(&req.forwarder_address_id).map_err(|_| AppError::not_found("not found"))?;
     let id = Uuid::parse_str(&req.id)
@@ -527,9 +527,9 @@ pub async fn create(
 
     let inserted = sqlx::query(
         "INSERT INTO mail_forwardings
-           (id, user_id, forwarder_address_id, forwardee_email, forwardee_address_id,
+           (id, account_id, forwarder_address_id, forwardee_email, forwardee_address_id,
             kind, state, match, conditions)
-         VALUES ($1, $2, $3, $4, $5, 'end_to_end', 'pending', $6, $7)
+         VALUES ($1, $2, $3, $4, $5, 'endToEnd', 'pending', $6, $7)
          ON CONFLICT DO NOTHING",
     )
     .bind(id)
@@ -567,7 +567,7 @@ async fn prepare(
     user_id: Uuid,
     address_id: Uuid,
 ) -> AppResult<Vec<u8>> {
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR NO KEY UPDATE")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
@@ -575,7 +575,7 @@ async fn prepare(
     let forwarder_key: Option<Vec<u8>> = sqlx::query_scalar(
         "SELECT k.public_key FROM mail_addresses a
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active' AND a.group_id IS NULL",
+          WHERE a.id = $1 AND a.account_id = $2 AND a.state = 'active' AND a.group_id IS NULL",
     )
     .bind(address_id)
     .bind(user_id)
@@ -586,7 +586,7 @@ async fn prepare(
     };
     let (per_address, per_account): (i64, i64) = sqlx::query_as(
         "SELECT COUNT(*) FILTER (WHERE forwarder_address_id = $2), COUNT(*)
-           FROM mail_forwardings WHERE user_id = $1",
+           FROM mail_forwardings WHERE account_id = $1",
     )
     .bind(user_id)
     .bind(address_id)
@@ -725,13 +725,13 @@ async fn unverified_room(
     user_id: Uuid,
     except: Option<Uuid>,
 ) -> AppResult<()> {
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR NO KEY UPDATE")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
     let waiting: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM mail_forwardings
-          WHERE user_id = $1 AND state = 'pending' AND verified_at IS NULL
+          WHERE account_id = $1 AND state = 'pending' AND verified_at IS NULL
             AND id IS DISTINCT FROM $2",
     )
     .bind(user_id)
@@ -867,7 +867,7 @@ async fn create_outside(
     };
     let inserted = sqlx::query(
         "INSERT INTO mail_forwardings
-           (id, user_id, forwarder_address_id, forwardee_email, kind, state, match, conditions)
+           (id, account_id, forwarder_address_id, forwardee_email, kind, state, match, conditions)
          VALUES ($1, $2, $3, $4, 'outside', 'pending', $5, $6)
          ON CONFLICT DO NOTHING",
     )
@@ -902,12 +902,12 @@ async fn create_outside(
     Ok((StatusCode::CREATED, Json(one(state, id).await?)))
 }
 
-/// `PUT /api/mail/forwardings/{id}/reinvite` — the forwarder asks an
+/// `PUT /api/v1/mail/forwardings/{id}/reinvite` — the forwarder asks an
 /// outside destination again (a pending forwarding, or a declined one): it
 /// is pending and unverified, and a new code goes out.
 #[utoipa::path(
     put,
-    path = "/api/mail/forwardings/{id}/reinvite",
+    path = "/api/v1/mail/forwardings/{id}/reinvite",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -915,10 +915,10 @@ async fn create_outside(
 )]
 pub async fn reinvite(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, _) = lock(&mut tx, user_id, &id).await?;
     let kind: String = sqlx::query_scalar("SELECT kind FROM mail_forwardings WHERE id = $1")
@@ -1017,11 +1017,11 @@ async fn by_token(
     row.ok_or_else(|| AppError::not_found("not found"))
 }
 
-/// `POST /api/mail/forwardings/external` — the public stop page reads what
+/// `POST /api/v1/mail/forwardings/external` — the public stop page reads what
 /// a link is for (no account needed).
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/external",
+    path = "/api/v1/mail/forwardings/external",
     tag = "mail",
     request_body = ForwardingToken,
     responses((status = 200, description = "The forwarding", body = ExternalForwarding), (status = 404, description = "No such link"), (status = 429, description = "rateLimited"))
@@ -1043,13 +1043,13 @@ pub async fn external(
     }))
 }
 
-/// `POST /api/mail/forwardings/external/decline` — the outside destination
+/// `POST /api/v1/mail/forwardings/external/decline` — the outside destination
 /// refuses the forwarding, pending or active: it is `rejected` for the
 /// forwarder, and the link spent. Nothing on this page starts a forwarding:
 /// only the code the forwarder enters does.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/external/decline",
+    path = "/api/v1/mail/forwardings/external/decline",
     tag = "mail",
     request_body = ForwardingToken,
     responses((status = 204, description = "Declined"), (status = 404, description = "No such link"), (status = 429, description = "rateLimited"))
@@ -1092,7 +1092,7 @@ async fn lock(
 ) -> AppResult<(Uuid, Side, String, Option<Uuid>)> {
     let id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
     let row: Option<(Uuid, Option<Uuid>, String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT f.user_id, b.user_id, f.state, f.forwardee_address_id
+        "SELECT f.account_id, b.account_id, f.state, f.forwardee_address_id
            FROM mail_forwardings f
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
           WHERE f.id = $1 FOR UPDATE OF f",
@@ -1111,12 +1111,12 @@ async fn lock(
     }
 }
 
-/// `DELETE /api/mail/forwardings/{id}` — either side ends it; its proxy
+/// `DELETE /api/v1/mail/forwardings/{id}` — either side ends it; its proxy
 /// factors go with it. The forwardee keeps the forwarding key (mail already
 /// forwarded needs it) until they delete it.
 #[utoipa::path(
     delete,
-    path = "/api/mail/forwardings/{id}",
+    path = "/api/v1/mail/forwardings/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1124,10 +1124,10 @@ async fn lock(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, _, _, _) = lock(&mut tx, user_id, &id).await?;
     let address: Uuid = sqlx::query_scalar(
@@ -1144,12 +1144,12 @@ pub async fn delete(
 /// Moves a forwarding the forwarder owns from one state to another.
 async fn forwarder_moves(
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     id: &str,
     from: &str,
     to: &str,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, _) = lock(&mut tx, user_id, id).await?;
     if side != Side::Forwarder {
@@ -1176,12 +1176,12 @@ async fn forwarder_moves(
     Ok(Json(one(state, id).await?))
 }
 
-/// `POST /api/mail/forwardings/{id}/code` — the forwarder has a new
+/// `POST /api/v1/mail/forwardings/{id}/code` — the forwarder has a new
 /// verification code mailed to the destination (the last one void), at most
 /// `forwarding_code_resends` a minute and `forwarding_invites` a day.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/{id}/code",
+    path = "/api/v1/mail/forwardings/{id}/code",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1193,10 +1193,10 @@ async fn forwarder_moves(
 )]
 pub async fn send_code(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, _) = lock(&mut tx, user_id, &id).await?;
     if side != Side::Forwarder {
@@ -1253,14 +1253,14 @@ async fn clear_code(
     Ok(())
 }
 
-/// `POST /api/mail/forwardings/{id}/verify` — the forwarder enters the code
+/// `POST /api/v1/mail/forwardings/{id}/verify` — the forwarder enters the code
 /// mailed to the destination. Right: the forwarding is verified (an outside
 /// one active; an end-to-end one now shown to its forwardee to accept).
 /// Wrong: `400 codeWrong` with the tries left, the last one voiding the
 /// code (`409 codeVoid`); none live: `409 codeExpired`.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/{id}/verify",
+    path = "/api/v1/mail/forwardings/{id}/verify",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1273,11 +1273,11 @@ async fn clear_code(
 )]
 pub async fn verify(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<ForwardingCode>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let typed = req.code.trim();
     if !forwarding_code::well_formed(typed) {
         return Err(AppError::bad_request("a verification code is six digits"));
@@ -1384,11 +1384,11 @@ pub async fn verify(
     Ok(Json(one(&state, id).await?))
 }
 
-/// `PUT /api/mail/forwardings/{id}/pause` — the forwarder pauses an active
+/// `PUT /api/v1/mail/forwardings/{id}/pause` — the forwarder pauses an active
 /// forwarding; its proxy factors are kept.
 #[utoipa::path(
     put,
-    path = "/api/mail/forwardings/{id}/pause",
+    path = "/api/v1/mail/forwardings/{id}/pause",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1396,16 +1396,16 @@ pub async fn verify(
 )]
 pub async fn pause(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailForwarding>> {
     forwarder_moves(&state, &user, &id, "active", "paused").await
 }
 
-/// `PUT /api/mail/forwardings/{id}/resume` — and resumes it.
+/// `PUT /api/v1/mail/forwardings/{id}/resume` — and resumes it.
 #[utoipa::path(
     put,
-    path = "/api/mail/forwardings/{id}/resume",
+    path = "/api/v1/mail/forwardings/{id}/resume",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1413,17 +1413,17 @@ pub async fn pause(
 )]
 pub async fn resume(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailForwarding>> {
     forwarder_moves(&state, &user, &id, "paused", "active").await
 }
 
-/// `PUT /api/mail/forwardings/{id}/conditions` — the forwarder changes what
+/// `PUT /api/v1/mail/forwardings/{id}/conditions` — the forwarder changes what
 /// is forwarded.
 #[utoipa::path(
     put,
-    path = "/api/mail/forwardings/{id}/conditions",
+    path = "/api/v1/mail/forwardings/{id}/conditions",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1432,11 +1432,11 @@ pub async fn resume(
 )]
 pub async fn conditions(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<MailForwardingConditions>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     check_conditions(&req.conditions)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, _, _) = lock(&mut tx, user_id, &id).await?;
@@ -1458,13 +1458,13 @@ pub async fn conditions(
     Ok(Json(one(&state, id).await?))
 }
 
-/// `PUT /api/mail/forwardings/{id}` — the forwarder renews an Outdated or
+/// `PUT /api/v1/mail/forwardings/{id}` — the forwarder renews an Outdated or
 /// declined forwarding with new material (Proton's "Re-enable" and
 /// "Request confirmation"); it is pending and unverified again, and a new
 /// code goes out.
 #[utoipa::path(
     put,
-    path = "/api/mail/forwardings/{id}",
+    path = "/api/v1/mail/forwardings/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1473,11 +1473,11 @@ pub async fn conditions(
 )]
 pub async fn renew(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<RenewMailForwarding>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, forwardee_address) = lock(&mut tx, user_id, &id).await?;
     if side != Side::Forwarder {
@@ -1493,7 +1493,7 @@ pub async fn renew(
         "SELECT k.public_key FROM mail_forwardings f
            JOIN mail_addresses a ON a.id = f.forwarder_address_id AND a.state = 'active'
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE f.id = $1 AND f.kind = 'end_to_end'",
+          WHERE f.id = $1 AND f.kind = 'endToEnd'",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
@@ -1512,11 +1512,11 @@ pub async fn renew(
     Ok(Json(one(&state, id).await?))
 }
 
-/// `GET /api/mail/forwardings/{id}/activation` — a pending forwarding's
+/// `GET /api/v1/mail/forwardings/{id}/activation` — a pending forwarding's
 /// activation, for its forwardee.
 #[utoipa::path(
     get,
-    path = "/api/mail/forwardings/{id}/activation",
+    path = "/api/v1/mail/forwardings/{id}/activation",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1524,17 +1524,17 @@ pub async fn renew(
 )]
 pub async fn activation(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailForwardingActivation>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let row: Option<(String, String, String, OffsetDateTime)> = sqlx::query_as(
         "SELECT a.address, b.address, f.activation, f.expires_at
            FROM mail_forwardings f
            JOIN mail_addresses a ON a.id = f.forwarder_address_id
            JOIN mail_addresses b ON b.id = f.forwardee_address_id
-          WHERE f.id = $1 AND b.user_id = $2 AND f.state = 'pending'
+          WHERE f.id = $1 AND b.account_id = $2 AND f.state = 'pending'
             AND f.verified_at IS NOT NULL
             AND f.activation IS NOT NULL AND f.expires_at > now()",
     )
@@ -1553,13 +1553,13 @@ pub async fn activation(
     }))
 }
 
-/// `POST /api/mail/forwardings/{id}/accept` — the forwardee keeps the
+/// `POST /api/v1/mail/forwardings/{id}/accept` — the forwardee keeps the
 /// forwarding key as an address key (never primary, never encrypted to, out
 /// of the signed key list) and the forwarding becomes active. The key's
 /// subkeys must be exactly the forwarding's.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/{id}/accept",
+    path = "/api/v1/mail/forwardings/{id}/accept",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1572,11 +1572,11 @@ pub async fn activation(
 )]
 pub async fn accept(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<AcceptMailForwarding>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let public_key = base64(&req.public_key, "publicKey")?;
     let envelope = account_record::decode_record_b64(
         &req.private_key_envelope,
@@ -1628,7 +1628,7 @@ pub async fn accept(
         ));
     }
     let binding: String =
-        sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT COALESCE(key_binding::text, '') FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -1675,12 +1675,12 @@ pub async fn accept(
     Ok(Json(one(&state, id).await?))
 }
 
-/// `POST /api/mail/forwardings/{id}/decline` — the forwardee declines a
+/// `POST /api/v1/mail/forwardings/{id}/decline` — the forwardee declines a
 /// pending forwarding: its proxy factors and activation go; the forwarder
 /// may ask again with new material.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/{id}/decline",
+    path = "/api/v1/mail/forwardings/{id}/decline",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1688,10 +1688,10 @@ pub async fn accept(
 )]
 pub async fn decline(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, _) = lock(&mut tx, user_id, &id).await?;
     // Before it is verified, the forwardee isn't shown it.
@@ -1714,12 +1714,12 @@ pub async fn decline(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/mail/addresses/{address}/forwarding-keys/{key}` — the
+/// `DELETE /api/v1/mail/addresses/{address}/forwarding-keys/{key}` — the
 /// forwardee deletes a forwarding key; the forwarding it serves ends with
 /// it (with the key gone, its proxy factors must not outlive it).
 #[utoipa::path(
     delete,
-    path = "/api/mail/addresses/{address}/forwarding-keys/{key}",
+    path = "/api/v1/mail/addresses/{address}/forwarding-keys/{key}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(
@@ -1730,16 +1730,16 @@ pub async fn decline(
 )]
 pub async fn delete_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((address, key)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = Uuid::parse_str(&address).map_err(|_| AppError::not_found("not found"))?;
     let key = Uuid::parse_str(&key).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     let deleted: Option<Option<Uuid>> = sqlx::query_scalar(
         "DELETE FROM mail_address_keys k USING mail_addresses a
-          WHERE k.id = $1 AND k.address_id = $2 AND a.id = k.address_id AND a.user_id = $3
+          WHERE k.id = $1 AND k.address_id = $2 AND a.id = k.address_id AND a.account_id = $3
             AND k.is_forwarding
          RETURNING k.forwarding_id",
     )

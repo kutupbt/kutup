@@ -17,10 +17,11 @@ import type { AdminSettings, PublicSharing, RegistrationMode, RegistrySetting, S
 import { SETTING_LABELS } from './limitLabels'
 import { useAdminSettings, useSettingsRegistry, useUpdateAdminSettings } from './api'
 import { Choice } from './federation/Choice'
+import { ClientVersionsSection } from './ClientVersions'
 import { bytesToGib, gibToBytes } from './helpers'
 
 const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
-const SHARING: readonly PublicSharing[] = ['on', 'signed_in', 'off']
+const SHARING: readonly PublicSharing[] = ['on', 'signedIn', 'off']
 const ON_OFF: readonly ('on' | 'off')[] = ['on', 'off']
 
 /** The server's bounds (site_settings::validate_chat_delivery_retention_days). */
@@ -39,6 +40,20 @@ const AVATAR_PENDING_SECONDS = { min: 60, max: 7 * 24 * 3600 } as const
 
 /** The largest Pass vault upload is set in MiB. */
 const MIB = 1024 * 1024
+
+/** The server's bounds (site_settings::validate_version_retention_choices). */
+const MAX_RETENTION_CHOICES = 20
+const MAX_VERSION_RETENTION_DAYS = 36500
+
+/** "7, 30, 90" as days, or null when it isn't such a list (ascending, none twice, within bounds). */
+function parseRetentionChoices(text: string): number[] | null {
+  const parts = text.split(',').map((part) => part.trim())
+  if (parts.length > MAX_RETENTION_CHOICES || parts.some((part) => !/^\d+$/.test(part))) return null
+  const days = parts.map(Number)
+  if (days.some((day) => day < 1 || day > MAX_VERSION_RETENTION_DAYS)) return null
+  if (days.some((day, index) => index > 0 && day <= days[index - 1])) return null
+  return days
+}
 
 export function ServerSettingsPage() {
   const { t } = useTranslation()
@@ -64,8 +79,9 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
   const linkJoins = z.coerce.number<number>().int(t('admin.settings.groupLinkJoinsRange')).min(1, t('admin.settings.groupLinkJoinsRange')).max(MAX_LINK_JOINS, t('admin.settings.groupLinkJoinsRange'))
   const schema = z.object({
     registrationMode: z.enum(['on', 'code', 'off']),
-    publicSharing: z.enum(['on', 'signed_in', 'off']),
+    publicSharing: z.enum(['on', 'signedIn', 'off']),
     federationDefault: z.enum(['on', 'off']),
+    federationConsentRequired: z.enum(['on', 'off']),
     quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
@@ -83,6 +99,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
     avatarStorage: z.coerce.number<number>().int(t('admin.settings.groupAvatarStorageRange')).max(MAX_AVATAR_STORAGE, t('admin.settings.groupAvatarStorageRange')),
     avatarPending: z.coerce.number<number>().int(t('admin.settings.groupAvatarPendingRange')).min(AVATAR_PENDING_SECONDS.min, t('admin.settings.groupAvatarPendingRange')).max(AVATAR_PENDING_SECONDS.max, t('admin.settings.groupAvatarPendingRange')),
     passVaultMib: z.coerce.number<number>().int(t('admin.settings.passVaultMaxRange')).min(1, t('admin.settings.passVaultMaxRange')).max(1024, t('admin.settings.passVaultMaxRange')),
+    retentionChoices: z.string().refine((text) => parseRetentionChoices(text) !== null, t('admin.settings.versionRetentionChoicesInvalid')),
   }).refine((v) => v.avatarStorage >= 2 * v.avatarMax, { path: ['avatarStorage'], message: t('admin.settings.groupAvatarStorageRange') })
   const { register, control, handleSubmit, reset, formState: { errors, isDirty } } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
@@ -92,6 +109,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
       registrationMode: settings.registrationMode,
       publicSharing: settings.publicSharing,
       federationDefault: settings.federationDefault ? 'on' : 'off',
+      federationConsentRequired: settings.federationConsentRequired ? 'on' : 'off',
       quotaGib: bytesToGib(settings.defaultStorageQuotaBytes),
       mailboxDays: settings.chatMailboxRetentionDays,
       mediaDays: settings.chatMediaDeliveryRetentionDays,
@@ -102,6 +120,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
       avatarStorage: settings.chatGroupAvatarStoragePerGroupBytes,
       avatarPending: settings.chatGroupAvatarPendingSeconds,
       passVaultMib: Math.round(settings.passVaultMaxBytes / MIB),
+      retentionChoices: settings.driveVersionRetentionChoices.join(', '),
     })
   }, [settings, registry, reset])
 
@@ -111,6 +130,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
         registrationMode: v.registrationMode,
         publicSharing: v.publicSharing,
         federationDefault: v.federationDefault === 'on',
+        federationConsentRequired: v.federationConsentRequired === 'on',
         defaultStorageQuotaBytes: gibToBytes(v.quotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
@@ -121,6 +141,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
         chatGroupAvatarStoragePerGroupBytes: v.avatarStorage,
         chatGroupAvatarPendingSeconds: v.avatarPending,
         passVaultMaxBytes: v.passVaultMib * MIB,
+        driveVersionRetentionChoices: parseRetentionChoices(v.retentionChoices) ?? settings.driveVersionRetentionChoices,
       },
       { onSuccess: () => toast.success(t('admin.settings.saved')) },
     ),
@@ -175,6 +196,19 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
                       name="federationDefault"
                       render={({ field }) => (
                         <Choice value={field.value} options={ON_OFF} labelPrefix="admin.settings.federationDefaultMode" onChange={field.onChange} ariaLabel={t('admin.settings.federationDefault')} />
+                      )}
+                    />
+                  )}
+                </Field>
+              </div>
+              <div className="mt-5 max-w-sm">
+                <Field label={t('admin.settings.federationConsentRequired')} description={t('admin.settings.federationConsentRequiredHint')}>
+                  {() => (
+                    <Controller
+                      control={control}
+                      name="federationConsentRequired"
+                      render={({ field }) => (
+                        <Choice value={field.value} options={ON_OFF} labelPrefix="admin.settings.federationDefaultMode" onChange={field.onChange} ariaLabel={t('admin.settings.federationConsentRequired')} />
                       )}
                     />
                   )}
@@ -252,6 +286,9 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
           <Card>
             <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
               {numericFields('drive')}
+              <Field label={t('admin.settings.versionRetentionChoices')} error={errors.retentionChoices?.message} description={t('admin.settings.versionRetentionChoicesHint')} required>
+                {(field) => <Input {...field} {...register('retentionChoices')} inputMode="numeric" data-testid="admin-version-retention-choices" />}
+              </Field>
             </CardContent>
           </Card>
         </Section>
@@ -304,11 +341,19 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
             </CardContent>
           </Card>
         </Section>
+        <Section title={t('admin.settings.sessions')} description={t('admin.settings.sessionsHint')}>
+          <Card>
+            <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+              {numericFields('sessions')}
+            </CardContent>
+          </Card>
+        </Section>
         {update.isError ? <Alert variant="error">{apiErrorMessage(update.error, t('admin.settings.saveFailed'))}</Alert> : null}
         <div className="flex justify-end">
           <Button type="submit" loading={update.isPending} disabled={!isDirty}>{t('common.save')}</Button>
         </div>
       </form>
+      <ClientVersionsSection />
     </PageBody>
   )
 }

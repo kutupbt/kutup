@@ -48,7 +48,7 @@ fn drive_integrity_contract() {
     );
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/files/{}/versions", file.id)),
+            c.get(format!("{base}/api/v1/drive/files/{}/versions", file.id)),
             &viewer.token
         )
         .send()
@@ -68,7 +68,10 @@ fn drive_integrity_contract() {
     );
     assert_eq!(
         bearer(
-            c.put(format!("{base}/api/files/{}/thumbnails/sm", file.id)),
+            c.put(format!(
+                "{base}/api/v1/drive/files/{}/thumbnails/sm",
+                file.id
+            )),
             &viewer.token
         )
         .body(vec![0u8; 64])
@@ -80,7 +83,7 @@ fn drive_integrity_contract() {
     );
     assert_eq!(
         bearer(
-            c.delete(format!("{base}/api/files/{}/thumbnails", file.id)),
+            c.delete(format!("{base}/api/v1/drive/files/{}/thumbnails", file.id)),
             &viewer.token
         )
         .send()
@@ -90,7 +93,7 @@ fn drive_integrity_contract() {
     );
     assert_eq!(
         bearer(
-            c.post(format!("{base}/api/files/{}/claim-seed", file.id)),
+            c.post(format!("{base}/api/v1/drive/files/{}/claim-seed", file.id)),
             &viewer.token
         )
         .send()
@@ -113,7 +116,10 @@ fn drive_integrity_contract() {
     let vid = version["id"].as_str().unwrap();
     let patch = |token: &str, label: &str| {
         bearer(
-            c.patch(format!("{base}/api/files/{}/versions/{vid}", file.id)),
+            c.patch(format!(
+                "{base}/api/v1/drive/files/{}/versions/{vid}",
+                file.id
+            )),
             token,
         )
         .json(&json!({ "label": label }))
@@ -187,7 +193,7 @@ fn drive_integrity_contract() {
     let before = used(&c, &base, &owner.token);
     assert_eq!(
         bearer(
-            c.delete(format!("{base}/api/files/{}", doomed.id)),
+            c.delete(format!("{base}/api/v1/drive/files/{}", doomed.id)),
             &owner.token
         )
         .send()
@@ -199,7 +205,7 @@ fn drive_integrity_contract() {
         for _ in 0..6 {
             scope.spawn(|| {
                 bearer(
-                    c.delete(format!("{base}/api/trash/{}", doomed.id)),
+                    c.delete(format!("{base}/api/v1/drive/trash/{}", doomed.id)),
                     &owner.token,
                 )
                 .send()
@@ -224,7 +230,10 @@ fn drive_integrity_contract() {
     assert_eq!(r.status(), StatusCode::NO_CONTENT, "idempotent");
     assert_eq!(used(&c, &base, &owner.token) - before, charged);
     let stored = bearer(
-        c.get(format!("{base}/api/files/{}/assets/img-1", file.id)),
+        c.get(format!(
+            "{base}/api/v1/drive/files/{}/assets/img-1",
+            file.id
+        )),
         &owner.token,
     )
     .send()
@@ -249,25 +258,28 @@ fn drive_integrity_contract() {
     .unwrap();
     let link = |hours: i64| {
         let id = uuid();
-        bearer(c.post(format!("{base}/api/share")), &owner.token)
-            .json(&json!({
-                "id": id,
-                "shareType": "collection",
-                "targetId": folder.id,
-                "collectionKeyEnvelope": link_envelope,
-                "ownerLinkKeyEnvelope": owner_link_key(&[7u8; 32], &owner, &id),
-                "expiresInHours": hours,
-            }))
-            .send()
-            .unwrap()
-            .status()
+        bearer(
+            c.post(format!("{base}/api/v1/drive/public-links")),
+            &owner.token,
+        )
+        .json(&json!({
+            "id": id,
+            "shareType": "collection",
+            "targetId": folder.id,
+            "collectionKeyEnvelope": link_envelope,
+            "ownerLinkKeyEnvelope": owner_link_key(&[7u8; 32], &owner, &id),
+            "expiresInHours": hours,
+        }))
+        .send()
+        .unwrap()
+        .status()
     };
     assert_eq!(link(i64::MAX / 2), StatusCode::BAD_REQUEST);
     assert_eq!(link(0), StatusCode::BAD_REQUEST);
     assert_eq!(link(24), StatusCode::CREATED);
 
     // --- Request bodies are bounded by default. ---
-    let r = bearer(c.patch(format!("{base}/api/user/me")), &owner.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/account")), &owner.token)
         .header("content-type", "application/json")
         .body(format!(
             "{{\"username\":\"{}\"}}",
@@ -307,7 +319,7 @@ fn admin_delete_user_hands_contributions_over() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-        sqlx::query("UPDATE users SET is_admin = true WHERE id = $1::uuid")
+        sqlx::query("UPDATE accounts SET role = 'admin' WHERE id = $1::uuid")
             .bind(&admin.id)
             .execute(&pool)
             .await
@@ -342,7 +354,7 @@ fn admin_delete_user_hands_contributions_over() {
     let owner_before = used(&c, &base, &owner.token);
 
     let r = bearer(
-        c.delete(format!("{base}/api/admin/users/{}", leaver.id)),
+        c.delete(format!("{base}/api/v1/admin/accounts/{}", leaver.id)),
         &admin.token,
     )
     .send()
@@ -364,7 +376,7 @@ fn admin_delete_user_hands_contributions_over() {
     runtime.block_on(async {
         let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
         let left: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM files WHERE id = $1::uuid OR collection_id = $2::uuid",
+            "SELECT COUNT(*) FROM drive_files WHERE id = $1::uuid OR collection_id = $2::uuid",
         )
         .bind(&own.id)
         .bind(&own_folder.id)

@@ -13,13 +13,12 @@ use serde_json::json;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::rate_limits::{entry, RateLimitUnit};
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::ratelimit::{self, Section, Spec};
-use crate::site_settings::{
-    self, NumericSetting, SettingSection, SettingUnit, ValueSource, RATE_LIMIT_PREFIX,
-};
+use crate::site_settings::{self, NumericSetting, SettingSection, SettingUnit, ValueSource};
 use crate::AppState;
 
 /// One whole-number setting, as Server settings shows it.
@@ -27,7 +26,7 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct RegistryEntry {
     pub key: &'static str,
-    /// Its field in `/api/admin/settings`.
+    /// Its field in `/api/v1/admin/settings`.
     pub field: &'static str,
     pub section: SettingSection,
     pub unit: SettingUnit,
@@ -48,19 +47,19 @@ pub struct RegistryResponse {
     pub settings: Vec<RegistryEntry>,
 }
 
-/// `GET /api/admin/settings/registry` — every whole-number setting with its
+/// `GET /api/v1/admin/settings/registry` — every whole-number setting with its
 /// section, unit, first value, range and value now: what Server settings
 /// builds its fields from.
 #[utoipa::path(
     get,
-    path = "/api/admin/settings/registry",
+    path = "/api/v1/admin/settings/registry",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Every whole-number setting", body = RegistryResponse))
 )]
 pub async fn registry(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<RegistryResponse>> {
     let stored: HashMap<String, String> =
         sqlx::query_as::<_, (String, String)>("SELECT key, value FROM site_settings")
@@ -112,9 +111,9 @@ pub struct AccountSettingEntry {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRateLimitEntry {
-    /// `rate_limit.<key>` (what `PUT …/limits/{key}` takes).
-    pub key: String,
-    /// The limit's own key, as Rate limits lists it.
+    /// The limit's key (what `PUT …/limits/{key}` takes).
+    pub key: &'static str,
+    /// The limit's key, as Rate limits lists it (the same as `key`).
     pub limit: &'static str,
     pub section: Section,
     pub unit: RateLimitUnit,
@@ -135,14 +134,10 @@ pub struct AccountLimitsResponse {
 
 /// The account's own values, by key, as stored.
 async fn own_values(state: &AppState, account: Uuid) -> AppResult<HashMap<String, i64>> {
-    Ok(sqlx::query_as::<_, (String, i64)>(
-        "SELECT key, value FROM user_setting_overrides WHERE user_id = $1",
+    Ok(
+        crate::entitlements::all(&state.pool, crate::entitlements::Holder::Account(account))
+            .await?,
     )
-    .bind(account)
-    .fetch_all(&state.pool)
-    .await?
-    .into_iter()
-    .collect())
 }
 
 async fn site_value(state: &AppState, setting: &NumericSetting) -> AppResult<Option<String>> {
@@ -183,7 +178,7 @@ fn rate_limit_entry(
     let shown = entry(spec, site);
     let own = ratelimit::account_override(spec.limit, &account.to_string());
     AccountRateLimitEntry {
-        key: format!("{RATE_LIMIT_PREFIX}{}", spec.key),
+        key: spec.key,
         limit: spec.key,
         section: spec.section,
         unit: shown.unit,
@@ -202,18 +197,18 @@ fn rate_limit_entry(
 
 /// The account's username, or 404 when there is no such account.
 async fn account_name(state: &AppState, id: Uuid) -> AppResult<Option<String>> {
-    sqlx::query_scalar::<_, Option<String>>("SELECT username FROM users WHERE id = $1")
+    sqlx::query_scalar::<_, Option<String>>("SELECT username FROM accounts WHERE id = $1")
         .bind(id)
         .fetch_optional(&state.pool)
         .await?
         .ok_or_else(|| AppError::not_found("user not found"))
 }
 
-/// `GET /api/admin/users/{id}/limits` — the settings and rate limits that
+/// `GET /api/v1/admin/accounts/{id}/entitlements` — the settings and rate limits that
 /// limit one account, as they stand for this one.
 #[utoipa::path(
     get,
-    path = "/api/admin/users/{id}/limits",
+    path = "/api/v1/admin/accounts/{id}/entitlements",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path, description = "The account")),
@@ -224,7 +219,7 @@ async fn account_name(state: &AppState, id: Uuid) -> AppResult<Option<String>> {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<AccountLimitsResponse>> {
     account_name(&state, id).await?;
@@ -259,11 +254,7 @@ enum Target {
 }
 
 fn target(key: &str) -> AppResult<Target> {
-    if let Some(limit) = key.strip_prefix(RATE_LIMIT_PREFIX) {
-        let spec = ratelimit::SPECS
-            .iter()
-            .find(|spec| spec.key == limit)
-            .ok_or_else(|| AppError::not_found("no such limit"))?;
+    if let Some(spec) = ratelimit::SPECS.iter().find(|spec| spec.key == key) {
         if !spec.overridable() {
             return Err(AppError::bad_request(format!(
                 "{} is not counted per account",
@@ -293,20 +284,20 @@ pub enum AccountLimitEntry {
     RateLimit(AccountRateLimitEntry),
 }
 
-/// `PUT /api/admin/users/{id}/limits/{key}` — gives the account its own
+/// `PUT /api/v1/admin/accounts/{id}/entitlements/{key}` — gives the account its own
 /// value of a setting or rate limit that limits one account (`key`: a
-/// setting's key, or `rate_limit.<key>`), or (`null`) takes it back. A value
+/// setting's or a rate limit's key), or (`null`) takes it back. A value
 /// outside the range is refused, never clamped. Lowering it below what the
-/// account already uses only stops new growth. Audited as `user.setting` or
-/// `user.rate_limit`.
+/// account already uses only stops new growth. Audited as `account.setEntitlement`
+/// or `account.setRateLimit`.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}/limits/{key}",
+    path = "/api/v1/admin/accounts/{id}/entitlements/{key}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(
         ("id" = Uuid, Path, description = "The account"),
-        ("key" = String, Path, description = "A setting's key, or rate_limit.<key>"),
+        ("key" = String, Path, description = "A setting's or a rate limit's key"),
     ),
     request_body = UpdateLimitRequest,
     responses(
@@ -317,18 +308,18 @@ pub enum AccountLimitEntry {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path((id, key)): Path<(Uuid, String)>,
     Json(request): Json<UpdateLimitRequest>,
 ) -> AppResult<Json<AccountLimitEntry>> {
-    let username = account_name(&state, id).await?;
+    account_name(&state, id).await?;
     let target = target(&key)?;
     let (stored_key, action) = match &target {
         Target::Setting(_, setting) => {
             if let Some(value) = request.value {
                 setting.validate(value).map_err(AppError::bad_request)?;
             }
-            (setting.key.to_owned(), "user.setting")
+            (setting.key.to_owned(), AdminAction::AccountSetEntitlement)
         }
         Target::RateLimit(spec) => {
             let ceiling = ratelimit::ceiling(spec);
@@ -340,45 +331,29 @@ pub async fn update(
                     )));
                 }
             }
-            (
-                format!("{RATE_LIMIT_PREFIX}{}", spec.key),
-                "user.rate_limit",
-            )
+            (spec.key.to_owned(), AdminAction::AccountSetRateLimit)
         }
     };
     let previous = own_values(&state, id).await?.get(&stored_key).copied();
-    match request.value {
-        Some(value) => {
-            sqlx::query(
-                "INSERT INTO user_setting_overrides (user_id, key, value) VALUES ($1, $2, $3)
-                 ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
-            )
-            .bind(id)
-            .bind(&stored_key)
-            .bind(value)
-            .execute(&state.pool)
-            .await?;
-        }
-        None => {
-            sqlx::query("DELETE FROM user_setting_overrides WHERE user_id = $1 AND key = $2")
-                .bind(id)
-                .bind(&stored_key)
-                .execute(&state.pool)
-                .await?;
-        }
-    }
+    crate::entitlements::set_or_clear(
+        &state.pool,
+        crate::entitlements::Holder::Account(id),
+        &stored_key,
+        request.value,
+        crate::entitlements::Source::Admin,
+    )
+    .await?;
     let site = ratelimit::reload(&state.pool).await?;
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         action,
         Some(id),
         // Named as the pages name them: a rate limit by its own key (as
-        // `settings.rate_limit` logs it), a setting by its key, field and
+        // `settings.setRateLimit` logs it), a setting by its key, field and
         // section.
         match &target {
             Target::Setting(section, setting) => json!({
-                "username": username,
                 "key": setting.key,
                 "field": setting.field,
                 "section": section,
@@ -386,7 +361,6 @@ pub async fn update(
                 "previous": previous,
             }),
             Target::RateLimit(spec) => json!({
-                "username": username,
                 "key": spec.key,
                 "value": request.value,
                 "previous": previous,

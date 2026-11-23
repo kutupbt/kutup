@@ -227,7 +227,7 @@ function applied(values: HeadIndex, changes: ListedEdit<unknown>['changes']): He
 /** Runs `task` under this origin's lock of `name` (other tabs wait), where the browser has locks. */
 function locked<T>(name: string, task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  return locks ? (locks.request(`kutup-account-head:${name}`, task) as Promise<T>) : task()
+  return locks ? (locks.request(`kutup.account.head:${name}`, task) as Promise<T>) : task()
 }
 
 /** What one check of a head found. */
@@ -438,7 +438,7 @@ export class AccountHeadClient {
         return
       } catch (error) {
         // Another device started it (or a listed write landed): check that one.
-        if (conflictCode(error) === 'head_conflict' && attempt < WRITE_TRIES) continue
+        if (conflictCode(error) === 'headConflict' && attempt < WRITE_TRIES) continue
         throw error
       }
     }
@@ -534,7 +534,7 @@ export class AccountHeadClient {
         return result
       } catch (error) {
         const code = conflictCode(error)
-        if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < WRITE_TRIES) continue
+        if ((code === 'headConflict' || code === 'revisionConflict') && attempt < WRITE_TRIES) continue
         throw error
       } finally {
         base?.free()
@@ -553,6 +553,11 @@ export class AccountHeadClient {
     const { copy, verified } = await this.readRecords(scope)
     verified?.free()
     return copy
+  }
+
+  /** What every copy of this account's records is named with (sign-out drops them). */
+  copyPrefix(): string {
+    return `${this.engine.localStateName()}:`
   }
 
   private copyName(scope: RecordScopeName): string {
@@ -685,7 +690,7 @@ export class AccountHeadClient {
         return change.done
       } catch (error) {
         const code = conflictCode(error)
-        if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < WRITE_TRIES) continue
+        if ((code === 'headConflict' || code === 'revisionConflict') && attempt < WRITE_TRIES) continue
         throw error
       } finally {
         base?.free()
@@ -760,13 +765,13 @@ const clients = new Map<string, { masterKeys: MasterKeys; client: Promise<Accoun
  * again when the master key changes), over this origin's store.
  */
 export function accountHead(session: {
-  userId: string
+  accountId: string
   masterKeys: MasterKeys
   roots: AccountRoots
   envelopeBinding: string
 }): Promise<AccountHeadClient> {
   const masterKeys = session.masterKeys
-  const known = clients.get(session.userId)
+  const known = clients.get(session.accountId)
   if (known?.masterKeys === masterKeys) return known.client
   if (known) void known.client.then((client) => client.close(), () => undefined)
   watchSignOut()
@@ -777,9 +782,9 @@ export function accountHead(session: {
   const client = lazyEngine(masterKeys, session.roots, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store, api, Date.now, records))
   // Not kept when it failed: the next call tries again.
   client.catch(() => {
-    if (clients.get(session.userId)?.client === client) clients.delete(session.userId)
+    if (clients.get(session.accountId)?.client === client) clients.delete(session.accountId)
   })
-  clients.set(session.userId, { masterKeys, client })
+  clients.set(session.accountId, { masterKeys, client })
   return client
 }
 
@@ -801,4 +806,14 @@ function watchSignOut(): void {
   subscribe(() => {
     if (!getSession() && clients.size > 0) closeAccountHeads()
   })
+}
+
+/**
+ * Drops this origin's copies of `session`'s records (sign-out,
+ * docs/plans/api-surface.md §6): the head's anchors stay.
+ */
+export async function forgetAccountRecords(session: Parameters<typeof accountHead>[0]): Promise<void> {
+  const client = await accountHead(session)
+  sharedRecords ??= indexedDbRecordsStore()
+  await sharedRecords.clearPrefix(client.copyPrefix())
 }

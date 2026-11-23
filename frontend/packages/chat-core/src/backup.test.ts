@@ -4,7 +4,7 @@ import 'fake-indexeddb/auto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@kutup/crypto/accountRecord', () => ({
-  ACCOUNT_RECORD_PURPOSE: { chatBackupRoot: 4 },
+  ACCOUNT_RECORD_PURPOSE: { chatBackupRoot: 13 },
   openMasterKeyRecord: vi.fn(async () => new Uint8Array(32).fill(7)),
   sealAccountRecord: vi.fn(async () => 'sealed-root'),
 }))

@@ -33,7 +33,7 @@ function subscribe(listener: () => void) {
 export function openVault(
   vault: VaultFile,
   key: VaultKeyInput,
-  userId: string,
+  accountId: string,
   beforeShown?: (session: VaultSession) => Promise<void>,
 ): Promise<VaultSession> {
   const id = vault.file.id
@@ -41,7 +41,7 @@ export function openVault(
   if (open) return beforeShown ? beforeShown(open).then(() => open) : Promise.resolve(open)
   let pending = opening.get(id)
   if (!pending) {
-    pending = VaultSession.open(vault.folder, vault.file, key, userId, vault.canEdit)
+    pending = VaultSession.open(vault.folder, vault.file, key, accountId, vault.canEdit)
       .then(async (session) => {
         try {
           await beforeShown?.(session)
@@ -61,7 +61,7 @@ export function openVault(
 
 /** The signed-in account ('' when signed out: nothing is locked under it). */
 function account(): string {
-  return getSession()?.userId ?? ''
+  return getSession()?.accountId ?? ''
 }
 
 /**

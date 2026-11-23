@@ -18,7 +18,7 @@ export function usePublicSharing() {
     queryFn: async (): Promise<SharingOff | null> => {
       const settings = await loadServerSettings<{ publicSharing?: string }>()
       if (settings.publicSharing === 'off') return 'site'
-      const { data } = await api.get<{ publicSharing?: string }>('/user/me')
+      const { data } = await api.get<{ publicSharing?: string }>('/account')
       return data.publicSharing === 'off' ? 'account' : null
     },
     staleTime: 60_000,
@@ -30,10 +30,10 @@ export function isTargetBlocked(error: unknown): boolean {
   return isAxiosError(error) && (error.response?.data as { code?: string } | undefined)?.code === 'targetBlocked'
 }
 
-/** The scope of a `403 sharing_off` refusal; null for any other error. */
+/** The scope of a `403 sharingOff` refusal; null for any other error. */
 export function sharingOffScope(error: unknown): SharingOff | null {
   if (!isAxiosError(error)) return null
   const data = error.response?.data as { code?: string; scope?: string } | undefined
-  if (data?.code !== 'sharing_off') return null
+  if (data?.code !== 'sharingOff') return null
   return data.scope === 'account' ? 'account' : 'site'
 }

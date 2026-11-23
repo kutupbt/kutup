@@ -48,6 +48,10 @@ static() {
   python3 scripts/check-browser-fold.py
   step "Labels in the registry (docs/plans/w6-key-hierarchy.md §3)"
   scripts/check-labels.sh
+  step "API names (docs/plans/api-surface.md §8)"
+  python3 scripts/check-api-names.py
+  step "Byte columns compared on their bytes (docs/plans/w7-schema.md §2)"
+  python3 scripts/check-sql-boundary.py
   step "Frontend lockfile (runtime singletons resolve once)"
   python3 scripts/test-check-lockfile-singletons.py
   python3 scripts/check-lockfile-singletons.py frontend/pnpm-lock.yaml

@@ -6,7 +6,7 @@ import { loadServerSettings } from '@kutup/session/apps'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 
 export interface DriveIdentity {
-  userId: string
+  accountId: string
   /** `username@server`: this account's current handle. */
   account: string
   /** This account, for good: its server and permanent id (`users.id`). */
@@ -40,9 +40,9 @@ export async function driveIdentityOf(session: Session): Promise<DriveIdentity> 
   if (!serverName) throw new Error('the server did not publish its name')
   if (!session.username) throw new Error('this account has no username')
   return {
-    userId: session.userId,
+    accountId: session.accountId,
     account: `${session.username}@${serverName}`,
-    accountRef: { server: serverName, accountId: session.userId },
+    accountRef: { server: serverName, accountId: session.accountId },
     binding: session.envelopeBinding,
     incarnationId: identity.incarnationId,
     masterKey: session.masterKey,

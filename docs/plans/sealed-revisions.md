@@ -44,7 +44,7 @@ from:
 - folder, label and filter renames take `baseNameRevision`.
 
 The new revision must be above the base. A write that started from another
-revision gets `409` with `code: "revision_conflict"` and the current
+revision gets `409` with `code: "revisionConflict"` and the current
 revision. The web apps then read the value again and apply the edit once
 more (`kutup-server` `revisions.rs`). The Contacts editor does not retry:
 the person sees that the contact changed elsewhere, so their form is never

@@ -9,7 +9,7 @@
 //   1. Encode current Yjs state via Y.encodeStateAsUpdateV2.
 //   2. Call encryptSnapshot() (provided by caller: the Drive block format,
 //      bound to a new revision, whose id becomes the version's).
-//   3. POST it to /api/files/:fileId/versions (one request: stored, charged
+//   3. POST it to /api/v1/drive/files/:fileId/versions (one request: stored, charged
 //      by its measured size, recorded, update log truncated to the seq),
 //      with the file's next metadata naming it as the saved state
 //      (`commitState`; docs/plans/drive-block-format.md §2).

@@ -150,13 +150,13 @@ treated as evidence for the full object.
 4. The sender writes the attachment message to its history and asks its own
    server for the destination's copy (an authenticated media-delivery
    request). The message is encrypted and sent only once the answer is
-   `stored` or `already_stored` (Signal's model,
+   `stored` or `alreadyStored` (Signal's model,
    docs/plans/federation-outbox.md): on `queued` it waits, showing as
    sending, in a job the client keeps across restarts, and asks the same
    operation again with backoff (at most five minutes between asks, and when
    the app comes back online or reopens) for at most
    `chatAttachmentSendLifetimeSeconds` (a site setting, one day by default).
-   `storage_full`, a refusal (`404`, `422`) or the end of that lifetime shows
+   `storageFull`, a refusal (`404`, `422`) or the end of that lifetime shows
    the message as not delivered, with a retry; a retry after a refusal asks
    under a new operation. The origin may retain the local sender and
    recipient internally for retry; they never enter a destination
@@ -230,7 +230,7 @@ uploads sweep deletes a stale inbound hand-over and releases its reservation.
 
 When the recipient's storage pool is full, the message descriptor may remain
 in E2EE history while the attachment is visibly unavailable. The destination
-does not partially store it. Sender and recipient receive stable `storage_full` state,
+does not partially store it. Sender and recipient receive stable `storageFull` state,
 and retry requires available quota plus an unexpired origin object.
 
 Normal accepted media remains until the recipient clears it, its disappearing
@@ -259,7 +259,7 @@ W3 slice 6), kept at its newest revision only
 (`kutup_crypto::chat_attachment_ledger`):
 
 ```text
-header (KUTPAR1)  suite 1, purpose ChatAttachmentLedger (14), master-key
+header (KUTPAR1)  suite 1, purpose ChatAttachmentLedger (17), master-key
                   generation, the account's key binding,
                   object = the entity's record id (32 random bytes),
                   revision (non-zero),
@@ -275,23 +275,25 @@ length-prefixed encoding, not signed JSON. It binds version, conversation
 kind/reference, logical message UUID, attachment UUID, opaque
 storage-reference UUID, exact logical ciphertext bytes, state, media class,
 bounded display name, update time and an optional promoted Drive file UUID.
-States are `active`, `cleared`, `saved_to_drive` and `expired`. The server
+Conversation kinds are `direct` (the peer's account reference), `group` (the
+pairwise group id, 32 bytes base64url without padding) and `noteToSelf` (the
+account's own reference). States are `active`, `cleared`, `savedToDrive` and `expired`. The server
 cannot classify or join an entry to a sender or conversation.
 
-Writes are batches of `POST /api/account/records` with the next account head:
+Writes are batches of `POST /api/v1/account/records` with the next account head:
 each entity's put names the revision it read, so a retried or raced write is
-refused (`revision_conflict`) and the client reads again and redoes it. The
+refused (`revisionConflict`) and the client reads again and redoes it. The
 account head covers the scope (a count and digest of every `(id, revision)`),
 so a server that rolls an entity back, drops one or brings an old one back is
 caught when the client checks the scope's index against the verified head.
 The private hash chain, the history table, the operation ids and the ledger's
-own cursor are gone: the records feed (`GET /api/account/records/chatAttachments`)
+own cursor are gone: the records feed (`GET /api/v1/account/records/chatAttachments`)
 and the head replace them.
 
 Clients decrypt the scope and build a disposable in-memory projection; they
 do not persist decrypted conversation or attachment metadata. The number of
 entities an account keeps is a site setting
-(`account_records_chat_attachments`).
+(`chat.records.attachments`).
 
 ## 9. Client behavior
 

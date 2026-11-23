@@ -60,7 +60,7 @@ pub struct VersionRow {
     #[serde(default)]
     pub doc_key_id: i64,
     #[serde(default)]
-    pub author_user_id: String,
+    pub author_account_id: String,
     #[serde(default)]
     pub size_bytes: i64,
     #[serde(default)]
@@ -84,11 +84,11 @@ pub struct VersionRow {
 /// Where a revision of a file is read from.
 #[derive(Clone, Debug)]
 pub enum ContentRoute<'a> {
-    /// `/files/{id}/download`: the current content.
+    /// `/drive/files/{id}/download`: the current content.
     Current(&'a str),
-    /// `/files/{id}/versions/{vid}/download`.
+    /// `/drive/files/{id}/versions/{vid}/download`.
     Version(&'a str, &'a str),
-    /// `/files/{id}/original`: the original upload.
+    /// `/drive/files/{id}/original`: the original upload.
     Original(&'a str),
     /// A file in a folder shared from another server.
     Federated { share_id: &'a str, file_id: &'a str },
@@ -99,13 +99,15 @@ pub enum ContentRoute<'a> {
 impl ContentRoute<'_> {
     fn path(&self) -> String {
         match self {
-            ContentRoute::Current(id) => format!("/files/{id}/download"),
-            ContentRoute::Version(id, vid) => format!("/files/{id}/versions/{vid}/download"),
-            ContentRoute::Original(id) => format!("/files/{id}/original"),
+            ContentRoute::Current(id) => format!("/drive/files/{id}/download"),
+            ContentRoute::Version(id, vid) => format!("/drive/files/{id}/versions/{vid}/download"),
+            ContentRoute::Original(id) => format!("/drive/files/{id}/original"),
             ContentRoute::Federated { share_id, file_id } => {
-                format!("/drive/federation/shares/{share_id}/files/{file_id}/content")
+                format!("/drive/federation/folder-shares/{share_id}/files/{file_id}/content")
             }
-            ContentRoute::Public { token, file_id } => format!("/share/{token}/download/{file_id}"),
+            ContentRoute::Public { token, file_id } => {
+                format!("/drive/public-links/{token}/files/{file_id}/download")
+            }
         }
     }
 }
@@ -166,7 +168,7 @@ impl Client {
     /// Lists a file's snapshot versions, newest-first. Mirrors `ListVersions`.
     pub fn list_versions(&self, file_id: &str) -> Result<Vec<VersionRow>> {
         let resp = self
-            .request(Method::GET, &format!("/files/{file_id}/versions"))
+            .request(Method::GET, &format!("/drive/files/{file_id}/versions"))
             .send()?;
         super::decode_json(resp)
     }
@@ -201,7 +203,7 @@ impl Client {
             .text("metadataEnvelope", version.metadata_envelope.clone())
             .text("metadataRevision", version.metadata_revision.to_string());
         let resp = self
-            .request(Method::POST, &format!("/files/{file_id}/versions"))
+            .request(Method::POST, &format!("/drive/files/{file_id}/versions"))
             .multipart(form.part("file", part))
             .send()?;
         super::decode_json(resp)
@@ -217,7 +219,7 @@ impl Client {
         let resp = self
             .request(
                 Method::PATCH,
-                &format!("/files/{file_id}/versions/{version_id}"),
+                &format!("/drive/files/{file_id}/versions/{version_id}"),
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(patch)

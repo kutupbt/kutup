@@ -27,7 +27,7 @@ impl Db {
         self.runtime
             .block_on(
                 sqlx::query_scalar::<_, i16>(
-                    "SELECT sealing_key_id FROM account_keys.account_data_keys WHERE user_id = $1",
+                    "SELECT sealing_key_id FROM account_keys.account_data_keys WHERE account_id = $1",
                 )
                 .bind(Uuid::parse_str(user_id).unwrap())
                 .fetch_optional(&self.pool),
@@ -39,7 +39,7 @@ impl Db {
     fn drop_key(&self, user_id: &str) {
         self.runtime
             .block_on(
-                sqlx::query("DELETE FROM account_keys.account_data_keys WHERE user_id = $1")
+                sqlx::query("DELETE FROM account_keys.account_data_keys WHERE account_id = $1")
                     .bind(Uuid::parse_str(user_id).unwrap())
                     .execute(&self.pool),
             )
@@ -50,7 +50,7 @@ impl Db {
         self.runtime
             .block_on(
                 sqlx::query_scalar::<_, Option<Vec<u8>>>(
-                    "SELECT totp_secret_sealed FROM users WHERE id = $1",
+                    "SELECT totp_secret_sealed FROM accounts WHERE id = $1",
                 )
                 .bind(Uuid::parse_str(user_id).unwrap())
                 .fetch_one(&self.pool),
@@ -79,19 +79,25 @@ fn the_authenticator_secret_is_sealed_under_the_accounts_data_key() {
 
     // The authenticator app on: a key under the current entry, the secret
     // stored sealed (not as its base32 text).
-    let setup: Value = bearer(c.post(format!("{base}/api/user/2fa/setup")), &user.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let setup: Value = bearer(
+        c.post(format!("{base}/api/v1/account/2fa/setup")),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let secret = setup["secret"].as_str().unwrap().to_owned();
-    let verify = bearer(c.post(format!("{base}/api/user/2fa/verify")), &user.token)
-        .json(&json!({
-            "code": totp_now(&secret),
-            "grant": reauth_grant(&c, &base, &user, "totp"),
-        }))
-        .send()
-        .unwrap();
+    let verify = bearer(
+        c.post(format!("{base}/api/v1/account/2fa/verify")),
+        &user.token,
+    )
+    .json(&json!({
+        "code": totp_now(&secret),
+        "grant": reauth_grant(&c, &base, &user, "totp"),
+    }))
+    .send()
+    .unwrap();
     assert_eq!(verify.status(), StatusCode::OK);
     let enabled: Value = verify.json().unwrap();
     let recovery_code = enabled["recoveryCodes"][0].as_str().unwrap().to_owned();
@@ -117,7 +123,7 @@ fn the_authenticator_secret_is_sealed_under_the_accounts_data_key() {
         .expect("a second step")
         .to_owned();
     let second = c
-        .post(format!("{base}/api/auth/login/2fa"))
+        .post(format!("{base}/api/v1/auth/login/2fa"))
         .header("x-kutup-client", "cli")
         .json(&json!({ "preAuthToken": pre_auth, "code": totp_now(&secret) }))
         .send()
@@ -143,16 +149,16 @@ fn the_authenticator_secret_is_sealed_under_the_accounts_data_key() {
     };
     let token = pre_auth(&c);
     let lost = c
-        .post(format!("{base}/api/auth/login/2fa"))
+        .post(format!("{base}/api/v1/auth/login/2fa"))
         .header("x-kutup-client", "cli")
-        .json(&json!({ "preAuthToken": token, "code": totp_now(&secret) }))
+        .json(&json!({ "preAuthToken": token, "code": totp_at(&secret, totp_step_now()) }))
         .send()
         .unwrap();
     assert_eq!(lost.status(), StatusCode::UNAUTHORIZED);
     let lost: Value = lost.json().unwrap();
     assert_eq!(lost["code"], "authenticatorLost", "{lost}");
     let recovered = c
-        .post(format!("{base}/api/auth/login/2fa"))
+        .post(format!("{base}/api/v1/auth/login/2fa"))
         .header("x-kutup-client", "cli")
         .json(&json!({ "preAuthToken": token, "code": recovery_code }))
         .send()

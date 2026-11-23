@@ -4,7 +4,6 @@
 // lists a folder's link, Office shows a document reached by one.
 
 import {
-  fromBase64,
   openDriveObject,
   openFileMetadataV1,
   openFileRecordV1,
@@ -29,6 +28,8 @@ import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
 import api from '@kutup/session/client'
 import { getAccessToken } from '@kutup/session/store'
 import { apiErrorCode } from '@kutup/ui/lib/apiError'
+import { parseLinkFragment } from '@kutup/crypto/linkFragment'
+import { goToLinkHome } from '@kutup/session/apps'
 
 interface ShareInfo {
   /** 'collection': a folder's files; 'file': one file (docs/plans/drive-file-sharing.md). */
@@ -36,7 +37,7 @@ interface ShareInfo {
   targetId: string
   collectionKeyEnvelope: string
   collectionKeyEpoch: number
-  ownerUserId: string
+  ownerAccountId: string
   /** Who shared it (`alice@example.org`): the page says so. */
   ownerAccount: string
   /** Signs the folder's key history. */
@@ -44,6 +45,8 @@ interface ShareInfo {
   expiresAt?: string | null
   /** A link to one file: the file (its key is `collectionKeyEnvelope`, of generation `collectionKeyEpoch`). */
   file?: PublicFileRow
+  /** A collection's kind: `album` is Photos'. */
+  collectionKind?: string
 }
 
 export interface PublicFileRow {
@@ -85,6 +88,7 @@ export interface PublicShare {
 
 export type PublicFailure =
   | 'missingKey'
+  | 'newerLink'
   | 'notFound'
   | 'expired'
   | 'removed'
@@ -107,34 +111,30 @@ export function publicFailure(error: unknown): PublicFailure {
   return error instanceof PublicLinkError ? error.failure : 'other'
 }
 
-/** The key lives only in the fragment (`#key=…`), which browsers never send to a server. */
+/** The key lives only in the fragment (`#v1.…`), which browsers never send to a server. */
 export function linkKey(): Uint8Array | null {
-  try {
-    const key = new URLSearchParams(window.location.hash.slice(1)).get('key')
-    const bytes = key ? fromBase64(key) : null
-    return bytes && bytes.length === 32 ? bytes : null
-  } catch {
-    return null
-  }
+  const fragment = parseLinkFragment(window.location.hash)
+  if (fragment.kind === 'newer') throw new PublicLinkError('newerLink')
+  return fragment.kind === 'key' ? fragment.key : null
 }
 
 /**
  * Why the server refused a link: unknown, expired, or taken down (by an
- * administrator, or with its owner's account: `410` `link_removed`).
+ * administrator, or with its owner's account: `410` `linkRemoved`).
  */
 export function linkFailure(error: unknown): PublicFailure {
   const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
   // The server's controls on public links (docs/plans/server-personal-data.md, A11).
   const code = response?.data?.code
-  if (code === 'link_blocked') return response?.status === 451 ? 'blockedLegal' : 'blocked'
-  if (code === 'sharing_off') return 'sharingOff'
-  if (code === 'sign_in_required') return 'signInRequired'
-  if (apiErrorCode(error) === 'not_found') return 'notFound'
+  if (code === 'linkBlocked') return response?.status === 451 ? 'blockedLegal' : 'blocked'
+  if (code === 'sharingOff') return 'sharingOff'
+  if (code === 'signInRequired') return 'signInRequired'
+  if (apiErrorCode(error) === 'notFound') return 'notFound'
   if (response?.status !== 410) return 'other'
-  return response.data?.code === 'link_removed' ? 'removed' : 'expired'
+  return response.data?.code === 'linkRemoved' ? 'removed' : 'expired'
 }
 
-const shareBase = (token: string) => `/share/${encodeURIComponent(token)}`
+const shareBase = (token: string) => `/drive/public-links/${encodeURIComponent(token)}`
 
 /**
  * The viewer's own sign-in, when they have one here: a server whose links
@@ -155,6 +155,12 @@ export async function loadShare(token: string): Promise<PublicShare> {
     throw new PublicLinkError(linkFailure(error))
   }
   if (share.expiresAt && Date.parse(share.expiresAt) < Date.now()) throw new PublicLinkError('expired')
+  // An album's link shows in Photos: opened on Drive or Office, it goes
+  // there (docs/plans/api-surface.md §7). Office's documents in a shared
+  // folder (`/s/<token>/<fileId>`) stay where they are.
+  if (share.collectionKind === 'album' && (await goToLinkHome('photos', token))) {
+    return new Promise<PublicShare>(() => undefined)
+  }
   const files = share.shareType === 'file' ? [await loadFile(share, key)] : await loadFolder(token, share, key)
   return { shareType: share.shareType, ownerAccount: share.ownerAccount, files }
 }
@@ -164,7 +170,7 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
   try {
     collectionKey = await openPublicLinkCollectionKeyV1(share.collectionKeyEnvelope, key, {
       collectionId: share.targetId,
-      ownerUserId: share.ownerUserId,
+      ownerAccountId: share.ownerAccountId,
       epoch: share.collectionKeyEpoch,
     })
   } catch {
@@ -179,7 +185,7 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
       .get<EpochLinkV1[]>(`${shareBase(token)}/epochs`)
       .then(({ data: chain }) => {
         if (chain.length !== share.collectionKeyEpoch) throw new Error('incomplete folder key history')
-        return unlockCollectionKeyring(collectionKey, share.targetId, share.ownerUserId, share.ownerAuthorityPublicKey, chain)
+        return unlockCollectionKeyring(collectionKey, share.targetId, share.ownerAccountId, share.ownerAuthorityPublicKey, chain)
       })
     return keyring.then((keys) => {
       const key = keys[epoch - 1]
@@ -221,7 +227,7 @@ async function loadFile(share: ShareInfo, key: Uint8Array): Promise<PublicFile> 
   try {
     fileKey = await openPublicLinkFileKeyV1(share.collectionKeyEnvelope, key, {
       fileId: share.targetId,
-      ownerUserId: share.ownerUserId,
+      ownerAccountId: share.ownerAccountId,
       generation: share.collectionKeyEpoch,
     })
   } catch {
@@ -279,7 +285,7 @@ export async function editedContent(token: string, file: PublicFile): Promise<Ui
   const stateRevisionId = file.stateRevisionId
   if (!stateRevisionId) return null
   // A state the metadata names but the server doesn't serve is refused (a 404 too).
-  const response = await api.get<ArrayBuffer>(`${shareBase(token)}/state/${file.row.id}`, {
+  const response = await api.get<ArrayBuffer>(`${shareBase(token)}/files/${file.row.id}/state`, {
     params: { revision: stateRevisionId },
     responseType: 'arraybuffer',
   })
@@ -308,7 +314,7 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
   if (!file.fileKey) throw new Error('file is not open')
   const edited = await editedContent(token, file)
   if (edited) return edited
-  const url = `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`
+  const url = `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`
   const parts: Uint8Array[] = []
   let length = 0
   for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, currentExpected(file), viewerToken(), signal)) {
@@ -341,7 +347,7 @@ export async function openPublicFilePlayback(
   if (!fileKey) throw new Error('file is not open')
   return openPublicPlayback(
     {
-      url: `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`,
+      url: `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`,
       size: file.size,
       mimeType: file.mimeType,
       content: () => Promise.resolve({ fileKey, expected: currentExpected(file) }),
@@ -364,7 +370,7 @@ export async function downloadPublicFile(token: string, file: PublicFile): Promi
     return
   }
   await streamDownload({
-    url: `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`,
+    url: `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`,
     fileKey: file.fileKey,
     context: currentExpected(file),
     filename: file.name,

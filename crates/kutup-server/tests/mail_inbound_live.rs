@@ -33,7 +33,7 @@ struct Address {
 
 /// Gives `user` an address key the way the Account app does at sign-in.
 fn set_up_address(c: &Client, base: &str, user: &User) -> Address {
-    let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
+    let addresses: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -71,7 +71,7 @@ fn set_up_address(c: &Client, base: &str, user: &User) -> Address {
     .sign(user.identity.authority_signing_key())
     .unwrap();
     let r = bearer(
-        c.post(format!("{base}/api/mail/addresses/{id}/keys")),
+        c.post(format!("{base}/api/v1/mail/addresses/{id}/keys")),
         &user.token,
     )
     .json(&json!({
@@ -147,7 +147,7 @@ fn messages(c: &Client, base: &str, token: &str) -> Vec<Value> {
         .iter()
         .flat_map(|folder| {
             let page: Value = bearer(
-                c.get(format!("{base}/api/mail/messages?folder={folder}")),
+                c.get(format!("{base}/api/v1/mail/messages?folder={folder}")),
                 token,
             )
             .send()
@@ -248,7 +248,7 @@ Message-ID: <reply-{tag}@sender.test>\r\nIn-Reply-To: <first-{tag}@sender.test>\
     assert_eq!(first_row["from"]["address"], "caglar@sender.test");
     assert_eq!(first_row["from"]["name"], "Çağlar");
     assert_eq!(first_row["to"][0]["address"], address.as_str());
-    assert_eq!(first_row["protection"], "zero_access");
+    assert_eq!(first_row["protection"], "zeroAccess");
     assert_eq!(first_row["seen"], false);
     assert_eq!(
         reply_row["threadId"], first_row["threadId"],
@@ -259,7 +259,7 @@ Message-ID: <reply-{tag}@sender.test>\r\nIn-Reply-To: <first-{tag}@sender.test>\
     // sent, byte for byte, below the headers Stalwart prepended.
     let id = first_row["id"].as_str().unwrap();
     let stored = bearer(
-        c.get(format!("{base}/api/mail/messages/{id}/content")),
+        c.get(format!("{base}/api/v1/mail/messages/{id}/content")),
         &user.token,
     )
     .send()
@@ -287,7 +287,7 @@ Message-ID: <reply-{tag}@sender.test>\r\nIn-Reply-To: <first-{tag}@sender.test>\
     // Another account cannot read it.
     let other = register(&c, &base);
     let r = bearer(
-        c.get(format!("{base}/api/mail/messages/{id}/content")),
+        c.get(format!("{base}/api/v1/mail/messages/{id}/content")),
         &other.token,
     )
     .send()
@@ -295,7 +295,7 @@ Message-ID: <reply-{tag}@sender.test>\r\nIn-Reply-To: <first-{tag}@sender.test>\
     assert_eq!(r.status(), 404);
 
     // Mail is charged to the account's one pool and shown as Mail.
-    let storage: Value = bearer(c.get(format!("{base}/api/user/storage")), &user.token)
+    let storage: Value = bearer(c.get(format!("{base}/api/v1/account/storage")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -317,10 +317,13 @@ Message-ID: <reply-{tag}@sender.test>\r\nIn-Reply-To: <first-{tag}@sender.test>\
         .expect("KUTUP_LIVE_ADMIN is username:password");
     let admin = common::admin_token(&c, &base, password, username);
     let update = |body: Value| {
-        let r = bearer(c.put(format!("{base}/api/admin/users/{}", user.id)), &admin)
-            .json(&body)
-            .send()
-            .unwrap();
+        let r = bearer(
+            c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
+            &admin,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
         assert!(r.status().is_success(), "admin update: {}", r.status());
     };
     let rcpt = |expected: u16| {
@@ -333,12 +336,12 @@ Message-ID: <reply-{tag}@sender.test>\r\nIn-Reply-To: <first-{tag}@sender.test>\
     let used_now = common::used(&c, &base, &user.token);
     update(json!({ "storageQuotaBytes": used_now }));
     rcpt(452);
-    update(json!({ "storageQuotaBytes": 10_i64 << 30, "isActive": false }));
+    update(json!({ "storageQuotaBytes": 10_i64 << 30, "state": "suspended" }));
     rcpt(550);
-    update(json!({ "isActive": true }));
+    update(json!({ "state": "active" }));
     rcpt(250);
     let r = bearer(
-        c.delete(format!("{base}/api/admin/users/{}", user.id)),
+        c.delete(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &admin,
     )
     .send()
@@ -364,7 +367,7 @@ fn form(parts: Vec<(&str, Vec<u8>)>) -> reqwest::blocking::multipart::Form {
 
 fn folder(c: &Client, base: &str, token: &str, name: &str) -> Vec<Value> {
     let page: Value = bearer(
-        c.get(format!("{base}/api/mail/messages?folder={name}")),
+        c.get(format!("{base}/api/v1/mail/messages?folder={name}")),
         token,
     )
     .send()
@@ -421,10 +424,13 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
         if with_mime {
             parts.push(("mime", mime.as_bytes().to_vec()));
         }
-        bearer(c.post(format!("{base}/api/mail/send")), &alice_user.token)
-            .multipart(form(parts))
-            .send()
-            .unwrap()
+        bearer(
+            c.post(format!("{base}/api/v1/mail/send")),
+            &alice_user.token,
+        )
+        .multipart(form(parts))
+        .send()
+        .unwrap()
     };
 
     // A key packet for the wrong key, an unknown Kutup address and missing
@@ -463,7 +469,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     assert!(statuses.contains(&("carol@outside.test".into(), "sent".into())));
     assert_eq!(sent["message"]["folder"], "sent");
     assert_eq!(sent["message"]["bcc"][0]["address"], "carol@outside.test");
-    assert_eq!(sent["message"]["protection"], "zero_access");
+    assert_eq!(sent["message"]["protection"], "zeroAccess");
 
     // Bob's copy: in his inbox, end to end, opening with his key and signed
     // by Alice, with no Bcc anywhere.
@@ -472,13 +478,13 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
         .iter()
         .find(|m| m["messageId"] == message_id.as_str())
         .expect("delivered to Bob");
-    assert_eq!(row["protection"], "end_to_end");
+    assert_eq!(row["protection"], "endToEnd");
     assert_eq!(row["from"]["address"], alice.address.as_str());
     assert_eq!(row["subject"], "Özel");
     assert_eq!(row["bcc"], json!([]));
     let id = row["id"].as_str().unwrap();
     let copy = bearer(
-        c.get(format!("{base}/api/mail/messages/{id}/content")),
+        c.get(format!("{base}/api/v1/mail/messages/{id}/content")),
         &bob_user.token,
     )
     .send()
@@ -495,7 +501,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     // Alice's own copy opens with her key.
     let own = sent["message"]["id"].as_str().unwrap();
     let copy = bearer(
-        c.get(format!("{base}/api/mail/messages/{own}/content")),
+        c.get(format!("{base}/api/v1/mail/messages/{own}/content")),
         &alice_user.token,
     )
     .send()
@@ -521,7 +527,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
         reply_mime.as_bytes(),
     )
     .unwrap();
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &bob_user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &bob_user.token)
         .multipart(form(vec![
             (
                 "meta",
@@ -543,10 +549,10 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     assert_eq!(r.status(), 200, "reply: {}", r.text().unwrap_or_default());
     let reply_row = send_result(r)["message"].clone();
     assert_eq!(reply_row["threadId"], row["threadId"]);
-    assert_eq!(reply_row["protection"], "end_to_end");
+    assert_eq!(reply_row["protection"], "endToEnd");
     let thread: Value = bearer(
         c.get(format!(
-            "{base}/api/mail/threads/{own_thread}",
+            "{base}/api/v1/mail/threads/{own_thread}",
             own_thread = sent["message"]["threadId"].as_str().unwrap()
         )),
         &alice_user.token,
@@ -565,7 +571,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     // with its storage refunded.
     let patch = |body: Value| {
         let r = bearer(
-            c.patch(format!("{base}/api/mail/messages")),
+            c.patch(format!("{base}/api/v1/mail/messages")),
             &bob_user.token,
         )
         .json(&body)
@@ -575,7 +581,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
         r.json::<Value>().unwrap()["updated"].as_u64().unwrap()
     };
     let counts = |token: &str| -> Value {
-        bearer(c.get(format!("{base}/api/mail/counts")), token)
+        bearer(c.get(format!("{base}/api/v1/mail/counts")), token)
             .send()
             .unwrap()
             .json()
@@ -604,7 +610,9 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     );
     assert_eq!(patch(json!({ "ids": [id], "folder": "archive" })), 1);
     let found: Value = bearer(
-        c.get(format!("{base}/api/mail/messages?folder=all&q=%C3%B6zel")),
+        c.get(format!(
+            "{base}/api/v1/mail/messages?folder=all&q=%C3%B6zel"
+        )),
         &bob_user.token,
     )
     .send()
@@ -618,7 +626,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
         .any(|m| m["id"] == id));
     let delete = |ids: Value| -> u64 {
         let r = bearer(
-            c.post(format!("{base}/api/mail/messages/delete")),
+            c.post(format!("{base}/api/v1/mail/messages/delete")),
             &bob_user.token,
         )
         .json(&json!({ "ids": ids }))
@@ -645,20 +653,23 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     let draft_meta = |subject: &str| {
         serde_json::to_vec(&json!({ "subject": subject, "to": [{ "address": bob.address }], "messageId": format!("d-{tag}@{domain}") })).unwrap()
     };
-    let r = bearer(c.post(format!("{base}/api/mail/drafts")), &alice_user.token)
-        .multipart(form(vec![
-            ("meta", draft_meta("Taslak")),
-            ("body", encrypt_own(b"draft one")),
-        ]))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/mail/drafts")),
+        &alice_user.token,
+    )
+    .multipart(form(vec![
+        ("meta", draft_meta("Taslak")),
+        ("body", encrypt_own(b"draft one")),
+    ]))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), 200, "draft: {}", r.text().unwrap_or_default());
     let draft: Value = r.json().unwrap();
     let draft_id = draft["id"].as_str().unwrap().to_string();
     assert_eq!(draft["folder"], "drafts");
     // Not encrypted to her own key: refused.
     let r = bearer(
-        c.put(format!("{base}/api/mail/drafts/{draft_id}")),
+        c.put(format!("{base}/api/v1/mail/drafts/{draft_id}")),
         &alice_user.token,
     )
     .multipart(form(vec![
@@ -669,7 +680,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     .unwrap();
     assert_eq!(r.status(), 400);
     let r = bearer(
-        c.put(format!("{base}/api/mail/drafts/{draft_id}")),
+        c.put(format!("{base}/api/v1/mail/drafts/{draft_id}")),
         &alice_user.token,
     )
     .multipart(form(vec![
@@ -681,7 +692,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     assert_eq!(r.json::<Value>().unwrap()["subject"], "Taslak 2");
     let part = encrypt_own(b"Content-Type: text/plain; name=a.txt\r\n\r\nek\r\n");
     let r = bearer(
-        c.post(format!("{base}/api/mail/drafts/{draft_id}/attachments")),
+        c.post(format!("{base}/api/v1/mail/drafts/{draft_id}/attachments")),
         &alice_user.token,
     )
     .multipart(form(vec![("part", part.clone())]))
@@ -693,7 +704,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
         .unwrap()
         .to_string();
     let listed: Value = bearer(
-        c.get(format!("{base}/api/mail/drafts/{draft_id}/attachments")),
+        c.get(format!("{base}/api/v1/mail/drafts/{draft_id}/attachments")),
         &alice_user.token,
     )
     .send()
@@ -703,7 +714,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     assert_eq!(listed[0]["id"], attachment.as_str());
     let fetched = bearer(
         c.get(format!(
-            "{base}/api/mail/drafts/{draft_id}/attachments/{attachment}"
+            "{base}/api/v1/mail/drafts/{draft_id}/attachments/{attachment}"
         )),
         &alice_user.token,
     )
@@ -715,7 +726,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     // Deleting the draft takes its attachment with it and frees the space.
     let used = common::used(&c, &base, &alice_user.token);
     let r = bearer(
-        c.post(format!("{base}/api/mail/messages/delete")),
+        c.post(format!("{base}/api/v1/mail/messages/delete")),
         &alice_user.token,
     )
     .json(&json!({ "ids": [draft_id] }))
@@ -724,7 +735,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
     assert!(common::used(&c, &base, &alice_user.token) < used);
     let r = bearer(
-        c.get(format!("{base}/api/mail/drafts/{draft_id}/attachments")),
+        c.get(format!("{base}/api/v1/mail/drafts/{draft_id}/attachments")),
         &alice_user.token,
     )
     .send()
@@ -778,7 +789,7 @@ fn send_plain(
     if to.iter().any(|a| !a.ends_with(&format!("@{domain}"))) {
         parts.push(("mime", mime.into_bytes()));
     }
-    bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+    bearer(c.post(format!("{base}/api/v1/mail/send")), &user.token)
         .multipart(form(parts))
         .send()
         .unwrap()
@@ -808,7 +819,7 @@ fn sending_safety() {
         .expect("KUTUP_LIVE_ADMIN is username:password");
     let admin = common::admin_token(&c, &base, password, username);
     let status = |user: &User| -> Value {
-        bearer(c.get(format!("{base}/api/mail/sending")), &user.token)
+        bearer(c.get(format!("{base}/api/v1/mail/sending")), &user.token)
             .send()
             .unwrap()
             .json()
@@ -833,7 +844,10 @@ fn sending_safety() {
     // Paused by an administrator: nothing goes outside, Kutup mail still flows.
     let update = |target: &User, body: Value| {
         let r = bearer(
-            c.put(format!("{base}/api/admin/users/{}/mail-sending", target.id)),
+            c.put(format!(
+                "{base}/api/v1/admin/accounts/{}/mail-sending",
+                target.id
+            )),
             &admin,
         )
         .json(&body)
@@ -889,7 +903,7 @@ fn sending_safety() {
     assert_eq!(status(&bouncer)["paused"], "bounces");
     // The administrator sees it, paused and flagged, with its bounces.
     let senders: Value = bearer(
-        c.get(format!("{base}/api/admin/mail/senders?attention=true")),
+        c.get(format!("{base}/api/v1/admin/mail/senders?attention=true")),
         &admin,
     )
     .send()
@@ -900,7 +914,7 @@ fn sending_safety() {
         .as_array()
         .unwrap_or_else(|| panic!("senders: {senders}"))
         .iter()
-        .find(|s| s["userId"] == bouncer.id.as_str())
+        .find(|s| s["accountId"] == bouncer.id.as_str())
         .expect("paused sender listed");
     assert_eq!(row["pausedReason"], "bounces");
     assert_eq!(row["flagReason"], "bounces");
@@ -913,7 +927,7 @@ fn sending_safety() {
     // Role addresses: nobody may register them, and postmaster@ reaches an
     // administrator (here one with an address key).
     let reserved = c
-        .post(format!("{base}/api/auth/register"))
+        .post(format!("{base}/api/v1/auth/register"))
         .json(&json!({ "username": "postmaster" }))
         .send()
         .unwrap();
@@ -921,10 +935,13 @@ fn sending_safety() {
     let Ok(smtp_address) = std::env::var("KUTUP_LIVE_SMTP") else {
         return;
     };
-    let r = bearer(c.put(format!("{base}/api/admin/users/{}", user.id)), &admin)
-        .json(&json!({ "isAdmin": true }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
+        &admin,
+    )
+    .json(&json!({ "role": "admin" }))
+    .send()
+    .unwrap();
     assert!(r.status().is_success());
     let domain = me.address.split_once('@').unwrap().1.to_string();
     let mut smtp = Smtp::connect(&smtp_address);
@@ -1004,7 +1021,7 @@ fn pgp_with_a_gnupg_correspondent() {
         })
         .expect("Dave's fingerprint");
     let found: Value = bearer(
-        c.get(format!("{base}/api/mail/keys/outside?email={dave}")),
+        c.get(format!("{base}/api/v1/mail/keys/outside?email={dave}")),
         &user.token,
     )
     .send()
@@ -1023,7 +1040,7 @@ fn pgp_with_a_gnupg_correspondent() {
     .unwrap();
     let missing = bearer(
         c.get(format!(
-            "{base}/api/mail/keys/outside?email=nobody-{tag}@outside.test"
+            "{base}/api/v1/mail/keys/outside?email=nobody-{tag}@outside.test"
         )),
         &user.token,
     )
@@ -1070,7 +1087,7 @@ Date: Sat, 10 Oct 2026 10:00:00 +0000\r\n",
         .unwrap();
         let mut all = vec![("meta", meta), ("data", split.data_packet.clone())];
         all.extend(parts);
-        bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/mail/send")), &user.token)
             .multipart(form(all))
             .send()
             .unwrap()
@@ -1096,7 +1113,7 @@ Date: Sat, 10 Oct 2026 10:00:00 +0000\r\n",
     let r = send(recipients, vec![("pgp0", package)]);
     assert_eq!(r.status(), 200, "send PGP");
     let sent = send_result(r);
-    assert_eq!(sent["message"]["protection"], "end_to_end", "sent: {sent}");
+    assert_eq!(sent["message"]["protection"], "endToEnd", "sent: {sent}");
     assert_eq!(
         sent["recipients"],
         json!([{ "address": dave, "status": "sent" }])
@@ -1146,10 +1163,10 @@ In-Reply-To: <{message_id}>\r\nDate: Sat, 10 Oct 2026 10:05:00 +0000\r\n",
         assert!(Instant::now() < deadline, "Dave's reply never arrived");
         std::thread::sleep(Duration::from_secs(1));
     };
-    assert_eq!(row["protection"], "end_to_end", "reply: {row}");
+    assert_eq!(row["protection"], "endToEnd", "reply: {row}");
     let stored = bearer(
         c.get(format!(
-            "{base}/api/mail/messages/{}/content",
+            "{base}/api/v1/mail/messages/{}/content",
             row["id"].as_str().unwrap()
         )),
         &user.token,
@@ -1189,7 +1206,7 @@ fn current_list(c: &Client, base: &str, user: &User) -> (String, mail_key::Signe
 
 /// The current key list of the user's address `id`, verified.
 fn list_for(c: &Client, base: &str, user: &User, id: &str) -> mail_key::SignedMailKeyListV1 {
-    let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
+    let addresses: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -1253,7 +1270,7 @@ fn enable_again(c: &Client, base: &str, user: &User, id: &str) -> u64 {
         })
         .collect();
     let r = bearer(
-        c.put(format!("{base}/api/mail/addresses/{id}/enable")),
+        c.put(format!("{base}/api/v1/mail/addresses/{id}/enable")),
         &user.token,
     )
     .json(&json!({ "keyList": next_list(user, &previous, keys) }))
@@ -1302,13 +1319,13 @@ fn address_keys_rotate_and_change_flags() {
             new_entry.clone(),
         ],
     );
-    let r = bearer(c.post(format!("{base}/api/mail/addresses/{id}/keys")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/addresses/{id}/keys")), &user.token)
         .json(&json!({ "publicKey": b64(&new.public_key), "privateKeyEnvelope": b64(&envelope), "keyList": rotated }))
         .send()
         .unwrap();
     assert_eq!(r.status(), 200, "rotate");
     let lookup: Value = bearer(
-        c.get(format!("{base}/api/mail/keys?email={}", first.address)),
+        c.get(format!("{base}/api/v1/mail/keys?email={}", first.address)),
         &user.token,
     )
     .send()
@@ -1327,7 +1344,7 @@ fn address_keys_rotate_and_change_flags() {
     let (_, list2) = current_list(&c, &base, &user);
     let put = |list: Value| {
         bearer(
-            c.put(format!("{base}/api/mail/addresses/{id}/key-list")),
+            c.put(format!("{base}/api/v1/mail/addresses/{id}/key-list")),
             &user.token,
         )
         .json(&json!({ "keyList": list }))
@@ -1429,7 +1446,7 @@ fn rename_place(
         body["baseNameRevision"] = json!(base);
     }
     let r = bearer(
-        c.patch(format!("{base_url}/api/mail/{path}/{id}")),
+        c.patch(format!("{base_url}/api/v1/mail/{path}/{id}")),
         &user.token,
     )
     .json(&body)
@@ -1456,7 +1473,7 @@ fn renames_are_guarded(
     assert_eq!(status, 409);
     assert_eq!(
         (late["code"].as_str(), late["revision"].as_i64()),
-        (Some("revision_conflict"), Some(2))
+        (Some("revisionConflict"), Some(2))
     );
     // Past what JavaScript holds exactly: refused, so nobody can stop renames for good.
     assert_eq!(rename(Some(2), 1 << 53, "Son").0, 400);
@@ -1492,7 +1509,7 @@ fn folders_and_labels() {
     // Three folders, each inside the one before; a fourth level is refused.
     let new_folder = |parent: Option<&str>, name: &str| {
         let id = uuid::Uuid::new_v4().to_string();
-        let r = bearer(c.post(format!("{base}/api/mail/folders")), &user.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/folders")), &user.token)
             .json(&json!({ "id": id, "parentId": parent, "name": sealed_name(&user, Folder, &id, name), "color": "#3366cc" }))
             .send()
             .unwrap();
@@ -1506,14 +1523,14 @@ fn folders_and_labels() {
     assert_eq!(status, 201);
     assert_eq!(new_folder(Some(&acme), "Too deep").1, 400);
     // A name that is not sealed is refused.
-    let r = bearer(c.post(format!("{base}/api/mail/folders")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/folders")), &user.token)
         .json(&json!({ "id": uuid::Uuid::new_v4().to_string(), "name": b64(b"Plain name"), "color": "#3366cc" }))
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 400);
     // No cycles: Work cannot go inside Acme.
     let r = bearer(
-        c.patch(format!("{base}/api/mail/folders/{work}")),
+        c.patch(format!("{base}/api/v1/mail/folders/{work}")),
         &user.token,
     )
     .json(&json!({ "parentId": acme }))
@@ -1522,7 +1539,7 @@ fn folders_and_labels() {
     assert_eq!(r.status().as_u16(), 400);
     // Clients moves to the top; it brings Acme along.
     let r = bearer(
-        c.patch(format!("{base}/api/mail/folders/{clients}")),
+        c.patch(format!("{base}/api/v1/mail/folders/{clients}")),
         &user.token,
     )
     .json(&json!({ "parentId": null, "color": "#cc3366" }))
@@ -1538,7 +1555,7 @@ fn folders_and_labels() {
             body["baseNameRevision"] = json!(base);
         }
         bearer(
-            c.patch(format!("{base_url}/api/mail/folders/{work}")),
+            c.patch(format!("{base_url}/api/v1/mail/folders/{work}")),
             &user.token,
         )
         .json(&body)
@@ -1553,10 +1570,10 @@ fn folders_and_labels() {
     let late: Value = late.json().unwrap();
     assert_eq!(
         (late["code"].as_str(), late["revision"].as_i64()),
-        (Some("revision_conflict"), Some(2))
+        (Some("revisionConflict"), Some(2))
     );
     assert_eq!(rename(Some(2), 3, "İş yeri").status().as_u16(), 204);
-    let places: Value = bearer(c.get(format!("{base}/api/mail/places")), &user.token)
+    let places: Value = bearer(c.get(format!("{base}/api/v1/mail/places")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -1589,7 +1606,7 @@ fn folders_and_labels() {
     );
 
     // The message goes into Acme; it is listed and counted there.
-    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/messages")), &user.token)
         .json(&json!({ "ids": [message], "folder": "custom", "customFolder": acme }))
         .send()
         .unwrap();
@@ -1601,7 +1618,7 @@ fn folders_and_labels() {
     assert_eq!(in_acme.len(), 1);
     assert_eq!(in_acme[0]["folder"], "custom");
     assert_eq!(in_acme[0]["customFolder"], acme.as_str());
-    let counts: Value = bearer(c.get(format!("{base}/api/mail/counts")), &user.token)
+    let counts: Value = bearer(c.get(format!("{base}/api/v1/mail/counts")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -1616,7 +1633,7 @@ fn folders_and_labels() {
     };
     assert_eq!(count(format!("folder:{acme}")), Some(1));
     // Someone else's folder id, or a folder that is not there, is refused.
-    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/messages")), &user.token)
         .json(&json!({ "ids": [message], "folder": "custom", "customFolder": uuid::Uuid::new_v4().to_string() }))
         .send()
         .unwrap();
@@ -1624,13 +1641,13 @@ fn folders_and_labels() {
 
     // A label on the message: listed and counted, kept through a move.
     let label = uuid::Uuid::new_v4().to_string();
-    let r = bearer(c.post(format!("{base}/api/mail/labels")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/labels")), &user.token)
         .json(&json!({ "id": label, "name": sealed_name(&user, Label, &label, "Faturalar"), "color": "#22aa55" }))
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 201);
     renames_are_guarded(&c, &base, &user, Label, &label);
-    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/messages")), &user.token)
         .json(&json!({ "ids": [message], "addLabels": [label] }))
         .send()
         .unwrap();
@@ -1641,7 +1658,7 @@ fn folders_and_labels() {
 
     // Deleting Clients (and Acme in it) moves the message to Archive, label kept.
     let r = bearer(
-        c.delete(format!("{base}/api/mail/folders/{clients}")),
+        c.delete(format!("{base}/api/v1/mail/folders/{clients}")),
         &user.token,
     )
     .send()
@@ -1656,7 +1673,7 @@ fn folders_and_labels() {
     assert_eq!(moved["labels"], json!([label]));
     // Deleting the label leaves the message where it is.
     let r = bearer(
-        c.delete(format!("{base}/api/mail/labels/{label}")),
+        c.delete(format!("{base}/api/v1/mail/labels/{label}")),
         &user.token,
     )
     .send()
@@ -1670,7 +1687,7 @@ fn folders_and_labels() {
             .unwrap()["labels"],
         json!([])
     );
-    let places: Value = bearer(c.get(format!("{base}/api/mail/places")), &user.token)
+    let places: Value = bearer(c.get(format!("{base}/api/v1/mail/places")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -1697,7 +1714,7 @@ fn send_to_self(c: &Client, base: &str, user: &User, address: &Address, subject:
         "messageId": message_id,
         "keyPackets": { "self": packet, address.address.clone(): packet },
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &user.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -1728,14 +1745,14 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
     send_to_self(&c, &base, &user, &address, "Eski fatura");
 
     let invoices = uuid::Uuid::new_v4().to_string();
-    assert_eq!(post("/api/mail/folders", json!({ "id": invoices, "name": sealed_name(&user, Folder, &invoices, "Faturalar"), "color": "#3366cc" })).status().as_u16(), 201);
+    assert_eq!(post("/api/v1/mail/folders", json!({ "id": invoices, "name": sealed_name(&user, Folder, &invoices, "Faturalar"), "color": "#3366cc" })).status().as_u16(), 201);
     let paid = uuid::Uuid::new_v4().to_string();
-    assert_eq!(post("/api/mail/labels", json!({ "id": paid, "name": sealed_name(&user, Label, &paid, "Ödenecek"), "color": "#22aa55" })).status().as_u16(), 201);
+    assert_eq!(post("/api/v1/mail/labels", json!({ "id": paid, "name": sealed_name(&user, Label, &paid, "Ödenecek"), "color": "#22aa55" })).status().as_u16(), 201);
 
     // Subject contains "FATURA" (any case, Turkish İ folded): into the folder, labelled, starred.
     let filter = uuid::Uuid::new_v4().to_string();
     let r = post(
-        "/api/mail/filters",
+        "/api/v1/mail/filters",
         json!({
             "id": filter,
             "name": sealed_name(&user, Filter, &filter, "Faturalar"),
@@ -1749,8 +1766,8 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
     // A filter that names no action, or someone else's folder, is refused.
     let bad = uuid::Uuid::new_v4().to_string();
     let name = sealed_name(&user, Filter, &bad, "Bad");
-    assert_eq!(post("/api/mail/filters", json!({ "id": bad, "name": name, "match": "all", "conditions": [{ "field": "subject", "value": "x" }], "actions": {} })).status().as_u16(), 400);
-    assert_eq!(post("/api/mail/filters", json!({ "id": bad, "name": name, "match": "all", "conditions": [{ "field": "subject", "value": "x" }], "actions": { "folder": format!("custom:{}", uuid::Uuid::new_v4()) } })).status().as_u16(), 400);
+    assert_eq!(post("/api/v1/mail/filters", json!({ "id": bad, "name": name, "match": "all", "conditions": [{ "field": "subject", "value": "x" }], "actions": {} })).status().as_u16(), 400);
+    assert_eq!(post("/api/v1/mail/filters", json!({ "id": bad, "name": name, "match": "all", "conditions": [{ "field": "subject", "value": "x" }], "actions": { "folder": format!("custom:{}", uuid::Uuid::new_v4()) } })).status().as_u16(), 400);
 
     // On arrival: the Inbox copy and the Sent copy are both filed.
     send_to_self(&c, &base, &user, &address, "Ekim faturası");
@@ -1777,7 +1794,7 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
     );
 
     // Apply to existing: the older invoice is filed too.
-    let r = post("/api/mail/filters/apply", json!({ "ids": [filter] }));
+    let r = post("/api/v1/mail/filters/apply", json!({ "ids": [filter] }));
     assert_eq!(r.status().as_u16(), 202);
     let run = r.json::<Value>().unwrap()["id"]
         .as_str()
@@ -1786,7 +1803,7 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
     let started = Instant::now();
     loop {
         let status: Value = bearer(
-            c.get(format!("{base}/api/mail/filters/runs/{run}")),
+            c.get(format!("{base}/api/v1/mail/filters/runs/{run}")),
             &user.token,
         )
         .send()
@@ -1809,7 +1826,7 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
 
     // Switched off, a filter does nothing.
     let r = bearer(
-        c.patch(format!("{base}/api/mail/filters/{filter}")),
+        c.patch(format!("{base}/api/v1/mail/filters/{filter}")),
         &user.token,
     )
     .json(&json!({ "enabled": false }))
@@ -1823,13 +1840,13 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
 
     // Deleting the folder drops it from the filter, which keeps its label and star.
     let r = bearer(
-        c.delete(format!("{base}/api/mail/folders/{invoices}")),
+        c.delete(format!("{base}/api/v1/mail/folders/{invoices}")),
         &user.token,
     )
     .send()
     .unwrap();
     assert!(r.status().is_success());
-    let filters: Value = bearer(c.get(format!("{base}/api/mail/filters")), &user.token)
+    let filters: Value = bearer(c.get(format!("{base}/api/v1/mail/filters")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -1840,12 +1857,12 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
     );
     // Deleting the label too leaves only the star.
     bearer(
-        c.delete(format!("{base}/api/mail/labels/{paid}")),
+        c.delete(format!("{base}/api/v1/mail/labels/{paid}")),
         &user.token,
     )
     .send()
     .unwrap();
-    let filters: Value = bearer(c.get(format!("{base}/api/mail/filters")), &user.token)
+    let filters: Value = bearer(c.get(format!("{base}/api/v1/mail/filters")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -1872,7 +1889,7 @@ fn wait_for(c: &Client, base: &str, user: &User, message_id: &str) -> Value {
 fn open_row(c: &Client, base: &str, user: &User, address: &Address, row: &Value) -> String {
     let stored = bearer(
         c.get(format!(
-            "{base}/api/mail/messages/{}/content",
+            "{base}/api/v1/mail/messages/{}/content",
             row["id"].as_str().unwrap()
         )),
         &user.token,
@@ -1933,7 +1950,7 @@ fn distribution_lists_and_role_groups() {
     // An administrator makes the list; its name is now taken for groups and
     // accounts alike.
     let create = |name: &str| {
-        bearer(c.post(format!("{base}/api/admin/mail/groups")), &admin)
+        bearer(c.post(format!("{base}/api/v1/admin/mail/groups")), &admin)
             .json(&json!({
                 "id": uuid::Uuid::new_v4().to_string(), "name": name, "displayName": "Team", "kind": "list", "postPolicy": "anyone",
                 "storageQuotaBytes": 10_000_000, "owners": [alice_user.id],
@@ -1956,7 +1973,7 @@ fn distribution_lists_and_role_groups() {
     // Its owner sets the members; a member cannot.
     let set_members = |user: &User, members: Value| {
         bearer(
-            c.put(format!("{base}/api/mail/groups/{id}/members")),
+            c.put(format!("{base}/api/v1/mail/groups/{id}/members")),
             &user.token,
         )
         .json(&json!({ "members": members }))
@@ -1964,16 +1981,16 @@ fn distribution_lists_and_role_groups() {
         .unwrap()
     };
     let three = json!([
-        { "userId": alice_user.id, "role": "owner" },
-        { "userId": bob_user.id, "role": "member" },
-        { "userId": carol_user.id, "role": "member" },
+        { "accountId": alice_user.id, "role": "owner" },
+        { "accountId": bob_user.id, "role": "member" },
+        { "accountId": carol_user.id, "role": "member" },
     ]);
     assert_eq!(set_members(&alice_user, three.clone()).status(), 200);
     assert_eq!(set_members(&bob_user, three.clone()).status(), 403);
     assert_eq!(
         set_members(
             &alice_user,
-            json!([{ "userId": bob_user.id, "role": "member" }])
+            json!([{ "accountId": bob_user.id, "role": "member" }])
         )
         .status(),
         400,
@@ -1993,7 +2010,7 @@ fn distribution_lists_and_role_groups() {
         (&carol_user, &carol),
     ] {
         let row = wait_for(&c, &base, user, &message_id);
-        assert_eq!(row["protection"], "zero_access");
+        assert_eq!(row["protection"], "zeroAccess");
         assert!(open_row(&c, &base, user, address, &row).contains(&format!("Hello team {tag}")));
     }
     assert!(messages(&c, &base, &dave_user.token)
@@ -2002,7 +2019,7 @@ fn distribution_lists_and_role_groups() {
     // The group pays, not its members.
     assert_eq!(common::used(&c, &base, &bob_user.token), used_before);
     let group_used = || -> i64 {
-        let all: Value = bearer(c.get(format!("{base}/api/admin/mail/groups")), &admin)
+        let all: Value = bearer(c.get(format!("{base}/api/v1/admin/mail/groups")), &admin)
             .send()
             .unwrap()
             .json()
@@ -2029,7 +2046,7 @@ fn distribution_lists_and_role_groups() {
 
     // Members only: outside mail and non-members are refused.
     let r = bearer(
-        c.patch(format!("{base}/api/admin/mail/groups/{id}")),
+        c.patch(format!("{base}/api/v1/admin/mail/groups/{id}")),
         &admin,
     )
     .json(&json!({ "postPolicy": "members" }))
@@ -2039,7 +2056,7 @@ fn distribution_lists_and_role_groups() {
     assert_eq!(smtp_send(&smtp_address, &team, &message).0, 550);
     let recipients = |user: &User| {
         bearer(
-            c.get(format!("{base}/api/mail/groups/recipients?email={team}")),
+            c.get(format!("{base}/api/v1/mail/groups/recipients?email={team}")),
             &user.token,
         )
         .send()
@@ -2075,7 +2092,7 @@ fn distribution_lists_and_role_groups() {
             "keyPackets": packets,
         }))
         .unwrap();
-        bearer(c.post(format!("{base}/api/mail/send")), &bob_user.token)
+        bearer(c.post(format!("{base}/api/v1/mail/send")), &bob_user.token)
             .multipart(form(vec![
                 ("meta", meta),
                 ("data", split.data_packet.clone()),
@@ -2102,7 +2119,7 @@ fn distribution_lists_and_role_groups() {
     );
     for (user, address) in [(&alice_user, &alice), (&carol_user, &carol)] {
         let row = wait_for(&c, &base, user, &kutup_id);
-        assert_eq!(row["protection"], "end_to_end");
+        assert_eq!(row["protection"], "endToEnd");
         assert!(
             open_row(&c, &base, user, address, &row).contains(&format!("Bob to the team {tag}"))
         );
@@ -2114,7 +2131,7 @@ fn distribution_lists_and_role_groups() {
     // Full: the group's quota, not the members', refuses at RCPT.
     let quota = |bytes: i64| {
         let r = bearer(
-            c.patch(format!("{base}/api/admin/mail/groups/{id}")),
+            c.patch(format!("{base}/api/v1/admin/mail/groups/{id}")),
             &admin,
         )
         .json(&json!({ "storageQuotaBytes": bytes, "postPolicy": "anyone" }))
@@ -2138,13 +2155,13 @@ fn distribution_lists_and_role_groups() {
         if ids.is_empty() {
             continue;
         }
-        let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+        let r = bearer(c.patch(format!("{base}/api/v1/mail/messages")), &user.token)
             .json(&json!({ "ids": ids, "folder": "trash" }))
             .send()
             .unwrap();
         assert!(r.status().is_success(), "to trash");
         let r = bearer(
-            c.post(format!("{base}/api/mail/messages/delete")),
+            c.post(format!("{base}/api/v1/mail/messages/delete")),
             &user.token,
         )
         .json(&json!({ "ids": ids }))
@@ -2157,14 +2174,14 @@ fn distribution_lists_and_role_groups() {
     // A role group without members reaches every administrator; with a
     // member, only them.
     let r = bearer(
-        c.put(format!("{base}/api/admin/users/{}", dave_user.id)),
+        c.put(format!("{base}/api/v1/admin/accounts/{}", dave_user.id)),
         &admin,
     )
-    .json(&json!({ "isAdmin": true }))
+    .json(&json!({ "role": "admin" }))
     .send()
     .unwrap();
     assert!(r.status().is_success());
-    let all: Value = bearer(c.get(format!("{base}/api/admin/mail/groups")), &admin)
+    let all: Value = bearer(c.get(format!("{base}/api/v1/admin/mail/groups")), &admin)
         .send()
         .unwrap()
         .json()
@@ -2180,7 +2197,7 @@ fn distribution_lists_and_role_groups() {
     let abuse_id = abuse["id"].as_str().unwrap();
     let abuse_address = abuse["address"].as_str().unwrap();
     let r = bearer(
-        c.put(format!("{base}/api/mail/groups/{abuse_id}/members")),
+        c.put(format!("{base}/api/v1/mail/groups/{abuse_id}/members")),
         &admin,
     )
     .json(&json!({ "members": [] }))
@@ -2199,7 +2216,7 @@ fn distribution_lists_and_role_groups() {
     wait_for(&c, &base, &dave_user, &report);
     assert_eq!(
         bearer(
-            c.delete(format!("{base}/api/admin/mail/groups/{abuse_id}")),
+            c.delete(format!("{base}/api/v1/admin/mail/groups/{abuse_id}")),
             &admin
         )
         .send()
@@ -2209,10 +2226,10 @@ fn distribution_lists_and_role_groups() {
         "a role address stays"
     );
     let r = bearer(
-        c.put(format!("{base}/api/mail/groups/{abuse_id}/members")),
+        c.put(format!("{base}/api/v1/mail/groups/{abuse_id}/members")),
         &admin,
     )
-    .json(&json!({ "members": [{ "userId": carol_user.id, "role": "member" }] }))
+    .json(&json!({ "members": [{ "accountId": carol_user.id, "role": "member" }] }))
     .send()
     .unwrap();
     assert_eq!(r.status(), 200);
@@ -2229,7 +2246,7 @@ fn distribution_lists_and_role_groups() {
         .all(|m| m["messageId"] != second.as_str()));
     // Leave the role group as it was, for the other tests.
     let r = bearer(
-        c.put(format!("{base}/api/mail/groups/{abuse_id}/members")),
+        c.put(format!("{base}/api/v1/mail/groups/{abuse_id}/members")),
         &admin,
     )
     .json(&json!({ "members": [] }))
@@ -2253,7 +2270,7 @@ fn distribution_lists_and_role_groups() {
     // Deleting the list frees its name; members keep what they received.
     assert_eq!(
         bearer(
-            c.delete(format!("{base}/api/admin/mail/groups/{id}")),
+            c.delete(format!("{base}/api/v1/admin/mail/groups/{id}")),
             &admin
         )
         .send()
@@ -2297,12 +2314,12 @@ fn group_list(
 fn share_for(group_secret: &[u8], group_id: &str, member: &User) -> Value {
     let incarnation = member.identity.incarnation_id();
     json!({
-        "userId": member.id,
+        "accountId": member.id,
         "share": b64(&mail_key::seal_group_key_share(
             group_secret,
             group_id,
             &mail_key::GroupShareMember { account: &member.person, incarnation_id: &incarnation },
-            &member.identity.drive_hpke_public_key(),
+            &member.identity.drive_xwing_public_key(),
         )
         .unwrap()),
     })
@@ -2347,7 +2364,7 @@ fn shared_mailboxes() {
     // The group's id is drawn by the browser: its key shares are bound to it.
     let id = uuid::Uuid::new_v4().to_string();
     let create = |group_key: Value| {
-        bearer(c.post(format!("{base}/api/admin/mail/groups")), &admin)
+        bearer(c.post(format!("{base}/api/v1/admin/mail/groups")), &admin)
             .json(&json!({
                 "id": id, "name": name, "displayName": "HR", "kind": "shared", "postPolicy": "anyone",
                 "storageQuotaBytes": 10_000_000, "owners": [alice_user.id], "groupKey": group_key,
@@ -2378,12 +2395,12 @@ fn shared_mailboxes() {
     with_signer["signer"] = json!({
         "publicKey": b64(&signer.public_key),
         "shares": [{
-            "userId": alice_user.id,
+            "accountId": alice_user.id,
             "share": b64(&kutup_crypto::mail_group::seal_group_signing_share(
                 &signer,
                 &id,
                 &mail_key::GroupShareMember { account: &alice_user.person, incarnation_id: &incarnation },
-                &alice_user.identity.drive_hpke_public_key(),
+                &alice_user.identity.drive_xwing_public_key(),
             ).unwrap()),
         }],
     });
@@ -2393,7 +2410,7 @@ fn shared_mailboxes() {
 
     // Its key is published with the chain its signer signed.
     let lookup: Value = bearer(
-        c.get(format!("{base}/api/mail/keys?email={hr}")),
+        c.get(format!("{base}/api/v1/mail/keys?email={hr}")),
         &bob_user.token,
     )
     .send()
@@ -2445,7 +2462,7 @@ fn shared_mailboxes() {
             .flat_map(|folder_name| {
                 let page: Value = bearer(
                     c.get(format!(
-                        "{base}/api/mail/messages?folder={folder_name}&group={id}"
+                        "{base}/api/v1/mail/messages?folder={folder_name}&group={id}"
                     )),
                     &user.token,
                 )
@@ -2471,7 +2488,7 @@ fn shared_mailboxes() {
     let content = |user: &User, row: &Value| {
         bearer(
             c.get(format!(
-                "{base}/api/mail/messages/{}/content?group={id}",
+                "{base}/api/v1/mail/messages/{}/content?group={id}",
                 row["id"].as_str().unwrap()
             )),
             &user.token,
@@ -2495,7 +2512,7 @@ fn shared_mailboxes() {
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
         bearer(
-            c.put(format!("{base}/api/mail/groups/{id}/members")),
+            c.put(format!("{base}/api/v1/mail/groups/{id}/members")),
             &alice_user.token,
         )
         .json(&body)
@@ -2503,8 +2520,8 @@ fn shared_mailboxes() {
         .unwrap()
     };
     let both = json!([
-        { "userId": alice_user.id, "role": "owner", "canSendAs": true },
-        { "userId": bob_user.id, "role": "member" },
+        { "accountId": alice_user.id, "role": "owner", "canSendAs": true },
+        { "accountId": bob_user.id, "role": "member" },
     ]);
     assert_eq!(code(set_members(both.clone(), json!({}))).1, "sharesNeeded");
     let bob_share = json!({ "groupFingerprint": hex::encode(first.fingerprint) });
@@ -2520,7 +2537,7 @@ fn shared_mailboxes() {
         200
     );
     let keys: Value = bearer(
-        c.get(format!("{base}/api/mail/groups/{id}/keys")),
+        c.get(format!("{base}/api/v1/mail/groups/{id}/keys")),
         &bob_user.token,
     )
     .send()
@@ -2537,7 +2554,7 @@ fn shared_mailboxes() {
         &id,
         &first.fingerprint,
         &bob_user.person,
-        bob_user.identity.drive_hpke_private_key(),
+        bob_user.identity.drive_xwing_private_key(),
     )
     .unwrap();
     assert!(mail_key::decrypt(&bobs_key, &content(&bob_user, &row).bytes().unwrap(), None).is_ok());
@@ -2552,7 +2569,7 @@ fn shared_mailboxes() {
         renamed.body
     );
     let keys: Value = bearer(
-        c.get(format!("{base}/api/mail/groups/{id}/keys")),
+        c.get(format!("{base}/api/v1/mail/groups/{id}/keys")),
         &bob_user.token,
     )
     .send()
@@ -2571,7 +2588,7 @@ fn shared_mailboxes() {
         &id,
         &first.fingerprint,
         &bob_user.person,
-        bob_user.identity.drive_hpke_private_key(),
+        bob_user.identity.drive_xwing_private_key(),
     )
     .unwrap();
     assert!(mail_key::decrypt(
@@ -2583,7 +2600,7 @@ fn shared_mailboxes() {
 
     // Shared state: Bob reads it, Alice sees it read.
     let r = bearer(
-        c.patch(format!("{base}/api/mail/messages")),
+        c.patch(format!("{base}/api/v1/mail/messages")),
         &bob_user.token,
     )
     .json(&json!({ "ids": [row["id"]], "seen": true, "group": id }))
@@ -2618,7 +2635,7 @@ fn shared_mailboxes() {
             "keyPackets": { "self": b64(&split.key_packets[0]), carol.address.clone(): b64(&split.key_packets[1]) },
         }))
         .unwrap();
-        bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/mail/send")), &user.token)
             .multipart(form(vec![
                 ("meta", meta),
                 ("data", split.data_packet.clone()),
@@ -2628,8 +2645,8 @@ fn shared_mailboxes() {
     };
     assert_eq!(code(send_as(&bob_user)), (403, "notAllowedToSendAs".into()));
     let with_right = json!([
-        { "userId": alice_user.id, "role": "owner", "canSendAs": true },
-        { "userId": bob_user.id, "role": "member", "canSendAs": true },
+        { "accountId": alice_user.id, "role": "owner", "canSendAs": true },
+        { "accountId": bob_user.id, "role": "member", "canSendAs": true },
     ]);
     assert_eq!(set_members(with_right.clone(), json!({})).status(), 200);
     let r = send_as(&bob_user);
@@ -2662,22 +2679,25 @@ fn shared_mailboxes() {
         "keyPackets": { "self": b64(&split.key_packets[0]), hr.clone(): b64(&split.key_packets[1]) },
     }))
     .unwrap();
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &carol_user.token)
-        .multipart(form(vec![
-            ("meta", meta),
-            ("data", split.data_packet.clone()),
-        ]))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/mail/send")),
+        &carol_user.token,
+    )
+    .multipart(form(vec![
+        ("meta", meta),
+        ("data", split.data_packet.clone()),
+    ]))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), 200, "send to the mailbox");
     let thanks = in_group(&alice_user, "inbox")
         .into_iter()
         .find(|m| m["messageId"] == carol_id.as_str())
         .expect("Carol's mail in the mailbox");
-    assert_eq!(thanks["protection"], "end_to_end");
+    assert_eq!(thanks["protection"], "endToEnd");
 
     // Bob leaves: only with a new key, which he never gets.
-    let alice_only = json!([{ "userId": alice_user.id, "role": "owner", "canSendAs": true }]);
+    let alice_only = json!([{ "accountId": alice_user.id, "role": "owner", "canSendAs": true }]);
     assert_eq!(
         code(set_members(alice_only.clone(), json!({}))).1,
         "newKeyNeeded"
@@ -2725,7 +2745,7 @@ fn shared_mailboxes() {
     assert_eq!(r.status(), 200, "remove with a new key");
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/mail/groups/{id}/keys")),
+            c.get(format!("{base}/api/v1/mail/groups/{id}/keys")),
             &bob_user.token
         )
         .send()
@@ -2805,7 +2825,7 @@ fn shared_mailboxes() {
             assert!(Instant::now() < deadline, "the PGP message never arrived");
             std::thread::sleep(Duration::from_secs(1));
         };
-        assert_eq!(row["protection"], "end_to_end");
+        assert_eq!(row["protection"], "endToEnd");
         let outer = mail_key::decrypt(
             &second.secret_key,
             &content(&alice_user, &row).bytes().unwrap(),
@@ -2824,7 +2844,7 @@ fn shared_mailboxes() {
     // Deleting the mailbox takes its mail with it.
     assert_eq!(
         bearer(
-            c.delete(format!("{base}/api/admin/mail/groups/{id}")),
+            c.delete(format!("{base}/api/v1/admin/mail/groups/{id}")),
             &admin
         )
         .send()
@@ -2866,34 +2886,34 @@ fn mail_settings_all_mail_and_emptying() {
     let address = set_up_address(&c, &base, &user);
     let me = vec![address.address.clone()];
     // The defaults, as Proton's: no auto-delete, All mail with Spam and Trash.
-    let settings: Value = bearer(c.get(format!("{base}/api/mail/settings")), &user.token)
+    let settings: Value = bearer(c.get(format!("{base}/api/v1/mail/settings")), &user.token)
         .send()
         .unwrap()
         .json()
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14, "unreadFavicon": false, "keepMovedSent": false })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgpMime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14, "unreadFavicon": false, "keepMovedSent": false })
     );
     // Proton's page sizes only.
-    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
         .json(&json!({ "spamAction": "always" }))
         .send()
         .unwrap();
     assert_eq!(r.status(), 400);
     for (size, status) in [(100, 200), (75, 400)] {
-        let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        let r = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
             .json(&json!({ "pageSize": size }))
             .send()
             .unwrap();
         assert_eq!(r.status(), status, "page size {size}");
     }
-    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
         .json(&json!({ "autoDeleteDays": 7 }))
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 400);
-    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
         .json(&json!({ "density": "tiny" }))
         .send()
         .unwrap();
@@ -2910,13 +2930,13 @@ fn mail_settings_all_mail_and_emptying() {
     let sent = folder(&c, &base, &user.token, "sent");
     assert_eq!(sent.len(), 2);
     let archived = sent[0]["id"].as_str().unwrap().to_string();
-    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/messages")), &user.token)
         .json(&json!({ "ids": [archived], "folder": "archive" }))
         .send()
         .unwrap();
     assert!(r.status().is_success());
     assert_eq!(folder(&c, &base, &user.token, "sent").len(), 1);
-    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
         .json(&json!({ "keepMovedSent": true }))
         .send()
         .unwrap();
@@ -2931,7 +2951,7 @@ fn mail_settings_all_mail_and_emptying() {
 
     let inbox = folder(&c, &base, &user.token, "inbox");
     let trashed = inbox[0]["id"].as_str().unwrap().to_string();
-    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/messages")), &user.token)
         .json(&json!({ "ids": [trashed], "folder": "trash" }))
         .send()
         .unwrap();
@@ -2941,13 +2961,13 @@ fn mail_settings_all_mail_and_emptying() {
         all(&c).iter().any(|m| m["id"] == trashed.as_str()),
         "All mail has the Trash by default"
     );
-    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18, "unreadFavicon": true }))
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spamAndUnsubscribe", "remoteImages": "always", "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18, "unreadFavicon": true }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18, "unreadFavicon": true, "keepMovedSent": true })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spamAndUnsubscribe", "remoteImages": "always", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18, "unreadFavicon": true, "keepMovedSent": true })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -2957,7 +2977,7 @@ fn mail_settings_all_mail_and_emptying() {
     // Empty the Trash: the message is gone for good and its storage freed.
     let used = common::used(&c, &base, &user.token);
     let r = bearer(
-        c.post(format!("{base}/api/mail/messages/empty")),
+        c.post(format!("{base}/api/v1/mail/messages/empty")),
         &user.token,
     )
     .json(&json!({ "folder": "trash" }))
@@ -2968,7 +2988,7 @@ fn mail_settings_all_mail_and_emptying() {
     assert!(common::used(&c, &base, &user.token) < used);
     // Only Trash and Spam are emptied.
     let r = bearer(
-        c.post(format!("{base}/api/mail/messages/empty")),
+        c.post(format!("{base}/api/v1/mail/messages/empty")),
         &user.token,
     )
     .json(&json!({ "folder": "inbox" }))
@@ -2992,7 +3012,7 @@ fn block_spam_and_allow_lists() {
     let domain = bob_address.address.split_once('@').unwrap().1.to_string();
     let rules = |patterns: &[&str], kind: &str| {
         let r = bearer(
-            c.post(format!("{base}/api/mail/sender-rules")),
+            c.post(format!("{base}/api/v1/mail/sender-rules")),
             &alice.token,
         )
         .json(&json!({ "patterns": patterns, "kind": kind }))
@@ -3027,7 +3047,7 @@ fn block_spam_and_allow_lists() {
             "messageId": message_id,
             "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
         });
-        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &bob.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&meta).unwrap()),
                 ("data", split.data_packet),
@@ -3064,11 +3084,14 @@ fn block_spam_and_allow_lists() {
     assert_eq!(subjects("inbox").len(), 1);
 
     // Unblock (delete the entries): mail arrives as usual.
-    let list: Value = bearer(c.get(format!("{base}/api/mail/sender-rules")), &alice.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let list: Value = bearer(
+        c.get(format!("{base}/api/v1/mail/sender-rules")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     assert_eq!(list.as_array().unwrap().len(), 2);
     let ids: Vec<Value> = list
         .as_array()
@@ -3077,7 +3100,7 @@ fn block_spam_and_allow_lists() {
         .map(|r| r["id"].clone())
         .collect();
     let r = bearer(
-        c.post(format!("{base}/api/mail/sender-rules/delete")),
+        c.post(format!("{base}/api/v1/mail/sender-rules/delete")),
         &alice.token,
     )
     .json(&json!({ "ids": ids }))
@@ -3088,7 +3111,7 @@ fn block_spam_and_allow_lists() {
     assert_eq!(subjects("inbox").len(), 2);
     // Not an address or domain: refused.
     let r = bearer(
-        c.post(format!("{base}/api/mail/sender-rules")),
+        c.post(format!("{base}/api/v1/mail/sender-rules")),
         &alice.token,
     )
     .json(&json!({ "patterns": ["not a domain"], "kind": "block" }))
@@ -3136,7 +3159,7 @@ fn encrypt_off_sign_on_between_kutup_users() {
         "keyPackets": { "self": b64(&split.key_packets[0]) },
         "readable": [alice_address.address.to_uppercase()],
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &bob.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -3156,10 +3179,10 @@ fn encrypt_off_sign_on_between_kutup_users() {
         .iter()
         .find(|m| m["subject"] == "readable")
         .expect("delivered");
-    assert_eq!(message["protection"], "zero_access");
+    assert_eq!(message["protection"], "zeroAccess");
     let stored = bearer(
         c.get(format!(
-            "{base}/api/mail/messages/{}/content",
+            "{base}/api/v1/mail/messages/{}/content",
             message["id"].as_str().unwrap()
         )),
         &alice.token,
@@ -3184,7 +3207,7 @@ fn encrypt_off_sign_on_between_kutup_users() {
     let sent = folder(&c, &base, &bob.token, "sent");
     assert_eq!(
         sent.iter().find(|m| m["subject"] == "readable").unwrap()["protection"],
-        "end_to_end"
+        "endToEnd"
     );
 
     // Readable without the readable message: refused.
@@ -3197,7 +3220,7 @@ fn encrypt_off_sign_on_between_kutup_users() {
         "keyPackets": { "self": b64(&split.key_packets[0]) },
         "readable": [alice_address.address],
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &bob.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -3216,7 +3239,7 @@ fn display_name_and_signature() {
     let c = client();
     let user = register(&c, &base);
     let address = set_up_address(&c, &base, &user);
-    let identity: Value = bearer(c.get(format!("{base}/api/mail/identity")), &user.token)
+    let identity: Value = bearer(c.get(format!("{base}/api/v1/mail/identity")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -3228,7 +3251,7 @@ fn display_name_and_signature() {
         "the username until a name is set"
     );
     assert_eq!(identity["signature"], "");
-    let r = bearer(c.patch(format!("{base}/api/mail/identity")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/identity")), &user.token)
         .json(&json!({ "displayName": "  Ayşe Yılmaz ", "signature": "<p><strong>Ayşe</strong><br>Kutup</p>" }))
         .send()
         .unwrap();
@@ -3240,14 +3263,14 @@ fn display_name_and_signature() {
         json!({ "displayName": "a\nb" }),
         json!({ "signature": "x".repeat(10_001) }),
     ] {
-        let r = bearer(c.patch(format!("{base}/api/mail/identity")), &user.token)
+        let r = bearer(c.patch(format!("{base}/api/v1/mail/identity")), &user.token)
             .json(&bad)
             .send()
             .unwrap();
         assert_eq!(r.status().as_u16(), 400, "{bad}");
     }
     // Only the name: the signature stays.
-    let r = bearer(c.patch(format!("{base}/api/mail/identity")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/identity")), &user.token)
         .json(&json!({ "displayName": "" }))
         .send()
         .unwrap();
@@ -3272,10 +3295,13 @@ fn auto_reply_answers_once_per_sender() {
     let bob_address = set_up_address(&c, &base, &bob);
     let domain = bob_address.address.split_once('@').unwrap().1.to_string();
     let put = |body: Value| {
-        bearer(c.put(format!("{base}/api/mail/auto-reply")), &alice.token)
-            .json(&body)
-            .send()
-            .unwrap()
+        bearer(
+            c.put(format!("{base}/api/v1/mail/auto-reply")),
+            &alice.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
     };
     let settings = |repeat: &str| {
         json!({
@@ -3285,11 +3311,14 @@ fn auto_reply_answers_once_per_sender() {
     };
 
     // Nothing saved yet.
-    let none: Value = bearer(c.get(format!("{base}/api/mail/auto-reply")), &alice.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let none: Value = bearer(
+        c.get(format!("{base}/api/v1/mail/auto-reply")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     assert_eq!(none, json!({ "settings": null, "active": false }));
     // Refused: an unknown zone, an end before the start, an empty message.
     let mut bad = settings("permanent");
@@ -3332,7 +3361,7 @@ fn auto_reply_answers_once_per_sender() {
             "messageId": message_id,
             "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
         });
-        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &bob.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&meta).unwrap()),
                 ("data", split.data_packet),
@@ -3372,7 +3401,7 @@ fn auto_reply_answers_once_per_sender() {
     let reply = wait_answers(&bob, "inbox", 1).remove(0);
     assert_eq!(reply["subject"], "Auto: Toplantı");
     assert_eq!(reply["inReplyTo"], first.as_str());
-    assert_eq!(reply["protection"], "zero_access");
+    assert_eq!(reply["protection"], "zeroAccess");
     assert_eq!(reply["from"]["address"], alice_address.address.as_str());
     let content = open_row(&c, &base, &bob, &bob_address, &reply);
     assert!(
@@ -3389,7 +3418,7 @@ fn auto_reply_answers_once_per_sender() {
     std::thread::sleep(Duration::from_secs(5));
     assert_eq!(answers(&bob, "inbox").len(), 1);
     // Bob's own auto-reply does not answer Alice's automatic one.
-    let bob_put = bearer(c.put(format!("{base}/api/mail/auto-reply")), &bob.token)
+    let bob_put = bearer(c.put(format!("{base}/api/v1/mail/auto-reply")), &bob.token)
         .json(&settings("permanent"))
         .send()
         .unwrap();
@@ -3434,7 +3463,7 @@ fn auto_reply_answers_once_per_sender() {
         "keyPackets": { "self": b64(&split.key_packets[0]) },
         "readable": [alice_address.address],
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &carol.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &carol.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -3482,7 +3511,7 @@ fn conversations_group_a_thread_in_one_row() {
             meta["inReplyTo"] = json!(parent);
             meta["references"] = json!([parent]);
         }
-        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &bob.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&meta).unwrap()),
                 ("data", split.data_packet),
@@ -3494,7 +3523,7 @@ fn conversations_group_a_thread_in_one_row() {
     };
     let list = |query: &str| -> Value {
         bearer(
-            c.get(format!("{base}/api/mail/messages?folder=inbox{query}")),
+            c.get(format!("{base}/api/v1/mail/messages?folder=inbox{query}")),
             &alice.token,
         )
         .send()
@@ -3537,10 +3566,13 @@ fn conversations_group_a_thread_in_one_row() {
         .as_str()
         .unwrap()
         .to_string();
-    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &alice.token)
-        .json(&json!({ "ids": [first_id], "seen": true }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.patch(format!("{base}/api/v1/mail/messages")),
+        &alice.token,
+    )
+    .json(&json!({ "ids": [first_id], "seen": true }))
+    .send()
+    .unwrap();
     assert!(r.status().is_success());
     assert_eq!(
         list("&conversations=true")["messages"][1]["conversation"]["unread"],
@@ -3556,7 +3588,7 @@ fn conversations_group_a_thread_in_one_row() {
     // The counts follow: two unread messages, one unread conversation.
     let counts = |query: &str| -> Value {
         let all: Value = bearer(
-            c.get(format!("{base}/api/mail/counts{query}")),
+            c.get(format!("{base}/api/v1/mail/counts{query}")),
             &alice.token,
         )
         .send()
@@ -3594,7 +3626,7 @@ fn outside_sending_is_set_by_administrators() {
     let address = set_up_address(&c, &base, &user);
     let policy = |token: &str| -> (u16, Value) {
         let r = bearer(
-            c.get(format!("{base}/api/admin/mail/outside-sending")),
+            c.get(format!("{base}/api/v1/admin/mail/outside-sending")),
             token,
         )
         .send()
@@ -3604,7 +3636,7 @@ fn outside_sending_is_set_by_administrators() {
     };
     let set = |token: &str, value: &str| -> u16 {
         bearer(
-            c.put(format!("{base}/api/admin/mail/outside-sending")),
+            c.put(format!("{base}/api/v1/admin/mail/outside-sending")),
             token,
         )
         .json(&json!({ "outsideSending": value }))
@@ -3614,7 +3646,7 @@ fn outside_sending_is_set_by_administrators() {
         .as_u16()
     };
     let allowed = |token: &str| -> bool {
-        let status: Value = bearer(c.get(format!("{base}/api/mail/sending")), token)
+        let status: Value = bearer(c.get(format!("{base}/api/v1/mail/sending")), token)
             .send()
             .unwrap()
             .json()
@@ -3649,17 +3681,20 @@ fn outside_sending_is_set_by_administrators() {
     assert_eq!(policy(&admin).1, json!({ "outsideSending": "off" }));
 
     // Each change is in the audit log, from and to.
-    let activity: Value = bearer(c.get(format!("{base}/api/admin/activity?limit=20")), &admin)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let activity: Value = bearer(
+        c.get(format!("{base}/api/v1/admin/activity?limit=20")),
+        &admin,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let changes: Vec<&Value> = activity["entries"]
         .as_array()
         .or_else(|| activity.as_array())
         .unwrap()
         .iter()
-        .filter(|e| e["action"] == "mail.outside_sending.update")
+        .filter(|e| e["action"] == "mail.updateOutsideSending")
         .collect();
     assert!(
         changes
@@ -3708,7 +3743,7 @@ fn list_filters_and_sorts() {
                 .collect::<Vec<_>>(),
             "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
         });
-        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &bob.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&meta).unwrap()),
                 ("data", split.data_packet),
@@ -3720,7 +3755,7 @@ fn list_filters_and_sorts() {
     };
     let subjects = |query: &str| -> (Vec<String>, Option<String>) {
         let page: Value = bearer(
-            c.get(format!("{base}/api/mail/messages?folder=inbox{query}")),
+            c.get(format!("{base}/api/v1/mail/messages?folder=inbox{query}")),
             &alice.token,
         )
         .send()
@@ -3779,7 +3814,7 @@ fn list_filters_and_sorts() {
         let numbered = |query: &str| -> (Vec<String>, Value) {
             let page: Value = bearer(
                 c.get(format!(
-                    "{base}/api/mail/messages?folder=inbox&sort=largest&limit=2{query}{conversations}"
+                    "{base}/api/v1/mail/messages?folder=inbox&sort=largest&limit=2{query}{conversations}"
                 )),
                 &alice.token,
             )
@@ -3806,7 +3841,7 @@ fn list_filters_and_sorts() {
     }
     let r = bearer(
         c.get(format!(
-            "{base}/api/mail/messages?folder=inbox&page=0&before=1_{}",
+            "{base}/api/v1/mail/messages?folder=inbox&page=0&before=1_{}",
             uuid::Uuid::nil()
         )),
         &alice.token,
@@ -3818,7 +3853,7 @@ fn list_filters_and_sorts() {
     // conversation row names each one's message.
     let rows = |query: &str| -> Vec<Value> {
         let page: Value = bearer(
-            c.get(format!("{base}/api/mail/messages?folder=inbox{query}")),
+            c.get(format!("{base}/api/v1/mail/messages?folder=inbox{query}")),
             &alice.token,
         )
         .send()
@@ -3855,10 +3890,13 @@ fn list_filters_and_sorts() {
         json!([])
     );
     // Read and unread.
-    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &alice.token)
-        .json(&json!({ "ids": [middle_row["id"]], "seen": true }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.patch(format!("{base}/api/v1/mail/messages")),
+        &alice.token,
+    )
+    .json(&json!({ "ids": [middle_row["id"]], "seen": true }))
+    .send()
+    .unwrap();
     assert!(r.status().is_success());
     assert_eq!(subjects("&unread=true").0, ["büyük", "küçük"]);
     assert_eq!(subjects("&unread=false").0, ["orta"]);
@@ -3867,7 +3905,9 @@ fn list_filters_and_sorts() {
         ["büyük", "küçük"]
     );
     let r = bearer(
-        c.get(format!("{base}/api/mail/messages?folder=inbox&sort=random")),
+        c.get(format!(
+            "{base}/api/v1/mail/messages?folder=inbox&sort=random"
+        )),
         &alice.token,
     )
     .send()
@@ -3917,7 +3957,7 @@ fn one_click_unsubscribe_goes_through_the_server() {
     // Someone else's message: not found.
     let eve = register(&c, &base);
     let r = bearer(
-        c.post(format!("{base}/api/mail/messages/{id}/receipt")),
+        c.post(format!("{base}/api/v1/mail/messages/{id}/receipt")),
         &eve.token,
     )
     .json(&json!({}))
@@ -3927,7 +3967,7 @@ fn one_click_unsubscribe_goes_through_the_server() {
     // The reader's read receipt is noted on the message (Proton's "Read receipt sent").
     assert_eq!(row["receiptSent"], false);
     let r = bearer(
-        c.post(format!("{base}/api/mail/messages/{id}/receipt")),
+        c.post(format!("{base}/api/v1/mail/messages/{id}/receipt")),
         &alice.token,
     )
     .json(&json!({}))
@@ -3939,7 +3979,7 @@ fn one_click_unsubscribe_goes_through_the_server() {
         true
     );
     let r = bearer(
-        c.post(format!("{base}/api/mail/messages/{id}/unsubscribe")),
+        c.post(format!("{base}/api/v1/mail/messages/{id}/unsubscribe")),
         &eve.token,
     )
     .json(&json!({}))
@@ -3949,7 +3989,7 @@ fn one_click_unsubscribe_goes_through_the_server() {
 
     // One click: the server POSTs RFC 8058's body to the list's URL.
     let r = bearer(
-        c.post(format!("{base}/api/mail/messages/{id}/unsubscribe")),
+        c.post(format!("{base}/api/v1/mail/messages/{id}/unsubscribe")),
         &alice.token,
     )
     .json(&json!({ "oneClickUrl": format!("https://lists.outside.test/u?id={tag}") }))
@@ -3997,7 +4037,7 @@ fn select_all_changes_a_whole_place() {
     assert_eq!(inbox(&c).len(), 3);
     let batch = |body: Value| {
         bearer(
-            c.post(format!("{base}/api/mail/messages/batch")),
+            c.post(format!("{base}/api/v1/mail/messages/batch")),
             &user.token,
         )
         .json(&body)
@@ -4022,7 +4062,7 @@ fn select_all_changes_a_whole_place() {
     assert_eq!(folder(&c, &base, &user.token, "sent").len(), 3);
     // A label on everything archived, then off.
     let label = uuid::Uuid::new_v4().to_string();
-    let r = bearer(c.post(format!("{base}/api/mail/labels")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/labels")), &user.token)
         .json(&json!({ "id": label, "name": sealed_name(&user, Label, &label, "Hepsi"), "color": "#22aa55" }))
         .send()
         .unwrap();
@@ -4048,7 +4088,7 @@ fn select_all_changes_a_whole_place() {
     let eve = register(&c, &base);
     let as_eve = |body: Value| {
         bearer(
-            c.post(format!("{base}/api/mail/messages/batch")),
+            c.post(format!("{base}/api/v1/mail/messages/batch")),
             &eve.token,
         )
         .json(&body)
@@ -4112,7 +4152,7 @@ fn advanced_search_by_sender_recipient_dates_and_address() {
             "messageId": message_id,
             "keyPackets": { "self": b64(&split.key_packets[1]), to.address.clone(): b64(&split.key_packets[0]) },
         });
-        let r = bearer(c.post(format!("{base}/api/mail/send")), &from.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &from.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&meta).unwrap()),
                 ("data", split.data_packet),
@@ -4132,7 +4172,7 @@ fn advanced_search_by_sender_recipient_dates_and_address() {
     let found = |folder: &str, query: &[(&str, &str)]| -> Vec<String> {
         let mut params = vec![("folder", folder)];
         params.extend_from_slice(query);
-        let page: Value = bearer(c.get(format!("{base}/api/mail/messages")), &alice.token)
+        let page: Value = bearer(c.get(format!("{base}/api/v1/mail/messages")), &alice.token)
             .query(&params)
             .send()
             .unwrap()
@@ -4191,7 +4231,7 @@ fn advanced_search_by_sender_recipient_dates_and_address() {
     );
     // What Address offers: her own address (she is in no list).
     let offered: Value = bearer(
-        c.get(format!("{base}/api/mail/search-addresses")),
+        c.get(format!("{base}/api/v1/mail/search-addresses")),
         &alice.token,
     )
     .send()
@@ -4206,7 +4246,7 @@ fn advanced_search_by_sender_recipient_dates_and_address() {
     ] {
         let mut params = vec![("folder", "all")];
         params.extend(query);
-        let r = bearer(c.get(format!("{base}/api/mail/messages")), &alice.token)
+        let r = bearer(c.get(format!("{base}/api/v1/mail/messages")), &alice.token)
             .query(&params)
             .send()
             .unwrap();
@@ -4228,7 +4268,7 @@ fn new_mail_notifications_list_unread_inbox_mail() {
     let domain = bob_address.address.split_once('@').unwrap().1.to_string();
     let new_mail = |after: Option<&str>| -> Value {
         let mut request = bearer(
-            c.get(format!("{base}/api/mail/notifications")),
+            c.get(format!("{base}/api/v1/mail/notifications")),
             &alice.token,
         );
         if let Some(after) = after {
@@ -4260,7 +4300,7 @@ fn new_mail_notifications_list_unread_inbox_mail() {
         "messageId": message_id,
         "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &bob.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -4280,19 +4320,25 @@ fn new_mail_notifications_list_unread_inbox_mail() {
     assert_eq!(listed[0]["folder"], "inbox");
     assert_eq!(listed[0]["fromAddress"], bob_address.address.as_str());
     // Bob's own copy (sent) is not news to him.
-    let bobs: Value = bearer(c.get(format!("{base}/api/mail/notifications")), &bob.token)
-        .query(&[("after", start.as_str())])
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let bobs: Value = bearer(
+        c.get(format!("{base}/api/v1/mail/notifications")),
+        &bob.token,
+    )
+    .query(&[("after", start.as_str())])
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     assert_eq!(bobs["messages"], json!([]));
     // Read, or filed away: no longer.
     let patch = |body: Value| {
-        let r = bearer(c.patch(format!("{base}/api/mail/messages")), &alice.token)
-            .json(&body)
-            .send()
-            .unwrap();
+        let r = bearer(
+            c.patch(format!("{base}/api/v1/mail/messages")),
+            &alice.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
         assert_eq!(r.status(), 200);
     };
     patch(json!({ "ids": [id], "folder": "archive" }));
@@ -4306,7 +4352,7 @@ fn new_mail_notifications_list_unread_inbox_mail() {
     assert_eq!(new_mail(Some(&start))["messages"], json!([]));
     // A bad `after` is refused.
     let r = bearer(
-        c.get(format!("{base}/api/mail/notifications")),
+        c.get(format!("{base}/api/v1/mail/notifications")),
         &alice.token,
     )
     .query(&[("after", "yesterday")])
@@ -4345,7 +4391,7 @@ fn body_search_lists_what_to_index_and_follows_changes() {
             "messageId": message_id,
             "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
         });
-        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &bob.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&meta).unwrap()),
                 ("data", split.data_packet),
@@ -4356,7 +4402,7 @@ fn body_search_lists_what_to_index_and_follows_changes() {
         message_id
     };
     let start: Value = bearer(
-        c.get(format!("{base}/api/mail/search-index/changes")),
+        c.get(format!("{base}/api/v1/mail/search-index/changes")),
         &alice.token,
     )
     .send()
@@ -4379,8 +4425,11 @@ fn body_search_lists_what_to_index_and_follows_changes() {
 
     // What to index: everything but Drafts, newest first, in pages.
     let page = |before: Option<&str>| -> Value {
-        let mut request = bearer(c.get(format!("{base}/api/mail/search-index")), &alice.token)
-            .query(&[("limit", "1")]);
+        let mut request = bearer(
+            c.get(format!("{base}/api/v1/mail/search-index")),
+            &alice.token,
+        )
+        .query(&[("limit", "1")]);
         if let Some(before) = before {
             request = request.query(&[("before", before)]);
         }
@@ -4399,7 +4448,7 @@ fn body_search_lists_what_to_index_and_follows_changes() {
     // transactions still running wait, so each check polls a little.
     let changes = |token: &str, since: Option<&str>| -> Value {
         let mut request = bearer(
-            c.get(format!("{base}/api/mail/search-index/changes")),
+            c.get(format!("{base}/api/v1/mail/search-index/changes")),
             token,
         );
         if let Some(since) = since {
@@ -4417,7 +4466,7 @@ fn body_search_lists_what_to_index_and_follows_changes() {
         let (mut changed, mut gone, mut cursor) = (Vec::new(), Vec::new(), since.to_string());
         loop {
             let page: Value = bearer(
-                c.get(format!("{base}/api/mail/search-index/changes")),
+                c.get(format!("{base}/api/v1/mail/search-index/changes")),
                 &alice.token,
             )
             .query(&[("since", cursor.as_str()), ("limit", "1")])
@@ -4455,10 +4504,13 @@ fn body_search_lists_what_to_index_and_follows_changes() {
     assert!(changed.iter().all(|m| m["folder"] == "inbox"));
 
     let patch = |body: Value| {
-        let r = bearer(c.patch(format!("{base}/api/mail/messages")), &alice.token)
-            .json(&body)
-            .send()
-            .unwrap();
+        let r = bearer(
+            c.patch(format!("{base}/api/v1/mail/messages")),
+            &alice.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
         assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
     };
     patch(json!({ "ids": [first], "folder": "archive" }));
@@ -4478,7 +4530,7 @@ fn body_search_lists_what_to_index_and_follows_changes() {
         &label,
         "Faturalar",
     );
-    let r = bearer(c.post(format!("{base}/api/mail/labels")), &alice.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/labels")), &alice.token)
         .json(&json!({ "id": label, "name": name, "color": "#22aa55" }))
         .send()
         .unwrap();
@@ -4497,7 +4549,7 @@ fn body_search_lists_what_to_index_and_follows_changes() {
     });
     patch(json!({ "ids": [second], "folder": "trash" }));
     let r = bearer(
-        c.post(format!("{base}/api/mail/messages/delete")),
+        c.post(format!("{base}/api/v1/mail/messages/delete")),
         &alice.token,
     )
     .json(&json!({ "ids": [second] }))
@@ -4525,7 +4577,7 @@ fn body_search_lists_what_to_index_and_follows_changes() {
         "1.notauuid",
     ] {
         let r = bearer(
-            c.get(format!("{base}/api/mail/search-index/changes")),
+            c.get(format!("{base}/api/v1/mail/search-index/changes")),
             &alice.token,
         )
         .query(&[("since", bad)])
@@ -4545,7 +4597,7 @@ fn senders_whose_images_always_load() {
     let alice = register(&c, &base);
     let eve = register(&c, &base);
     let list = |token: &str| -> Vec<String> {
-        let rows: Value = bearer(c.get(format!("{base}/api/mail/image-senders")), token)
+        let rows: Value = bearer(c.get(format!("{base}/api/v1/mail/image-senders")), token)
             .send()
             .unwrap()
             .json()
@@ -4567,7 +4619,7 @@ fn senders_whose_images_always_load() {
     // Kept lowercase, once; a domain or nonsense is not a sender.
     assert_eq!(
         post(
-            "/api/mail/image-senders",
+            "/api/v1/mail/image-senders",
             &alice.token,
             json!({ "address": "News@Example.org" })
         ),
@@ -4575,7 +4627,7 @@ fn senders_whose_images_always_load() {
     );
     assert_eq!(
         post(
-            "/api/mail/image-senders",
+            "/api/v1/mail/image-senders",
             &alice.token,
             json!({ "address": "news@example.org" })
         ),
@@ -4584,7 +4636,7 @@ fn senders_whose_images_always_load() {
     assert_eq!(list(&alice.token), ["news@example.org"]);
     assert_eq!(
         post(
-            "/api/mail/image-senders",
+            "/api/v1/mail/image-senders",
             &alice.token,
             json!({ "address": "example.org" })
         ),
@@ -4592,7 +4644,7 @@ fn senders_whose_images_always_load() {
     );
     assert_eq!(
         post(
-            "/api/mail/image-senders",
+            "/api/v1/mail/image-senders",
             &alice.token,
             json!({ "address": "not an address" })
         ),
@@ -4602,7 +4654,7 @@ fn senders_whose_images_always_load() {
     assert!(list(&eve.token).is_empty());
     assert_eq!(
         post(
-            "/api/mail/image-senders/delete",
+            "/api/v1/mail/image-senders/delete",
             &eve.token,
             json!({ "address": "news@example.org" })
         ),
@@ -4611,7 +4663,7 @@ fn senders_whose_images_always_load() {
     assert_eq!(list(&alice.token), ["news@example.org"]);
     assert_eq!(
         post(
-            "/api/mail/image-senders/delete",
+            "/api/v1/mail/image-senders/delete",
             &alice.token,
             json!({ "address": "NEWS@example.org" })
         ),
@@ -4629,7 +4681,7 @@ fn the_image_proxy_blocks_trackers_and_private_addresses() {
     let c = client();
     let user = register(&c, &base);
     // On by default, and saved when turned off.
-    let settings: Value = bearer(c.get(format!("{base}/api/mail/settings")), &user.token)
+    let settings: Value = bearer(c.get(format!("{base}/api/v1/mail/settings")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -4637,7 +4689,7 @@ fn the_image_proxy_blocks_trackers_and_private_addresses() {
     assert_eq!(settings["imageProxy"], true);
     assert_eq!(settings["embeddedImages"], true);
     assert_eq!(settings["removeImageMetadata"], true);
-    let saved: Value = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+    let saved: Value = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
         .json(&json!({ "embeddedImages": false, "removeImageMetadata": false }))
         .send()
         .unwrap()
@@ -4646,7 +4698,7 @@ fn the_image_proxy_blocks_trackers_and_private_addresses() {
     assert_eq!(saved["embeddedImages"], false);
     assert_eq!(saved["removeImageMetadata"], false);
     assert_eq!(saved["imageProxy"], true);
-    let saved: Value = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+    let saved: Value = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
         .json(&json!({ "imageProxy": false }))
         .send()
         .unwrap()
@@ -4656,7 +4708,7 @@ fn the_image_proxy_blocks_trackers_and_private_addresses() {
     let tracker = "https://x.us1.list-manage.com/track/open.php?u=1";
     // The address goes in the body, never in a URL a log would keep.
     let image = |url: &str| {
-        bearer(c.post(format!("{base}/api/mail/images")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/mail/images")), &user.token)
             .json(&json!({ "url": url }))
             .send()
             .unwrap()
@@ -4677,7 +4729,7 @@ fn the_image_proxy_blocks_trackers_and_private_addresses() {
     }
     // Signed in only.
     let r = c
-        .post(format!("{base}/api/mail/images"))
+        .post(format!("{base}/api/v1/mail/images"))
         .json(&json!({ "url": "https://example.org/a.png" }))
         .send()
         .unwrap();
@@ -4695,7 +4747,7 @@ fn undo_send_holds_a_draft_then_sends_it() {
     let address = set_up_address(&c, &base, &user);
     let domain = address.address.split_once('@').unwrap().1.to_string();
     let settings = |body: Value| {
-        let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        let r = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
             .json(&body)
             .send()
             .unwrap();
@@ -4706,7 +4758,7 @@ fn undo_send_holds_a_draft_then_sends_it() {
         let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
         let own =
             mail_key::encrypt_split(&[&address.public_key], &address.secret_key, b"draft").unwrap();
-        let r = bearer(c.post(format!("{base}/api/mail/drafts")), &user.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/drafts")), &user.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&json!({ "subject": subject, "to": [{ "address": address.address }], "messageId": message_id })).unwrap()),
                 ("body", [own.key_packets[0].as_slice(), &own.data_packet].concat()),
@@ -4733,7 +4785,7 @@ fn undo_send_holds_a_draft_then_sends_it() {
             "draftId": draft,
             "keyPackets": { "self": packet, address.address.clone(): packet },
         });
-        bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/mail/send")), &user.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&meta).unwrap()),
                 ("data", split.data_packet),
@@ -4742,13 +4794,13 @@ fn undo_send_holds_a_draft_then_sends_it() {
             .unwrap()
     };
     let status = |id: &str, token: &str| {
-        bearer(c.get(format!("{base}/api/mail/outbox/{id}")), token)
+        bearer(c.get(format!("{base}/api/v1/mail/outbox/{id}")), token)
             .send()
             .unwrap()
     };
     let cancel = |id: &str| {
         bearer(
-            c.post(format!("{base}/api/mail/outbox/{id}/cancel")),
+            c.post(format!("{base}/api/v1/mail/outbox/{id}/cancel")),
             &user.token,
         )
         .send()
@@ -4762,6 +4814,10 @@ fn undo_send_holds_a_draft_then_sends_it() {
             .any(|m| m["id"] == id)
     };
     settings(json!({ "delaySendSeconds": 5 }));
+    // Made before anything is held: registering runs the client's key
+    // derivation, which in a debug build on a busy machine can outlast the
+    // 5 s hold, and the send would go before the cancel below.
+    let eve = register(&c, &base);
 
     // Held: the draft stays, cannot change, and Undo keeps it a draft.
     let (draft, message_id) = make_draft("Geri al");
@@ -4771,7 +4827,7 @@ fn undo_send_holds_a_draft_then_sends_it() {
     let outbox = held["outboxId"].as_str().unwrap().to_string();
     assert!(in_drafts(&draft));
     let r = bearer(
-        c.put(format!("{base}/api/mail/drafts/{draft}")),
+        c.put(format!("{base}/api/v1/mail/drafts/{draft}")),
         &user.token,
     )
     .multipart(form(vec![("meta", b"{}".to_vec())]))
@@ -4781,7 +4837,6 @@ fn undo_send_holds_a_draft_then_sends_it() {
     // A second send of the same draft while one waits is refused.
     assert_eq!(send(&draft, &message_id, "Geri al").status(), 409);
     // Someone else's: not found.
-    let eve = register(&c, &base);
     assert_eq!(status(&outbox, &eve.token).status(), 404);
     assert_eq!(cancel(&outbox), 204);
     assert_eq!(cancel(&outbox), 409, "taken back once");
@@ -4822,7 +4877,7 @@ fn undo_send_holds_a_draft_then_sends_it() {
     settings(json!({ "delaySendSeconds": 0 }));
     let (draft, message_id) = make_draft("Hemen");
     assert_eq!(send(&draft, &message_id, "Hemen").status(), 200);
-    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
         .json(&json!({ "delaySendSeconds": 7 }))
         .send()
         .unwrap();
@@ -4843,7 +4898,7 @@ fn scheduled_send_waits_in_scheduled_then_goes() {
         let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
         let own =
             mail_key::encrypt_split(&[&address.public_key], &address.secret_key, b"draft").unwrap();
-        let r = bearer(c.post(format!("{base}/api/mail/drafts")), &user.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/drafts")), &user.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&json!({ "subject": subject, "to": [{ "address": address.address }], "messageId": message_id })).unwrap()),
                 ("body", [own.key_packets[0].as_slice(), &own.data_packet].concat()),
@@ -4873,7 +4928,7 @@ fn scheduled_send_waits_in_scheduled_then_goes() {
             "scheduleAt": at.format(&time::format_description::well_known::Rfc3339).unwrap(),
             "keyPackets": { "self": packet, address.address.clone(): packet },
         });
-        bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/mail/send")), &user.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&meta).unwrap()),
                 ("data", split.data_packet),
@@ -4931,13 +4986,13 @@ fn scheduled_send_waits_in_scheduled_then_goes() {
     assert_eq!(row["outboxId"], outbox.as_str());
     assert!(row["scheduledAt"].is_string());
     // A scheduled message is not moved away meanwhile.
-    let moved = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+    let moved = bearer(c.patch(format!("{base}/api/v1/mail/messages")), &user.token)
         .json(&json!({ "ids": [draft], "folder": "trash" }))
         .send()
         .unwrap();
     assert_eq!(moved.json::<Value>().unwrap()["updated"], 0);
     let r = bearer(
-        c.post(format!("{base}/api/mail/outbox/{outbox}/cancel")),
+        c.post(format!("{base}/api/v1/mail/outbox/{outbox}/cancel")),
         &user.token,
     )
     .send()
@@ -4960,7 +5015,7 @@ fn scheduled_send_waits_in_scheduled_then_goes() {
     let mut state = Value::Null;
     for _ in 0..100 {
         state = bearer(
-            c.get(format!("{base}/api/mail/outbox/{outbox}")),
+            c.get(format!("{base}/api/v1/mail/outbox/{outbox}")),
             &user.token,
         )
         .send()
@@ -5004,7 +5059,7 @@ fn snoozed_mail_comes_back_unread() {
         std::thread::sleep(Duration::from_millis(100));
     }
     let id = row.expect("delivered")["id"].as_str().unwrap().to_string();
-    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/messages")), &user.token)
         .json(&json!({ "ids": [id], "seen": true }))
         .send()
         .unwrap();
@@ -5014,7 +5069,7 @@ fn snoozed_mail_comes_back_unread() {
             at.format(&time::format_description::well_known::Rfc3339)
                 .unwrap()
         });
-        bearer(c.post(format!("{base}/api/mail/messages/snooze")), token)
+        bearer(c.post(format!("{base}/api/v1/mail/messages/snooze")), token)
             .json(&json!({ "ids": [id], "until": until }))
             .send()
             .unwrap()
@@ -5074,7 +5129,7 @@ fn snoozed_mail_comes_back_unread() {
         updated(snooze(&user.token, Some(now() + time::Duration::hours(1)))),
         1
     );
-    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/messages")), &user.token)
         .json(&json!({ "ids": [id], "folder": "archive" }))
         .send()
         .unwrap();
@@ -5114,7 +5169,7 @@ fn expiring_messages_are_deleted_everywhere() {
         if !local {
             parts.push(("mime", mime.into_bytes()));
         }
-        bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/mail/send")), &user.token)
             .multipart(form(parts))
             .send()
             .unwrap()
@@ -5223,7 +5278,7 @@ fn an_old_addresss_keys_stay_its_accounts_to_manage() {
     let key_list = next_list(&alice, &list, vec![compromised, new_entry]);
     let add = |token: &str| {
         bearer(
-            c.post(format!("{base}/api/mail/addresses/{old_id}/keys")),
+            c.post(format!("{base}/api/v1/mail/addresses/{old_id}/keys")),
             token,
         )
         .json(&json!({ "publicKey": b64(&new.public_key), "privateKeyEnvelope": b64(&envelope), "keyList": key_list }))
@@ -5236,7 +5291,7 @@ fn an_old_addresss_keys_stay_its_accounts_to_manage() {
     let r = add(&alice.token);
     assert_eq!(r.status(), 200, "the old address's new key");
     let lookup: Value = bearer(
-        c.get(format!("{base}/api/mail/keys?email={}", old.address)),
+        c.get(format!("{base}/api/v1/mail/keys?email={}", old.address)),
         &alice.token,
     )
     .send()
@@ -5285,13 +5340,16 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
     let bob = register(&c, &base);
     let bob_address = set_up_address(&c, &base, &bob);
     let domain = old.address.split_once('@').unwrap().1.to_string();
-    let r = bearer(c.put(format!("{base}/api/mail/auto-reply")), &alice.token)
-        .json(&json!({
-            "enabled": true, "repeat": "permanent", "zone": "Europe/Istanbul",
-            "messageHtml": "<p>Taşındım.</p>", "messageText": "Taşındım.",
-        }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.put(format!("{base}/api/v1/mail/auto-reply")),
+        &alice.token,
+    )
+    .json(&json!({
+        "enabled": true, "repeat": "permanent", "zone": "Europe/Istanbul",
+        "messageHtml": "<p>Taşındım.</p>", "messageText": "Taşındım.",
+    }))
+    .send()
+    .unwrap();
     assert!(r.status().is_success(), "auto-reply: {}", r.status());
 
     let new_name = format!("moved_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
@@ -5346,7 +5404,7 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
         "messageId": message_id,
         "keyPackets": { "self": b64(&split.key_packets[1]), old.address.clone(): b64(&split.key_packets[0]) },
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &bob.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -5385,7 +5443,7 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
         (new.address.clone(), new.address.clone()),
     ] {
         let lookup: Value = bearer(
-            c.get(format!("{base}/api/mail/keys?email={asked}")),
+            c.get(format!("{base}/api/v1/mail/keys?email={asked}")),
             &bob.token,
         )
         .send()
@@ -5444,7 +5502,7 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
         "messageId": message_id,
         "keyPackets": { "self": b64(&split.key_packets[1]), bob_address.address.clone(): b64(&split.key_packets[0]) },
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &alice.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &alice.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -5456,7 +5514,7 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
 
     // Closed: mail to the old address bounces, and it publishes no key.
     let r = bearer(
-        c.post(format!("{base}/api/admin/names/{old_name}/close")),
+        c.post(format!("{base}/api/v1/admin/names/{old_name}/close")),
         &token,
     )
     .send()
@@ -5470,7 +5528,7 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
     );
     assert_ne!(rcpt, 250, "a closed address takes no mail");
     let keys = bearer(
-        c.get(format!("{base}/api/mail/keys?email={}", old.address)),
+        c.get(format!("{base}/api/v1/mail/keys?email={}", old.address)),
         &bob.token,
     )
     .send()
@@ -5484,7 +5542,7 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
     // Freed and taken: the name is Carol's now, mail to it hers, a group
     // would enrol her; what Alice received there stays Alice's.
     let r = bearer(
-        c.post(format!("{base}/api/admin/names/{old_name}/free")),
+        c.post(format!("{base}/api/v1/admin/names/{old_name}/free")),
         &token,
     )
     .send()
@@ -5517,14 +5575,17 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
         "Carol's mail is not Alice's"
     );
     let enrolled: Value = bearer(
-        c.get(format!("{base}/api/mail/accounts?address={}", old.address)),
+        c.get(format!(
+            "{base}/api/v1/mail/accounts?address={}",
+            old.address
+        )),
         &bob.token,
     )
     .send()
     .unwrap()
     .json()
     .unwrap();
-    assert_eq!(enrolled["userId"], json!(carol.id), "{enrolled}");
+    assert_eq!(enrolled["accountId"], json!(carol.id), "{enrolled}");
     common::purge_accounts(&c, &base, &[&alice, &bob, &carol]);
 }
 
@@ -5541,7 +5602,7 @@ fn a_send_held_from_before_a_rename_fails_as_receive_only() {
     let mut user = register(&c, &base);
     let address = set_up_address(&c, &base, &user);
     let domain = address.address.split_once('@').unwrap().1.to_string();
-    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+    let r = bearer(c.patch(format!("{base}/api/v1/mail/settings")), &user.token)
         .json(&json!({ "delaySendSeconds": 20 }))
         .send()
         .unwrap();
@@ -5550,7 +5611,7 @@ fn a_send_held_from_before_a_rename_fails_as_receive_only() {
     let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
     let own =
         mail_key::encrypt_split(&[&address.public_key], &address.secret_key, b"draft").unwrap();
-    let r = bearer(c.post(format!("{base}/api/mail/drafts")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/drafts")), &user.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&json!({ "subject": "Eski", "to": [{ "address": address.address }], "messageId": message_id })).unwrap()),
             ("body", [own.key_packets[0].as_slice(), &own.data_packet].concat()),
@@ -5577,7 +5638,7 @@ fn a_send_held_from_before_a_rename_fails_as_receive_only() {
         "draftId": draft,
         "keyPackets": { "self": packet, address.address.clone(): packet },
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &user.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -5599,7 +5660,7 @@ fn a_send_held_from_before_a_rename_fails_as_receive_only() {
     let deadline = Instant::now() + Duration::from_secs(60);
     let done = loop {
         let done: Value = bearer(
-            c.get(format!("{base}/api/mail/outbox/{outbox}")),
+            c.get(format!("{base}/api/v1/mail/outbox/{outbox}")),
             &user.token,
         )
         .send()
@@ -5762,7 +5823,7 @@ fn newest_code(
 /// The forwarder enters a code: `(status, body)`.
 fn enter_code(c: &Client, base: &str, forwarder: &User, id: &str, code: &str) -> (u16, Value) {
     let r = bearer(
-        c.post(format!("{base}/api/mail/forwardings/{id}/verify")),
+        c.post(format!("{base}/api/v1/mail/forwardings/{id}/verify")),
         &forwarder.token,
     )
     .json(&json!({ "code": code }))
@@ -5801,7 +5862,7 @@ fn accept_forwarding(
 ) -> Vec<u8> {
     let id = &terms.forwarding_id;
     let found: Value = bearer(
-        c.get(format!("{base}/api/mail/forwardings/{id}/activation")),
+        c.get(format!("{base}/api/v1/mail/forwardings/{id}/activation")),
         &forwardee.token,
     )
     .send()
@@ -5828,7 +5889,7 @@ fn accept_forwarding(
     )
     .unwrap();
     let r = bearer(
-        c.post(format!("{base}/api/mail/forwardings/{id}/accept")),
+        c.post(format!("{base}/api/v1/mail/forwardings/{id}/accept")),
         &forwardee.token,
     )
     .json(&json!({ "publicKey": b64(&public_key), "privateKeyEnvelope": b64(&envelope) }))
@@ -5839,7 +5900,7 @@ fn accept_forwarding(
 }
 
 fn address_id(c: &Client, base: &str, user: &User) -> String {
-    let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
+    let addresses: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -5850,7 +5911,7 @@ fn address_id(c: &Client, base: &str, user: &User) -> String {
 fn content(c: &Client, base: &str, user: &User, row: &Value) -> Vec<u8> {
     bearer(
         c.get(format!(
-            "{base}/api/mail/messages/{}/content",
+            "{base}/api/v1/mail/messages/{}/content",
             row["id"].as_str().unwrap()
         )),
         &user.token,
@@ -5892,7 +5953,7 @@ fn send_between(
             to.address.clone(): b64(&split.key_packets[1]),
         },
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &sender.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &sender.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -5928,7 +5989,7 @@ fn send_readable(
         "keyPackets": { "self": b64(&split.key_packets[0]) },
         "readable": [to],
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &sender.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &sender.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -6006,10 +6067,13 @@ fn end_to_end_forwarding() {
     // Set up: pending until Bob accepts; no answer carries k.
     let (id, request, terms) = forwarding_request(&a, &alice_address_id, &b, "all", json!([]));
     let create = |user: &User, body: &Value| {
-        bearer(c.post(format!("{base}/api/mail/forwardings")), &user.token)
-            .json(body)
-            .send()
-            .unwrap()
+        bearer(
+            c.post(format!("{base}/api/v1/mail/forwardings")),
+            &user.token,
+        )
+        .json(body)
+        .send()
+        .unwrap()
     };
     let r = create(&alice, &request);
     assert_eq!(r.status(), reqwest::StatusCode::CREATED);
@@ -6041,17 +6105,20 @@ fn end_to_end_forwarding() {
     );
 
     let listed = |user: &User| -> Value {
-        bearer(c.get(format!("{base}/api/mail/forwardings")), &user.token)
-            .send()
-            .unwrap()
-            .json()
-            .unwrap()
+        bearer(
+            c.get(format!("{base}/api/v1/mail/forwardings")),
+            &user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap()
     };
     // Unverified: Bob isn't shown it, and can't fetch its activation.
     assert_eq!(listed(&bob)["incoming"], json!([]));
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/mail/forwardings/{id}/activation")),
+            c.get(format!("{base}/api/v1/mail/forwardings/{id}/activation")),
             &bob.token
         )
         .send()
@@ -6066,7 +6133,7 @@ fn end_to_end_forwarding() {
     // Not Carol's to fetch.
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/mail/forwardings/{id}/activation")),
+            c.get(format!("{base}/api/v1/mail/forwardings/{id}/activation")),
             &carol.token
         )
         .send()
@@ -6113,7 +6180,7 @@ MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nfor alice an
 
     // Spam isn't forwarded: Alice files this sender's mail as spam.
     let r = bearer(
-        c.post(format!("{base}/api/mail/sender-rules")),
+        c.post(format!("{base}/api/v1/mail/sender-rules")),
         &alice.token,
     )
     .json(&json!({ "patterns": ["spammer@sender.test"], "kind": "spam" }))
@@ -6168,10 +6235,13 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <far-{tag}@sender.test>\r\n
 
     // The forwarded copy goes through Bob's own rules: a sender he blocks
     // isn't stored for him, and Alice sees it counted as not forwarded.
-    let r = bearer(c.post(format!("{base}/api/mail/sender-rules")), &bob.token)
-        .json(&json!({ "patterns": ["blocked@sender.test"], "kind": "block" }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/mail/sender-rules")),
+        &bob.token,
+    )
+    .json(&json!({ "patterns": ["blocked@sender.test"], "kind": "block" }))
+    .send()
+    .unwrap();
     assert!(r.status().is_success(), "block rule: {}", r.status());
     let blocked = format!(
         "From: blocked@sender.test\r\nTo: {}\r\nSubject: forward me\r\n\
@@ -6182,11 +6252,14 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
     let blocked_id = format!("blocked-{tag}@sender.test");
     assert_eq!(wait_for(&c, &base, &alice, &blocked_id)["folder"], "inbox");
     never_arrives(&c, &base, &bob, &blocked_id);
-    let skipped: Value = bearer(c.get(format!("{base}/api/mail/forwardings")), &alice.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let skipped: Value = bearer(
+        c.get(format!("{base}/api/v1/mail/forwardings")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     assert_eq!(skipped["outgoing"][0]["skipped"], 1);
 
     // Sealed on arrival by the server (Kutup mail sent readable, sealed as
@@ -6225,7 +6298,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
     // Paused: nothing reaches Bob; resumed, it does again.
     let act = |action: &str| {
         bearer(
-            c.put(format!("{base}/api/mail/forwardings/{id}/{action}")),
+            c.put(format!("{base}/api/v1/mail/forwardings/{id}/{action}")),
             &alice.token,
         )
         .send()
@@ -6240,7 +6313,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
 
     // Conditions: only what they match.
     let r = bearer(
-        c.put(format!("{base}/api/mail/forwardings/{id}/conditions")),
+        c.put(format!("{base}/api/v1/mail/forwardings/{id}/conditions")),
         &alice.token,
     )
     .json(&json!({ "match": "all", "conditions": [
@@ -6298,7 +6371,9 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
         ],
     );
     let r = bearer(
-        c.post(format!("{base}/api/mail/addresses/{alice_address_id}/keys")),
+        c.post(format!(
+            "{base}/api/v1/mail/addresses/{alice_address_id}/keys"
+        )),
         &alice.token,
     )
     .json(&json!({
@@ -6335,7 +6410,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
     never_arrives(&c, &base, &bob, &after_rotation);
 
     // Bob deletes his forwarding key for Carol's forwarding: it ends.
-    let keys: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &carol.token)
+    let keys: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &carol.token)
         .send()
         .unwrap()
         .json()
@@ -6352,7 +6427,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
     let carol_address_id = keys[0]["id"].as_str().unwrap();
     let r = bearer(
         c.delete(format!(
-            "{base}/api/mail/addresses/{carol_address_id}/forwarding-keys/{carol_key}"
+            "{base}/api/v1/mail/addresses/{carol_address_id}/forwarding-keys/{carol_key}"
         )),
         &carol.token,
     )
@@ -6374,7 +6449,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
     );
     verify_forwarding(&c, &base, &alice, &new_a.address, &carol, &cc, &declined);
     let r = bearer(
-        c.post(format!("{base}/api/mail/forwardings/{declined}/decline")),
+        c.post(format!("{base}/api/v1/mail/forwardings/{declined}/decline")),
         &carol.token,
     )
     .send()
@@ -6410,7 +6485,7 @@ fn forwarding_codes() {
     let admin_token = admin_token(&c, &base, &admin);
     let set_limit = |key: &str, value: u64| {
         let r = bearer(
-            c.put(format!("{base}/api/admin/rate-limits/{key}")),
+            c.put(format!("{base}/api/v1/admin/rate-limits/{key}")),
             &admin_token,
         )
         .json(&json!({ "value": value }))
@@ -6430,23 +6505,29 @@ fn forwarding_codes() {
     );
     let alice_address_id = address_id(&c, &base, &alice);
     let create = |body: &Value| {
-        let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
-            .json(body)
-            .send()
-            .unwrap();
+        let r = bearer(
+            c.post(format!("{base}/api/v1/mail/forwardings")),
+            &alice.token,
+        )
+        .json(body)
+        .send()
+        .unwrap();
         assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
         r.json::<Value>().unwrap()
     };
     let listed = |user: &User| -> Value {
-        bearer(c.get(format!("{base}/api/mail/forwardings")), &user.token)
-            .send()
-            .unwrap()
-            .json()
-            .unwrap()
+        bearer(
+            c.get(format!("{base}/api/v1/mail/forwardings")),
+            &user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap()
     };
     let send_code = |id: &str| {
         let r = bearer(
-            c.post(format!("{base}/api/mail/forwardings/{id}/code")),
+            c.post(format!("{base}/api/v1/mail/forwardings/{id}/code")),
             &alice.token,
         )
         .send()
@@ -6457,10 +6538,10 @@ fn forwarding_codes() {
 
     // To Carol, with codes that last a minute (the limit applies when a
     // code is made).
-    set_limit("forwarding_code_minutes", 1);
+    set_limit("mail.rate.forwarding_code_minutes", 1);
     let (to_carol, request, _) = forwarding_request(&a, &alice_address_id, &cc, "all", json!([]));
     create(&request);
-    set_limit("forwarding_code_minutes", 15);
+    set_limit("mail.rate.forwarding_code_minutes", 15);
     // To Bob: unverified, a code live, Bob shown nothing.
     let (id, request, _) = forwarding_request(&a, &alice_address_id, &b, "all", json!([]));
     let made = create(&request);
@@ -6469,7 +6550,7 @@ fn forwarding_codes() {
     assert!(made["codeExpiresAt"].is_string());
     assert_eq!(listed(&bob)["incoming"], json!([]));
     let r = bearer(
-        c.post(format!("{base}/api/mail/forwardings/{id}/decline")),
+        c.post(format!("{base}/api/v1/mail/forwardings/{id}/decline")),
         &bob.token,
     )
     .send()
@@ -6536,7 +6617,7 @@ fn forwarding_codes() {
     // new code to Bob, and Bob shown nothing until it is entered.
     assert_eq!(listed(&bob)["incoming"][0]["id"], id);
     let r = bearer(
-        c.post(format!("{base}/api/mail/forwardings/{id}/decline")),
+        c.post(format!("{base}/api/v1/mail/forwardings/{id}/decline")),
         &bob.token,
     )
     .send()
@@ -6547,7 +6628,7 @@ fn forwarding_codes() {
     let (_, renewal, terms_again) =
         forwarding_request_for(&id, &a, &alice_address_id, &b, "all", json!([]));
     let r = bearer(
-        c.put(format!("{base}/api/mail/forwardings/{id}")),
+        c.put(format!("{base}/api/v1/mail/forwardings/{id}")),
         &alice.token,
     )
     .json(&json!({ "endToEnd": renewal["endToEnd"] }))
@@ -6573,7 +6654,7 @@ fn forwarding_codes() {
 
     // Forwardings waiting for their code: at most so many per account
     // (Carol's is still waiting; one more fits under 2, then no more).
-    set_limit("forwarding_unverified_pending", 2);
+    set_limit("mail.rate.forwarding_unverified_pending", 2);
     let (dave, erin) = (register(&c, &base), register(&c, &base));
     let (d, e) = (
         set_up_address(&c, &base, &dave),
@@ -6582,30 +6663,36 @@ fn forwarding_codes() {
     let (_, to_dave, _) = forwarding_request(&a, &alice_address_id, &d, "all", json!([]));
     create(&to_dave);
     let (_, to_erin, _) = forwarding_request(&a, &alice_address_id, &e, "all", json!([]));
-    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
-        .json(&to_erin)
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/mail/forwardings")),
+        &alice.token,
+    )
+    .json(&to_erin)
+    .send()
+    .unwrap();
     assert_eq!(r.status().as_u16(), 409);
     assert_eq!(r.json::<Value>().unwrap()["code"], "forwardingLimit");
-    set_limit("forwarding_unverified_pending", 5);
+    set_limit("mail.rate.forwarding_unverified_pending", 5);
 
     // Codes to one destination a day, from every account: Dave had his.
-    set_limit("forwarding_codes_per_destination", 1);
+    set_limit("mail.rate.forwarding_codes_per_destination", 1);
     let bob_address_id = address_id(&c, &base, &bob);
     let (_, bob_to_dave, _) = forwarding_request(&b, &bob_address_id, &d, "all", json!([]));
-    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &bob.token)
-        .json(&bob_to_dave)
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/mail/forwardings")),
+        &bob.token,
+    )
+    .json(&bob_to_dave)
+    .send()
+    .unwrap();
     assert_eq!(r.status().as_u16(), 429, "{}", r.text().unwrap_or_default());
-    set_limit("forwarding_codes_per_destination", 10);
+    set_limit("mail.rate.forwarding_codes_per_destination", 10);
 }
 
 /// What the phases of [`outside_forwarding`] hand on.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ForwardState {
-    user_id: String,
+    account_id: String,
     username: String,
     password: String,
     master_key: String,
@@ -6660,7 +6747,7 @@ fn outside_forwarding() {
     let admin = common::admin_token(&c, &base, admin_password, admin_name);
     let outside_sending = |value: &str| {
         let r = bearer(
-            c.put(format!("{base}/api/admin/mail/outside-sending")),
+            c.put(format!("{base}/api/v1/admin/mail/outside-sending")),
             &admin,
         )
         .json(&json!({ "outsideSending": value }))
@@ -6674,7 +6761,9 @@ fn outside_forwarding() {
     };
     let paused = |user_id: &str, paused: bool| {
         let r = bearer(
-            c.put(format!("{base}/api/admin/users/{user_id}/mail-sending")),
+            c.put(format!(
+                "{base}/api/v1/admin/accounts/{user_id}/mail-sending"
+            )),
             &admin,
         )
         .json(&json!({ "paused": paused }))
@@ -6695,14 +6784,17 @@ fn outside_forwarding() {
             set_up_address(&c, &base, &dave);
             let dave_address_id = address_id(&c, &base, &dave);
             let dave_create = || {
-                bearer(c.post(format!("{base}/api/mail/forwardings")), &dave.token)
-                    .json(&json!({
-                        "id": uuid::Uuid::new_v4().to_string(),
-                        "forwarderAddressId": dave_address_id, "forwardeeEmail": "dave@outside.test",
-                        "match": "all", "conditions": [],
-                    }))
-                    .send()
-                    .unwrap()
+                bearer(
+                    c.post(format!("{base}/api/v1/mail/forwardings")),
+                    &dave.token,
+                )
+                .json(&json!({
+                    "id": uuid::Uuid::new_v4().to_string(),
+                    "forwarderAddressId": dave_address_id, "forwardeeEmail": "dave@outside.test",
+                    "match": "all", "conditions": [],
+                }))
+                .send()
+                .unwrap()
             };
             outside_sending("admins");
             let r = dave_create();
@@ -6721,14 +6813,17 @@ fn outside_forwarding() {
             set_up_address(&c, &base, &eve);
             let eve_address_id = address_id(&c, &base, &eve);
             let eve_create = |to: &str, key_list: Value| {
-                bearer(c.post(format!("{base}/api/mail/forwardings")), &eve.token)
-                    .json(&json!({
-                        "id": uuid::Uuid::new_v4().to_string(),
-                        "forwarderAddressId": eve_address_id, "forwardeeEmail": to,
-                        "match": "all", "conditions": [], "keyList": key_list,
-                    }))
-                    .send()
-                    .unwrap()
+                bearer(
+                    c.post(format!("{base}/api/v1/mail/forwardings")),
+                    &eve.token,
+                )
+                .json(&json!({
+                    "id": uuid::Uuid::new_v4().to_string(),
+                    "forwarderAddressId": eve_address_id, "forwardeeEmail": to,
+                    "match": "all", "conditions": [], "keyList": key_list,
+                }))
+                .send()
+                .unwrap()
             };
             for injected in [
                 "x@outside.test>\r\nRCPT TO:<victim@outside.test",
@@ -6771,7 +6866,7 @@ fn outside_forwarding() {
                     .unwrap()
                     .to_string();
                 let r = bearer(
-                    c.delete(format!("{base}/api/mail/forwardings/{id}")),
+                    c.delete(format!("{base}/api/v1/mail/forwardings/{id}")),
                     &eve.token,
                 )
                 .send()
@@ -6790,10 +6885,13 @@ fn outside_forwarding() {
             let to = format!("fwd-{}@outside.test", &tag[..12]);
             let id = uuid::Uuid::new_v4().to_string();
             let create = |body: Value| {
-                bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
-                    .json(&body)
-                    .send()
-                    .unwrap()
+                bearer(
+                    c.post(format!("{base}/api/v1/mail/forwardings")),
+                    &alice.token,
+                )
+                .json(&body)
+                .send()
+                .unwrap()
             };
             let body = |key_list: Value| {
                 json!({
@@ -6827,11 +6925,14 @@ fn outside_forwarding() {
                 "{}",
                 r.text().unwrap()
             );
-            let listed: Value = bearer(c.get(format!("{base}/api/mail/forwardings")), &alice.token)
-                .send()
-                .unwrap()
-                .json()
-                .unwrap();
+            let listed: Value = bearer(
+                c.get(format!("{base}/api/v1/mail/forwardings")),
+                &alice.token,
+            )
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
             assert_eq!(listed["outgoing"][0]["kind"], "outside");
             assert_eq!(listed["outgoing"][0]["state"], "pending");
             // Outside senders find no key to encrypt to now.
@@ -6849,7 +6950,7 @@ fn outside_forwarding() {
                 .collect();
             let r = bearer(
                 c.put(format!(
-                    "{base}/api/mail/addresses/{alice_address_id}/key-list"
+                    "{base}/api/v1/mail/addresses/{alice_address_id}/key-list"
                 )),
                 &alice.token,
             )
@@ -6862,7 +6963,7 @@ fn outside_forwarding() {
                 "forwardingKeepsNoEncrypt"
             );
             let state = ForwardState {
-                user_id: alice.id.clone(),
+                account_id: alice.id.clone(),
                 username: alice.username.clone(),
                 password: alice.password.clone(),
                 master_key: b64(&alice.master_key),
@@ -6884,7 +6985,7 @@ fn outside_forwarding() {
             let state: ForwardState =
                 serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
             let external = |path: &str, token: &str| {
-                c.post(format!("{base}/api/mail/forwardings/external{path}"))
+                c.post(format!("{base}/api/v1/mail/forwardings/external{path}"))
                     .json(&json!({ "token": token }))
                     .send()
                     .unwrap()
@@ -6926,7 +7027,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <{early_id}>\r\n\r\nearly\r
             let verify = |code: &str| {
                 let r = bearer(
                     c.post(format!(
-                        "{base}/api/mail/forwardings/{}/verify",
+                        "{base}/api/v1/mail/forwardings/{}/verify",
                         state.forwarding_id
                     )),
                     &alice_token,
@@ -6950,7 +7051,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <{early_id}>\r\n\r\nearly\r
             let found: Value = external("", &token).json().unwrap();
             assert_eq!(found["state"], "active");
             let listed = |token: &str| -> Value {
-                bearer(c.get(format!("{base}/api/mail/forwardings")), token)
+                bearer(c.get(format!("{base}/api/v1/mail/forwardings")), token)
                     .send()
                     .unwrap()
                     .json()
@@ -7001,7 +7102,7 @@ Message-ID: <oloop-{tag}@sender.test>\r\n\r\nround\r\n",
             arrived(&loop_id);
             println!("FORWARD-NOT {loop_id}");
             // While Alice's sending is paused, nothing of hers goes outside.
-            let alice_id = state.user_id.clone();
+            let alice_id = state.account_id.clone();
             paused(&alice_id, true);
             let while_paused = format!(
                 "From: writer@sender.test\r\nTo: {}\r\nSubject: while paused\r\n\
@@ -7060,7 +7161,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <opause-{tag}@sender.test>\
                 .to_string();
             let r = bearer(
                 c.delete(format!(
-                    "{base}/api/mail/forwardings/{}",
+                    "{base}/api/v1/mail/forwardings/{}",
                     state.forwarding_id
                 )),
                 &token,
@@ -7068,7 +7169,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <opause-{tag}@sender.test>\
             .send()
             .unwrap();
             assert_eq!(r.status(), reqwest::StatusCode::NO_CONTENT);
-            let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &token)
+            let addresses: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &token)
                 .send()
                 .unwrap()
                 .json()
@@ -7102,14 +7203,14 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <opause-{tag}@sender.test>\
             .sign(identity.authority_signing_key())
             .unwrap();
             let r = bearer(
-                c.put(format!("{base}/api/mail/addresses/{}/key-list", state.address_id)),
+                c.put(format!("{base}/api/v1/mail/addresses/{}/key-list", state.address_id)),
                 &token,
             )
             .json(&json!({ "keyList": { "data": b64(&list.data), "signature": b64(&list.signature) } }))
             .send()
             .unwrap();
             assert!(r.status().is_success(), "settle: {}", r.status());
-            let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &token)
+            let addresses: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &token)
                 .send()
                 .unwrap()
                 .json()
@@ -7167,7 +7268,7 @@ fn add_address_key(c: &Client, base: &str, user: &User, id: &str, address: &str)
     // The address's keys already there (an address reopened after an
     // account reset keeps its old, obsolete ones), listed as they are, as a
     // client lists them; the new key first.
-    let listed: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
+    let listed: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -7203,7 +7304,7 @@ fn add_address_key(c: &Client, base: &str, user: &User, id: &str, address: &str)
     .sign(user.identity.authority_signing_key())
     .unwrap();
     let r = bearer(
-        c.post(format!("{base}/api/mail/addresses/{id}/keys")),
+        c.post(format!("{base}/api/v1/mail/addresses/{id}/keys")),
         &user.token,
     )
     .json(&json!({
@@ -7232,7 +7333,7 @@ fn admin_token(c: &Client, base: &str, admin: &str) -> String {
 fn domain(c: &Client, base: &str, user: &User, id: &str, refresh: bool) -> Value {
     let query = if refresh { "?refresh=1" } else { "" };
     let r = bearer(
-        c.get(format!("{base}/api/mail/domains/{id}{query}")),
+        c.get(format!("{base}/api/v1/mail/domains/{id}{query}")),
         &user.token,
     )
     .send()
@@ -7287,7 +7388,7 @@ fn custom_domains() {
     let admin_token = admin_token(&c, &base, &admin);
     let admin_view = |c: &Client| -> Value {
         bearer(
-            c.get(format!("{base}/api/admin/mail/domains")),
+            c.get(format!("{base}/api/v1/admin/mail/domains")),
             &admin_token,
         )
         .send()
@@ -7331,7 +7432,7 @@ fn custom_domains() {
     // her arrive there.
     let alice = register(&c, &base);
     set_up_address(&c, &base, &alice);
-    let r = bearer(c.post(format!("{base}/api/mail/domains")), &alice.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/domains")), &alice.token)
         .json(&json!({ "name": "Customer.TEST." }))
         .send()
         .unwrap();
@@ -7342,7 +7443,7 @@ fn custom_domains() {
     let records = &added["records"];
     // Pending: no address on it, and Stalwart takes no mail for it.
     let r = bearer(
-        c.post(format!("{base}/api/mail/domains/addresses")),
+        c.post(format!("{base}/api/v1/mail/domains/addresses")),
         &alice.token,
     )
     .json(&json!({ "local": "early", "domainId": id }))
@@ -7406,7 +7507,7 @@ fn custom_domains() {
 
     // An address on it, with its key; mail to it arrives through Stalwart.
     let r = bearer(
-        c.post(format!("{base}/api/mail/domains/addresses")),
+        c.post(format!("{base}/api/v1/mail/domains/addresses")),
         &alice.token,
     )
     .json(&json!({ "local": "Info", "domainId": id }))
@@ -7440,7 +7541,7 @@ fn custom_domains() {
 
     // The catch-all takes unknown names on the domain, tags stripped.
     let r = bearer(
-        c.put(format!("{base}/api/mail/domains/{id}/catch-all")),
+        c.put(format!("{base}/api/v1/mail/domains/{id}/catch-all")),
         &alice.token,
     )
     .json(&json!({ "addressId": address_id }))
@@ -7462,10 +7563,13 @@ fn custom_domains() {
     let carol_address = set_up_address(&c, &base, &carol);
     let (_, request, terms) =
         forwarding_request(&info, &address_id, &carol_address, "all", json!([]));
-    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
-        .json(&request)
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/mail/forwardings")),
+        &alice.token,
+    )
+    .json(&request)
+    .send()
+    .unwrap();
     assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
     let forwarding_id = request["id"].as_str().unwrap().to_owned();
     verify_forwarding(
@@ -7510,7 +7614,7 @@ fn custom_domains() {
     // two caught so far, so a cap of 3 takes one more, then answers 452.
     let put_settings = |body: Value| {
         let r = bearer(
-            c.put(format!("{base}/api/admin/mail/domains/settings")),
+            c.put(format!("{base}/api/v1/admin/mail/domains/settings")),
             &admin_token,
         )
         .json(&body)
@@ -7518,7 +7622,7 @@ fn custom_domains() {
         .unwrap();
         assert!(r.status().is_success(), "settings: {}", r.status());
     };
-    put_settings(json!({ "mail_domains.catch_all_per_day": "3" }));
+    put_settings(json!({ "mail.domains.catch_all_per_day": "3" }));
     let third = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
     assert_eq!(
         smtp_send(
@@ -7535,7 +7639,7 @@ fn custom_domains() {
         &message("fourth@customer.test", "fourth@sender.test"),
     );
     assert_eq!(rcpt, 452, "the catch-all's day is full");
-    put_settings(json!({ "mail_domains.catch_all_per_day": "500" }));
+    put_settings(json!({ "mail.domains.catch_all_per_day": "500" }));
 
     // Mail from the address to the outside: the gate checks the sink for
     // the domain's own DKIM signature.
@@ -7553,7 +7657,7 @@ fn custom_domains() {
         "readable": ["dave@outside.test"],
         "fromAddress": address_id,
     });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &alice.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &alice.token)
         .multipart(form(vec![
             ("meta", serde_json::to_vec(&meta).unwrap()),
             ("data", split.data_packet),
@@ -7585,7 +7689,7 @@ fn custom_domains() {
             "readable": ["dave@outside.test"],
             "fromAddress": from_address,
         });
-        let r = bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &user.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&meta).unwrap()),
                 ("data", split.data_packet),
@@ -7612,7 +7716,7 @@ fn custom_domains() {
         "another From in the MIME: {body}"
     );
     let alices_key: Value = bearer(
-        c.get(format!("{base}/api/mail/keys?email=info@customer.test")),
+        c.get(format!("{base}/api/v1/mail/keys?email=info@customer.test")),
         &alice.token,
     )
     .send()
@@ -7625,7 +7729,7 @@ fn custom_domains() {
     // first enabled address is the default, and disabling, enabling and
     // deleting it.
     let r = bearer(
-        c.post(format!("{base}/api/mail/domains/addresses")),
+        c.post(format!("{base}/api/v1/mail/domains/addresses")),
         &alice.token,
     )
     .json(&json!({ "local": "sales", "domainId": id }))
@@ -7638,7 +7742,7 @@ fn custom_domains() {
         .to_owned();
     let sales = add_address_key(&c, &base, &alice, &sales_id, "sales@customer.test");
     let rows = || -> Vec<Value> {
-        let all: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &alice.token)
+        let all: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &alice.token)
             .send()
             .unwrap()
             .json()
@@ -7662,7 +7766,7 @@ fn custom_domains() {
     let own_id = first_order[0].clone();
     let order = |ids: &[&str]| {
         let r = bearer(
-            c.put(format!("{base}/api/mail/addresses/order")),
+            c.put(format!("{base}/api/v1/mail/addresses/order")),
             &alice.token,
         )
         .json(&json!({ "ids": ids }))
@@ -7682,7 +7786,7 @@ fn custom_domains() {
             .map(|a| format!("?addressId={a}"))
             .unwrap_or_default();
         bearer(
-            c.get(format!("{base}/api/mail/identity{query}")),
+            c.get(format!("{base}/api/v1/mail/identity{query}")),
             &alice.token,
         )
         .send()
@@ -7712,7 +7816,7 @@ fn custom_domains() {
     );
     // Each address has its own display name and signature.
     let r = bearer(
-        c.patch(format!("{base}/api/mail/identity?addressId={sales_id}")),
+        c.patch(format!("{base}/api/v1/mail/identity?addressId={sales_id}")),
         &alice.token,
     )
     .json(&json!({ "displayName": "Sales", "signature": "<p>Sales team</p>" }))
@@ -7755,7 +7859,7 @@ fn custom_domains() {
     };
     let put_list = |action: &str, key_list: Value| {
         let r = bearer(
-            c.put(format!("{base}/api/mail/addresses/{sales_id}/{action}")),
+            c.put(format!("{base}/api/v1/mail/addresses/{sales_id}/{action}")),
             &alice.token,
         )
         .json(&json!({ "keyList": key_list }))
@@ -7781,7 +7885,7 @@ fn custom_domains() {
     // The catch-all moves to sales@, and disabling it ends that.
     let catch_all = |address: &str| {
         let r = bearer(
-            c.put(format!("{base}/api/mail/domains/{id}/catch-all")),
+            c.put(format!("{base}/api/v1/mail/domains/{id}/catch-all")),
             &alice.token,
         )
         .json(&json!({ "addressId": address }))
@@ -7801,14 +7905,17 @@ fn custom_domains() {
         (Some(false), Some(false))
     );
     // Nobody sets a forwarding up to it (it would receive that way).
-    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &bob.token)
-        .json(&json!({
-            "id": uuid::Uuid::new_v4().to_string(),
-            "forwarderAddressId": uuid::Uuid::new_v4().to_string(),
-            "forwardeeEmail": "Sales@Customer.test",
-        }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/mail/forwardings")),
+        &bob.token,
+    )
+    .json(&json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "forwarderAddressId": uuid::Uuid::new_v4().to_string(),
+        "forwardeeEmail": "Sales@Customer.test",
+    }))
+    .send()
+    .unwrap();
     assert_eq!(r.status().as_u16(), 422);
     assert_eq!(r.json::<Value>().unwrap()["code"], "addressDisabled");
     assert!(
@@ -7820,7 +7927,7 @@ fn custom_domains() {
     // catch-all), nothing sent from it, and never the default.
     let lookup = |email: &str| {
         let r = bearer(
-            c.get(format!("{base}/api/mail/keys?email={email}")),
+            c.get(format!("{base}/api/v1/mail/keys?email={email}")),
             &bob.token,
         )
         .send()
@@ -7855,7 +7962,7 @@ fn custom_domains() {
             "readable": ["dave@outside.test"],
             "fromAddress": sales_id,
         });
-        let r = bearer(c.post(format!("{base}/api/mail/send")), &alice.token)
+        let r = bearer(c.post(format!("{base}/api/v1/mail/send")), &alice.token)
             .multipart(form(vec![
                 ("meta", serde_json::to_vec(&meta).unwrap()),
                 ("data", split.data_packet),
@@ -7884,10 +7991,13 @@ fn custom_domains() {
     // A forwarding from it, to end with it.
     let (forwarding_id, request, _) =
         forwarding_request(&sales, &sales_id, &bob_key, "all", json!([]));
-    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
-        .json(&request)
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/mail/forwardings")),
+        &alice.token,
+    )
+    .json(&request)
+    .send()
+    .unwrap();
     assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
     // Its code entered: Bob sees it too.
     verify_forwarding(
@@ -7900,11 +8010,14 @@ fn custom_domains() {
         &forwarding_id,
     );
     let forwards = |user: &User| -> bool {
-        let listed: Value = bearer(c.get(format!("{base}/api/mail/forwardings")), &user.token)
-            .send()
-            .unwrap()
-            .json()
-            .unwrap();
+        let listed: Value = bearer(
+            c.get(format!("{base}/api/v1/mail/forwardings")),
+            &user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
         listed.to_string().contains(&forwarding_id)
     };
     assert!(forwards(&alice) && forwards(&bob));
@@ -7913,7 +8026,7 @@ fn custom_domains() {
     // open what it received.
     let delete = || {
         bearer(
-            c.put(format!("{base}/api/mail/addresses/{sales_id}/delete")),
+            c.put(format!("{base}/api/v1/mail/addresses/{sales_id}/delete")),
             &alice.token,
         )
         .send()
@@ -7931,7 +8044,7 @@ fn custom_domains() {
     assert_eq!(ids(), [own_id.clone(), address_id.clone()]);
     assert_eq!(lookup("sales@customer.test").0, 404);
     let held: i64 = {
-        let all: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &alice.token)
+        let all: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &alice.token)
             .send()
             .unwrap()
             .json()
@@ -7954,7 +8067,7 @@ fn custom_domains() {
     // it start over).
     let add = |local: &str| {
         let r = bearer(
-            c.post(format!("{base}/api/mail/domains/addresses")),
+            c.post(format!("{base}/api/v1/mail/domains/addresses")),
             &alice.token,
         )
         .json(&json!({ "local": local, "domainId": id }))
@@ -7991,7 +8104,7 @@ fn custom_domains() {
     assert_eq!(status, 201, "{body}");
     let r = bearer(
         c.put(format!(
-            "{base}/api/mail/addresses/{}/delete",
+            "{base}/api/v1/mail/addresses/{}/delete",
             body["id"].as_str().unwrap()
         )),
         &alice.token,
@@ -8002,7 +8115,7 @@ fn custom_domains() {
     assert_eq!(ids(), [own_id.clone(), address_id.clone()]);
 
     // Bob proves the domain too: refused while Alice holds it.
-    let r = bearer(c.post(format!("{base}/api/mail/domains")), &bob.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/domains")), &bob.token)
         .json(&json!({ "name": customer }))
         .send()
         .unwrap();
@@ -8059,7 +8172,7 @@ fn custom_domains() {
         0,
         "Alice lost it"
     );
-    let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &alice.token)
+    let addresses: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &alice.token)
         .send()
         .unwrap()
         .json()
@@ -8073,7 +8186,7 @@ fn custom_domains() {
         "Alice's address on the domain is freed: {addresses}"
     );
     let events: Value = bearer(
-        c.get(format!("{base}/api/user/security-events")),
+        c.get(format!("{base}/api/v1/account/security-events")),
         &alice.token,
     )
     .send()
@@ -8101,7 +8214,7 @@ fn custom_domains() {
     );
     // Bob makes the same name, and its key is the only one served.
     let r = bearer(
-        c.post(format!("{base}/api/mail/domains/addresses")),
+        c.post(format!("{base}/api/v1/mail/domains/addresses")),
         &bob.token,
     )
     .json(&json!({ "local": "info", "domainId": bob_id }))
@@ -8117,7 +8230,7 @@ fn custom_domains() {
         "info@customer.test",
     );
     let served: Value = bearer(
-        c.get(format!("{base}/api/mail/keys?email=info@customer.test")),
+        c.get(format!("{base}/api/v1/mail/keys?email=info@customer.test")),
         &alice.token,
     )
     .send()
@@ -8131,7 +8244,7 @@ fn custom_domains() {
     // Bob's ownership TXT goes, his MX stays: warn after two failing
     // checks (12 scaled hours apart), inactive after the warn grace (set to
     // a day: 24 seconds here), and then RCPT refuses.
-    put_settings(json!({ "mail_domains.grace_warn_days": "1" }));
+    put_settings(json!({ "mail.domains.grace_warn_days": "1" }));
     write_zone(&zones, customer, &zone_for(&bob_code)[1..]);
     eventually(
         "Bob's domain never warned",
@@ -8158,7 +8271,7 @@ fn custom_domains() {
         },
         |rcpt| *rcpt >= 500,
     );
-    put_settings(json!({ "mail_domains.grace_warn_days": "14" }));
+    put_settings(json!({ "mail.domains.grace_warn_days": "14" }));
     // Bob is told in his inbox that the domain lapsed.
     eventually(
         "Bob was never told the domain lapsed",
@@ -8182,7 +8295,7 @@ fn custom_domains() {
     // key); a new one gets its first key.
     let make_info = |user: &User| -> (String, Option<Address>) {
         let r = bearer(
-            c.post(format!("{base}/api/mail/domains/addresses")),
+            c.post(format!("{base}/api/v1/mail/domains/addresses")),
             &user.token,
         )
         .json(&json!({ "local": "info", "domainId": bob_id }))
@@ -8202,7 +8315,7 @@ fn custom_domains() {
     let (bob_info_id, _) = make_info(&bob);
     let lookup = |token: &str| {
         bearer(
-            c.get(format!("{base}/api/mail/keys?email=info@customer.test")),
+            c.get(format!("{base}/api/v1/mail/keys?email=info@customer.test")),
             token,
         )
         .send()
@@ -8231,7 +8344,7 @@ fn custom_domains() {
 
     // Custom domains turned off: no keys served, mail refused at RCPT (the
     // reconcile drops the domain from Stalwart); turned on, all comes back.
-    put_settings(json!({ "mail_domains.mode": "off" }));
+    put_settings(json!({ "mail.domains.mode": "off" }));
     assert_eq!(lookup(&alice.token), 404, "no keys while off");
     eventually(
         "RCPT still took mail with custom domains off",
@@ -8239,7 +8352,7 @@ fn custom_domains() {
         rcpt_to_info,
         |rcpt| *rcpt >= 500,
     );
-    put_settings(json!({ "mail_domains.mode": "everyone" }));
+    put_settings(json!({ "mail.domains.mode": "everyone" }));
     assert_eq!(lookup(&alice.token), 200);
     eventually(
         "RCPT never took mail again once custom domains were on",
@@ -8263,7 +8376,10 @@ fn custom_domains() {
     );
     setup["grant"] = json!(grant);
     let r = bearer(
-        c.post(format!("{base}/api/admin/users/{}/wipe", bob.id)),
+        c.post(format!(
+            "{base}/api/v1/admin/accounts/{}/reset-keys",
+            bob.id
+        )),
         &admin_token,
     )
     .json(&setup)
@@ -8297,7 +8413,9 @@ fn custom_domains() {
     // An administrator deactivates the domain: its name and the names under
     // it are blocked until lifted, whatever DNS says.
     let r = bearer(
-        c.post(format!("{base}/api/admin/mail/domains/{bob_id}/deactivate")),
+        c.post(format!(
+            "{base}/api/v1/admin/mail/domains/{bob_id}/deactivate"
+        )),
         &admin_token,
     )
     .send()
@@ -8309,7 +8427,7 @@ fn custom_domains() {
         "blocked"
     );
     let blocks: Value = bearer(
-        c.get(format!("{base}/api/admin/mail/domains/blocks")),
+        c.get(format!("{base}/api/v1/admin/mail/domains/blocks")),
         &admin_token,
     )
     .send()
@@ -8317,14 +8435,16 @@ fn custom_domains() {
     .json()
     .unwrap();
     assert_eq!(blocks[0]["name"], customer, "{blocks}");
-    let r = bearer(c.post(format!("{base}/api/mail/domains")), &alice.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/domains")), &alice.token)
         .json(&json!({ "name": "mail.customer.test" }))
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 409);
     assert_eq!(r.json::<Value>().unwrap()["code"], "domainBlocked");
     let r = bearer(
-        c.delete(format!("{base}/api/admin/mail/domains/blocks/{customer}")),
+        c.delete(format!(
+            "{base}/api/v1/admin/mail/domains/blocks/{customer}"
+        )),
         &admin_token,
     )
     .send()

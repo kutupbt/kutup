@@ -25,7 +25,7 @@ const LEDGER_ENTRY_MAGIC: &[u8; 8] = b"KUTPCE1\0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[repr(u8)]
 pub enum ChatMediaClassV1 {
     File = 1,
@@ -251,7 +251,7 @@ impl ChatMediaDeliveryOfferV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum ChatMediaDeliveryStatusV1 {
     Stored,
     AlreadyStored,
@@ -303,14 +303,13 @@ impl FederatedChatMediaTransactionV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[repr(u8)]
 pub enum ChatMediaConversationKindV1 {
     Direct = 1,
-    /// The removed MLS groups' attachments, by group UUID: kept so stored
-    /// ledger records still read. Pairwise groups take no attachments yet;
-    /// theirs get a kind of their own, referenced by the group id.
-    MlsGroup = 2,
+    /// A pairwise group's attachments, referenced by the group id (32 bytes,
+    /// base64url without padding, as on the wire).
+    Group = 2,
     NoteToSelf = 3,
 }
 
@@ -326,7 +325,7 @@ impl TryFrom<u8> for ChatMediaConversationKindV1 {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Direct),
-            2 => Ok(Self::MlsGroup),
+            2 => Ok(Self::Group),
             3 => Ok(Self::NoteToSelf),
             _ => Err(format!("unknown Chat media conversation kind {value}")),
         }
@@ -335,7 +334,7 @@ impl TryFrom<u8> for ChatMediaConversationKindV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[repr(u8)]
 pub enum ChatAttachmentLedgerStateV1 {
     Active = 1,
@@ -401,8 +400,9 @@ impl ChatAttachmentLedgerEntryV1 {
                 kutup_crypto::account_ref::AccountRef::from_str(&self.conversation_reference)
                     .map_err(|_| "Chat attachment account reference is invalid".to_string())?;
             }
-            ChatMediaConversationKindV1::MlsGroup => {
-                require_canonical_uuid("conversationReference", &self.conversation_reference)?;
+            ChatMediaConversationKindV1::Group => {
+                crate::group_route::decode_group_id(&self.conversation_reference)
+                    .map_err(|_| "Chat attachment group reference is invalid".to_string())?;
             }
         }
         require_canonical_uuid("messageId", &self.message_id)?;
@@ -830,6 +830,27 @@ mod tests {
         let mut trailing = bytes;
         trailing.push(0);
         assert!(ChatAttachmentLedgerEntryV1::from_canonical_bytes(&trailing).is_err());
+    }
+
+    #[test]
+    fn a_group_entry_names_its_group_id() {
+        let mut entry = ledger_entry();
+        entry.conversation_kind = ChatMediaConversationKindV1::Group;
+        entry.conversation_reference = crate::group_route::encode_group_id(&[7; 32]);
+        entry.validate().unwrap();
+        assert_eq!(
+            serde_json::to_value(entry.conversation_kind).unwrap(),
+            serde_json::json!("group")
+        );
+        // Not a UUID, an account, or a non-canonical id.
+        for reference in [
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_string(),
+            "aci:00000000-0000-4000-8000-000000000002@example.org".to_string(),
+            crate::group_route::encode_group_id(&[7; 32]) + "=",
+        ] {
+            entry.conversation_reference = reference;
+            assert!(entry.validate().is_err());
+        }
     }
 
     #[test]

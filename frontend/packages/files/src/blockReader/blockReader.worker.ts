@@ -15,6 +15,8 @@ const scope = self as unknown as {
 }
 
 let token = ''
+// The page's X-Kutup-Client, given at open.
+let client: string | null = null
 let reader: BlockObjectReader | null = null
 let opening: Promise<BlockObjectReader> | null = null
 
@@ -37,7 +39,8 @@ scope.onmessage = (event) => {
         failed(request.id, new Error('this reader is open already'))
         return
       }
-      opening = BlockObjectReader.open(request.target, request.settings, { fetch: (input, init) => fetch(input, init), token: () => token })
+      client = request.client
+      opening = BlockObjectReader.open(request.target, request.settings, { fetch: (input, init) => fetch(input, init), token: () => token, client: () => client })
       opening.then(
         (opened) => {
           reader = opened

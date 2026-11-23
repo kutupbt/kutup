@@ -3,7 +3,7 @@
 //! itself.
 //!
 //! - An account asked to be deleted (by its owner, after a reauth, or by an
-//!   admin) is `closing` until `closes_at` (`account_closing_days` after the
+//!   admin) is `closing` until `closes_at` (`account.closing_days` after the
 //!   ask). Its sign-ins end; a sign-in that passes every step is offered to
 //!   keep it instead of a session.
 //! - Then [`run_due`] deletes it: everything it holds, bytes included, its
@@ -52,7 +52,7 @@ pub fn on_hold() -> AppError {
         .with_details(serde_json::json!({ "code": "legalHold" }))
 }
 
-/// The accounts that may sign in, as SQL over `users`: active ones, and
+/// The accounts that may sign in, as SQL over `accounts`: active ones, and
 /// closing ones (to keep them) unless they were suspended when they closed.
 pub const SIGNS_IN: &str =
     "(state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))";
@@ -74,7 +74,7 @@ pub async fn close(
     days: i64,
 ) -> AppResult<Option<time::OffsetDateTime>> {
     let closes_at: Option<time::OffsetDateTime> = sqlx::query_scalar(
-        "UPDATE users SET state = 'closing',
+        "UPDATE accounts SET state = 'closing',
                 suspended_before_close = CASE WHEN state = 'suspended' THEN suspended_reason END,
                 suspended_reason = NULL, closing_by = $2,
                 closes_at = now() + make_interval(days => $3::int),
@@ -108,7 +108,7 @@ pub async fn keep(
     user_id: Uuid,
 ) -> AppResult<bool> {
     let kept = sqlx::query(
-        "UPDATE users SET
+        "UPDATE accounts SET
                 state = CASE WHEN suspended_before_close IS NULL THEN 'active' ELSE 'suspended' END,
                 suspended_reason = suspended_before_close, suspended_before_close = NULL,
                 closing_by = NULL, closes_at = NULL, purpose_ended_at = NULL,
@@ -140,7 +140,7 @@ pub(crate) async fn claim(
     // The hold is tested on the row itself, so the test re-checked after a
     // row-lock wait sees a hold set meanwhile.
     let claimed = sqlx::query(
-        "UPDATE users SET deleting_at = now(),
+        "UPDATE accounts SET deleting_at = now(),
                 deleting_for = CASE WHEN $4 THEN 'reset' ELSE 'delete' END
           WHERE id = $1 AND legal_hold_reference IS NULL
             AND (deleting_at IS NULL OR deleting_at < now() - make_interval(mins => $3))
@@ -157,7 +157,7 @@ pub(crate) async fn claim(
         return Ok(());
     }
     let row: Option<(bool, bool)> = sqlx::query_as(
-        "SELECT legal_hold_reference IS NOT NULL, deleting_at IS NOT NULL FROM users WHERE id = $1",
+        "SELECT legal_hold_reference IS NOT NULL, deleting_at IS NOT NULL FROM accounts WHERE id = $1",
     )
     .bind(target)
     .fetch_optional(&state.pool)
@@ -185,7 +185,7 @@ pub async fn destroy(
     let purged = purge(state, target).await;
     if let Err(error) = purged {
         // Taken up again later: the purges are each safe to run again.
-        sqlx::query("UPDATE users SET deleting_at = NULL, deleting_for = NULL WHERE id = $1")
+        sqlx::query("UPDATE accounts SET deleting_at = NULL, deleting_for = NULL WHERE id = $1")
             .bind(target)
             .execute(&state.pool)
             .await?;
@@ -201,7 +201,7 @@ pub async fn destroy(
     // another server is that server's to finish).
     let claimed: Option<(bool, bool)> = sqlx::query_as(
         "SELECT deleting_at IS NOT NULL, legal_hold_reference IS NOT NULL
-           FROM users WHERE id = $1 FOR UPDATE",
+           FROM accounts WHERE id = $1 FOR UPDATE",
     )
     .bind(target)
     .fetch_optional(&mut *tx)
@@ -215,7 +215,7 @@ pub async fn destroy(
     sqlx::query(
         "UPDATE account_names SET state = 'held', receive_until = now(),
                 free_at = now() + make_interval(days => $2::int)
-          WHERE user_id = $1",
+          WHERE account_id = $1",
     )
     .bind(target)
     .bind(hold_days as i32)
@@ -226,7 +226,7 @@ pub async fn destroy(
     // The shared mailboxes it signed for need a new signer: its signing
     // shares go with it, but it may still hold the seed.
     crate::mail::group_keys::signer_leaving(&mut tx, target).await?;
-    sqlx::query("DELETE FROM users WHERE id = $1")
+    sqlx::query("DELETE FROM accounts WHERE id = $1")
         .bind(target)
         .execute(&mut *tx)
         .await?;
@@ -260,10 +260,12 @@ async fn purge(state: &AppState, target: Uuid) -> AppResult<()> {
 /// Keeps a deletion's claim fresh between its steps, so a long purge isn't
 /// taken for a crashed one and claimed again.
 pub(crate) async fn renew_claim(state: &AppState, target: Uuid) -> AppResult<()> {
-    sqlx::query("UPDATE users SET deleting_at = now() WHERE id = $1 AND deleting_at IS NOT NULL")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "UPDATE accounts SET deleting_at = now() WHERE id = $1 AND deleting_at IS NOT NULL",
+    )
+    .bind(target)
+    .execute(&state.pool)
+    .await?;
     Ok(())
 }
 
@@ -300,7 +302,7 @@ impl Drop for ResetClaim {
 
 /// Lets go of a claim (a reset done, or a deletion that failed).
 pub(crate) async fn release_claim(state: &AppState, target: Uuid) -> AppResult<()> {
-    sqlx::query("UPDATE users SET deleting_at = NULL, deleting_for = NULL WHERE id = $1")
+    sqlx::query("UPDATE accounts SET deleting_at = NULL, deleting_for = NULL WHERE id = $1")
         .bind(target)
         .execute(&state.pool)
         .await?;
@@ -317,7 +319,7 @@ const DELETION_ALERT_ATTEMPTS: i32 = 5;
 /// ones backing off after a failure excepted. How many.
 pub async fn run_due(state: &AppState) -> AppResult<u64> {
     let due: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, closing_by FROM users
+        "SELECT id, closing_by FROM accounts
           WHERE state = 'closing' AND closes_at <= now() AND NOT kutup_account_held(id)
             AND (deletion_next_try_at IS NULL OR deletion_next_try_at <= now())
           ORDER BY closes_at LIMIT $1",
@@ -331,7 +333,7 @@ pub async fn run_due(state: &AppState) -> AppResult<u64> {
             state,
             account,
             ClosingBy::actor(&by),
-            "account-closing",
+            "accountClosing",
             true,
         )
         .await
@@ -341,7 +343,7 @@ pub async fn run_due(state: &AppState) -> AppResult<u64> {
                 // Further apart each time (a minute, doubling, at most a day),
                 // so one account that fails holds none of the rest back.
                 let attempts: Option<i32> = sqlx::query_scalar(
-                    "UPDATE users SET deletion_attempts = deletion_attempts + 1,
+                    "UPDATE accounts SET deletion_attempts = deletion_attempts + 1,
                             deletion_next_try_at = now() + LEAST(
                                 make_interval(mins => 1) * power(2, LEAST(deletion_attempts, 11)),
                                 make_interval(days => 1))
@@ -373,7 +375,7 @@ pub async fn run_due(state: &AppState) -> AppResult<u64> {
 /// its purges are safe to repeat). A closing account's is [`run_due`]'s.
 async fn resume_stale(state: &AppState) -> AppResult<()> {
     let stale: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, deleting_for FROM users
+        "SELECT id, deleting_for FROM accounts
           WHERE deleting_at < now() - make_interval(mins => $1) AND state <> 'closing'
             AND legal_hold_reference IS NULL
           LIMIT $2",
@@ -389,7 +391,7 @@ async fn resume_stale(state: &AppState) -> AppResult<()> {
             continue;
         }
         tracing::warn!(%account, "an admin's deletion stopped part way: finishing it");
-        if let Err(error) = destroy(state, account, Actor::Admin, "user.delete", false).await {
+        if let Err(error) = destroy(state, account, Actor::Admin, "account.delete", false).await {
             tracing::error!(%account, "finishing an admin's deletion: {}", error.message);
         }
     }
@@ -498,22 +500,17 @@ mod tests {
 
     async fn account(pool: &sqlx::PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
-        )
-        .bind(user_id)
-        .bind(format!("closing{}", &user_id.simple().to_string()[..12]))
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(user_id)
+            .bind(format!("closing{}", &user_id.simple().to_string()[..12]))
+            .execute(pool)
+            .await
+            .unwrap();
         user_id
     }
 
     async fn state_of(pool: &sqlx::PgPool, user_id: Uuid) -> (String, Option<String>) {
-        sqlx::query_as("SELECT state, suspended_reason FROM users WHERE id = $1")
+        sqlx::query_as("SELECT state, suspended_reason FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_one(pool)
             .await
@@ -536,7 +533,7 @@ mod tests {
             .unwrap();
         let suspended = account(&pool).await;
         sqlx::query(
-            "UPDATE users SET state = 'suspended', suspended_reason = 'operator_order' WHERE id = $1",
+            "UPDATE accounts SET state = 'suspended', suspended_reason = 'operatorOrder' WHERE id = $1",
         )
         .bind(suspended)
         .execute(&pool)
@@ -549,7 +546,7 @@ mod tests {
             .is_some());
         tx.commit().await.unwrap();
         let signs_in: bool =
-            sqlx::query_scalar(&format!("SELECT {SIGNS_IN} FROM users WHERE id = $1"))
+            sqlx::query_scalar(&format!("SELECT {SIGNS_IN} FROM accounts WHERE id = $1"))
                 .bind(suspended)
                 .fetch_one(&pool)
                 .await
@@ -563,7 +560,7 @@ mod tests {
         tx.commit().await.unwrap();
         assert_eq!(
             state_of(&pool, suspended).await,
-            ("suspended".into(), Some("operator_order".into()))
+            ("suspended".into(), Some("operatorOrder".into()))
         );
 
         // Claimed for deletion: no keep, no hold, no second claim.
@@ -571,7 +568,7 @@ mod tests {
         let mut tx = pool.begin().await.unwrap();
         close(&mut tx, deleting, ClosingBy::User, 14).await.unwrap();
         tx.commit().await.unwrap();
-        sqlx::query("UPDATE users SET deleting_at = now() WHERE id = $1")
+        sqlx::query("UPDATE accounts SET deleting_at = now() WHERE id = $1")
             .bind(deleting)
             .execute(&pool)
             .await
@@ -580,7 +577,7 @@ mod tests {
         assert!(!keep(&mut tx, deleting).await.unwrap());
         tx.rollback().await.unwrap();
         let claimed_again = sqlx::query(
-            "UPDATE users SET deleting_at = now()
+            "UPDATE accounts SET deleting_at = now()
               WHERE id = $1 AND (deleting_at IS NULL OR deleting_at < now() - interval '1 hour')",
         )
         .bind(deleting)
@@ -590,7 +587,7 @@ mod tests {
         .rows_affected();
         assert_eq!(claimed_again, 0);
 
-        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        sqlx::query("DELETE FROM accounts WHERE id = ANY($1)")
             .bind(vec![suspended, deleting])
             .execute(&pool)
             .await

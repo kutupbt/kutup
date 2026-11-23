@@ -17,6 +17,7 @@ import { exactBytes } from '@kutup/crypto/bytes'
 import { createHasher, toHex } from '@kutup/crypto/hash'
 import { randomBytes } from '@kutup/crypto/random'
 import { resolveApiBase } from '@kutup/session/apiBase'
+import { clientFetch, clientHeaders, latchClientTooOld } from '@kutup/session/clientVersion'
 import { freshAccessToken } from '@kutup/session/client'
 import { openBlockReader, type AccessToken } from '@kutup/files/blockReader/client'
 import type { ChatMediaBlockSource } from '@kutup/files/blockReader/protocol'
@@ -100,9 +101,9 @@ export function chatMediaPresentationV1(
 
 export type ChatMediaDeliveryStatusV1 =
   | 'stored'
-  | 'already_stored'
+  | 'alreadyStored'
   | 'queued'
-  | 'storage_full'
+  | 'storageFull'
 
 export interface ChatMediaDeliveryResponseV1 {
   operationId: string
@@ -242,13 +243,14 @@ export async function uploadChatMediaV1(
       retryDelays: [0, 1000, 3000, 5000, 10000],
       storeFingerprintForResuming: false,
       removeFingerprintOnSuccess: true,
-      headers: { Authorization: `Bearer ${options.accessToken}` },
+      headers: { Authorization: `Bearer ${options.accessToken}`, ...clientHeaders() },
       metadata: {
         attachmentId,
         suite: String(CHAT_MEDIA_SUITE),
         retrievalToken: toBase64(retrievalToken),
       },
       onAfterResponse(request, response) {
+        if (response.getStatus() === 426) latchClientTooOld()
         if (request.getMethod() === 'POST' && response.getStatus() === 201) {
           try {
             const body = JSON.parse(response.getBody()) as { attachmentId?: string }
@@ -385,7 +387,7 @@ async function* fetchChatMediaCiphertextV1(
   signal?: AbortSignal,
   onProgress?: (receivedBytes: number, totalBytes: number) => void,
 ): AsyncGenerator<Uint8Array, void, void> {
-  const response = await fetch(await chatMediaObjectUrl(descriptor.attachmentId), {
+  const response = await clientFetch(await chatMediaObjectUrl(descriptor.attachmentId), {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal,
   })

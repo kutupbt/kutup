@@ -3,7 +3,7 @@
 //!
 //! Every delete the server makes is queued in `storage_pending_deletions`
 //! (`StorageService::with_deferred_deletes`); this job removes the ones
-//! queued at least `storage_deleted_blob_retention_seconds` ago. A database
+//! queued at least `server.storage.deleted_blob_retention_seconds` ago. A database
 //! dump taken before a delete is restored with its blobs still there, as long
 //! as the dump is younger than that wait: set it to the backup interval plus
 //! a margin.
@@ -31,7 +31,7 @@ pub struct PurgeResult {
     pub failed: u64,
 }
 
-/// Runs [`purge_due`] every `storage_deleted_blob_sweep_seconds`, with the
+/// Runs [`purge_due`] every `server.storage.deleted_blob_sweep_seconds`, with the
 /// interval and the wait read again as it goes, so a change applies without
 /// a restart.
 /// `storage` must be the immediate store ([`StorageService::immediate`]).
@@ -97,8 +97,8 @@ pub async fn purge_due(
     let mut failed: Vec<i64> = Vec::new();
     loop {
         let mut tx = pool.begin().await?;
-        let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
-            "SELECT id, kind, key, version_id FROM storage_pending_deletions
+        let rows: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT id, kind, key FROM storage_pending_deletions
              WHERE queued_at <= $1 AND NOT (id = ANY($2))
              ORDER BY queued_at, id
              LIMIT $3
@@ -114,13 +114,9 @@ pub async fn purge_due(
             return Ok(result);
         }
         let mut done: Vec<i64> = Vec::with_capacity(rows.len());
-        for (id, kind, key, version_id) in rows {
+        for (id, kind, key) in rows {
             let outcome = match PendingKind::parse(&kind) {
                 Some(PendingKind::Object) => storage.delete(&key).await,
-                Some(PendingKind::Stored) => storage.delete_stored(&key, &version_id).await,
-                Some(PendingKind::Version) => {
-                    storage.delete_object_version(&key, &version_id).await
-                }
                 Some(PendingKind::Prefix) => storage.delete_prefix(&key).await,
                 None => Err(anyhow::anyhow!("unknown kind {kind}")),
             };

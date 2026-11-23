@@ -44,7 +44,7 @@ export async function storeThumbnails(
       variant,
     })
     await api.put(
-      `/files/${target.fileId}/thumbnails/${variant}?${new URLSearchParams({ source, revision: target.revisionId }).toString()}`,
+      `/drive/files/${target.fileId}/thumbnails/${variant}?${new URLSearchParams({ source, revision: target.revisionId }).toString()}`,
       envelope,
       { headers: { 'Content-Type': 'application/octet-stream' } },
     )
@@ -55,7 +55,7 @@ export async function storeThumbnails(
 
 /** Remove the file's thumbnails (its content no longer has a picture). */
 export async function removeThumbnails(fileId: string): Promise<boolean> {
-  await api.delete(`/files/${fileId}/thumbnails`)
+  await api.delete(`/drive/files/${fileId}/thumbnails`)
   return true
 }
 
@@ -79,7 +79,7 @@ export function thumbnailUrl(
   file: DriveFile,
   variant: ThumbnailVariant,
   /** Where the sealed thumbnail is read, under the API base (a public link's route). */
-  path = `/files/${file.id}/thumbnails/${variant}`,
+  path = `/drive/files/${file.id}/thumbnails/${variant}`,
 ): Promise<string | null> {
   const stamp = file.thumbnails[variant]
   const revisionId = file.content?.revisionId

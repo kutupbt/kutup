@@ -100,7 +100,7 @@ async function restartHomeservers(
 
 function backupRows(postgres: 'postgres-a' | 'postgres-b', username: string): number {
   const quoted = username.replaceAll("'", "''")
-  const sql = `SELECT COUNT(*) FROM chat_backups b JOIN users u ON u.id=b.user_id WHERE u.username='${quoted}'`
+  const sql = `SELECT COUNT(*) FROM chat_backups b JOIN accounts u ON u.id=b.account_id WHERE u.username='${quoted}'`
   return Number(compose(['exec', '-T', postgres, 'psql', '-U', 'kutup', '-d', 'kutup', '-Atc', sql]))
 }
 
@@ -108,7 +108,7 @@ function backupRows(postgres: 'postgres-a' | 'postgres-b', username: string): nu
 function contactListEntries(postgres: 'postgres-a' | 'postgres-b', username: string): number {
   const quoted = username.replaceAll("'", "''")
   // The Chat contact list is the account-records scope chatContacts (4).
-  const sql = `SELECT COUNT(*) FROM account_records c JOIN users u ON u.id=c.user_id WHERE c.scope=4 AND u.username='${quoted}'`
+  const sql = `SELECT COUNT(*) FROM account_records c JOIN accounts u ON u.id=c.account_id WHERE c.scope=4 AND u.username='${quoted}'`
   return Number(compose(['exec', '-T', postgres, 'psql', '-U', 'kutup', '-d', 'kutup', '-Atc', sql]))
 }
 
@@ -119,7 +119,7 @@ function keyBinding(
   const quoted = username.replaceAll("'", "''")
   return compose([
     'exec', '-T', postgres, 'psql', '-U', 'kutup', '-d', 'kutup', '-Atc',
-    `SELECT key_binding FROM users WHERE username='${quoted}'`,
+    `SELECT key_binding FROM accounts WHERE username='${quoted}'`,
   ])
 }
 
@@ -129,11 +129,11 @@ function backupFacts(
 ): { backups: number; objects: number; media: number } {
   const quoted = username.replaceAll("'", "''")
   const sql = `SELECT COUNT(*),
-    (SELECT COUNT(*) FROM chat_backup_segments s WHERE s.user_id=u.id) +
-    (SELECT COUNT(*) FROM chat_backup_bases b WHERE b.user_id=u.id) +
-    (SELECT COUNT(*) FROM chat_backup_media_objects m WHERE m.user_id=u.id),
-    (SELECT COUNT(*) FROM chat_backup_media_objects m WHERE m.user_id=u.id)
-    FROM users u JOIN chat_backups cb ON cb.user_id=u.id
+    (SELECT COUNT(*) FROM chat_backup_segments s WHERE s.account_id=u.id) +
+    (SELECT COUNT(*) FROM chat_backup_bases b WHERE b.account_id=u.id) +
+    (SELECT COUNT(*) FROM chat_backup_media_objects m WHERE m.account_id=u.id),
+    (SELECT COUNT(*) FROM chat_backup_media_objects m WHERE m.account_id=u.id)
+    FROM accounts u JOIN chat_backups cb ON cb.account_id=u.id
     WHERE u.username='${quoted}' GROUP BY u.id`
   const output = compose(['exec', '-T', postgres, 'psql', '-U', 'kutup', '-d', 'kutup', '-Atc', sql])
   if (!output) return { backups: 0, objects: 0, media: 0 }
@@ -270,7 +270,7 @@ test.describe('two-server continuous backup recovery', () => {
     const transferRequests: string[] = []
     const mediaGets = { a: [] as string[], b: [] as string[] }
     const watch = (context: BrowserContext, side: 'a' | 'b') => {
-      void context.route('**/api/chat/media/objects/*', (route) => route.fulfill({ status: 404 }))
+      void context.route('**/api/v1/chat/media/objects/*', (route) => route.fulfill({ status: 404 }))
       context.on('request', (request) => {
         if (request.url().includes('history-transfer')) transferRequests.push(request.url())
         const path = new URL(request.url()).pathname
@@ -301,7 +301,7 @@ test.describe('two-server continuous backup recovery', () => {
     expect(mediaGets).toEqual({ a: [], b: [] })
     const directProtectedDownload = restoredB.waitForResponse((response) => {
       const path = new URL(response.url()).pathname
-      return response.request().method() === 'GET' && path.includes('/api/chat/backup/media/') && response.ok()
+      return response.request().method() === 'GET' && path.includes('/api/v1/chat/backup/media/') && response.ok()
     })
     await restoredB.getByRole('button', { name: `Download ${directAttachment} into Kutup` }).click()
     await directProtectedDownload

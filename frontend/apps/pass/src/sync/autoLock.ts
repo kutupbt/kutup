@@ -20,7 +20,7 @@ export const AUTO_LOCK_CHOICES = [1, 5, 15, 30, 60, 240, 0] as const
 export type AutoLockMinutes = (typeof AUTO_LOCK_CHOICES)[number]
 export const DEFAULT_AUTO_LOCK: AutoLockMinutes = 15
 
-const STORAGE_KEY = 'kutup-pass-auto-lock-minutes'
+const STORAGE_KEY = 'kutup.pass.autoLockMinutes'
 const CHECK_MS = 15_000
 const ACTIVITY = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const
 
@@ -64,7 +64,7 @@ export function useAutoLockMinutes(): AutoLockMinutes {
  * PIN lock, `sync/pin.ts`), or a click. The same at every way in.
  */
 export type UnlockMode = 'password' | 'pin' | 'click'
-const MODE_KEY = 'kutup-pass-unlock-mode'
+const MODE_KEY = 'kutup.pass.unlockMode'
 let chosenMode: UnlockMode | null = null
 
 /** The mode chosen on this device, if one was. */
@@ -130,10 +130,10 @@ export function idleExpired(lastActivity: number, now: number, minutes: number):
 }
 
 /** Locks every vault and forgets what this device kept for the account. */
-export async function lockAndForget(userId: string | null): Promise<void> {
+export async function lockAndForget(accountId: string | null): Promise<void> {
   await closeAllHere()
   forgetLock()
-  if (userId) await outbox.clear(userId)
+  if (accountId) await outbox.clear(accountId)
 }
 
 /**
@@ -143,7 +143,7 @@ export async function lockAndForget(userId: string | null): Promise<void> {
 export function startAutoLock(): () => void {
   current = autoLockMinutes()
   chosenMode = chosenUnlockMode()
-  let userId = getSession()?.userId ?? null
+  let userId = getSession()?.accountId ?? null
   // Opened after the device idled past the delay: locked from the start.
   // An account this device holds no lock for yet has just signed in.
   if (userId) {
@@ -166,14 +166,14 @@ export function startAutoLock(): () => void {
     // Use in any tab of this device counts.
     const last = Math.max(lastActivity, lastDeviceActivity() ?? 0)
     if (!idleExpired(last, Date.now(), current)) return
-    const account = getSession()?.userId
+    const account = getSession()?.accountId
     if (openVaultIds().length > 0 || (account && !allLocked(account))) void lockAll()
   }, CHECK_MS)
   // Signed out here (the session cleared) or in another tab of Pass.
   const stopSession = subscribe(() => {
     const now = getSession()
     if (!now && userId) void lockAndForget(userId)
-    userId = now?.userId ?? userId
+    userId = now?.accountId ?? userId
   })
   const stopLogout = startLogoutListener(() => void lockAndForget(userId))
   return () => {

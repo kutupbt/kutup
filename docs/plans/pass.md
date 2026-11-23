@@ -149,7 +149,7 @@ one database, plus a report of what happened.
 
 - `POST /api/files/{id}/versions` gains an optional `basedOn` (a version id,
   or `original` for the upload). If the file's current content is not that
-  version, the server answers `409` `{ code: "version_conflict", current }`
+  version, the server answers `409` `{ code: "versionConflict", current }`
   and stores nothing. Without `basedOn` the endpoint behaves as today.
 - Each version records the version it replaced (`parent_version_id`, a
   migration numbered one above the highest on master and in open PRs at the

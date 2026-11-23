@@ -40,7 +40,7 @@ export async function contentAt(file: DriveFile, versionId: string | null): Prom
   if (versionId === null) {
     return {
       kind: 'version',
-      path: `/files/${file.id}/original`,
+      path: `/drive/files/${file.id}/original`,
       versionId: null,
       keyGeneration: file.originalKeyGeneration,
       seqAtSnapshot: 0,
@@ -51,7 +51,7 @@ export async function contentAt(file: DriveFile, versionId: string | null): Prom
   if (!version) throw new Error('the session base version is gone')
   return {
     kind: 'version',
-    path: `/files/${file.id}/versions/${version.id}/download`,
+    path: `/drive/files/${file.id}/versions/${version.id}/download`,
     versionId: version.id,
     keyGeneration: version.keyGeneration,
     seqAtSnapshot: version.seqAtSnapshot,
@@ -72,7 +72,7 @@ export async function currentContent(folder: Folder, file: DriveFile): Promise<F
   // whole-file version; an office document or whiteboard from its newest.
   const latest = kind === 'text' ? newestYjsVersion(versions) : versions[0]
   if (!latest || latest.sizeBytes === 0) return { kind: 'original' }
-  const path = `/files/${file.id}/versions/${latest.id}/download`
+  const path = `/drive/files/${file.id}/versions/${latest.id}/download`
   if (kind !== 'text') {
     return {
       kind: 'version',
@@ -102,7 +102,7 @@ async function listContent(file: DriveFile): Promise<FileContent> {
   if (!file.fileKey) return { kind: 'original' }
   const latest = newestYjsVersion(await listVersions(file.id))
   if (!latest || latest.sizeBytes === 0) return { kind: 'original' }
-  const { data } = await api.get<ArrayBuffer>(`/files/${file.id}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
+  const { data } = await api.get<ArrayBuffer>(`/drive/files/${file.id}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
   const opened = await versionContentOf(file, latest)
   const state = await openDriveObject(new Uint8Array(data), opened.fileKey, opened.expected)
   return { kind: 'plain', bytes: stateToListJson(state), versionId: latest.id }

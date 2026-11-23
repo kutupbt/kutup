@@ -16,7 +16,7 @@ export const SUPPORTED_LANGUAGES = ['en', 'tr'] as const
 export type Language = (typeof SUPPORTED_LANGUAGES)[number]
 
 /** Stored per origin; the account app's language setting writes the same key. */
-export const LANGUAGE_STORAGE_KEY = 'kutup-lang'
+export const LANGUAGE_STORAGE_KEY = 'kutup.ui.language'
 
 export function mergeMessages(base: Messages, extra: Messages): Messages {
   const out: Messages = { ...base }

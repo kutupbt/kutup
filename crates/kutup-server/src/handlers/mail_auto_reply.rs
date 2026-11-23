@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::mail::auto_reply::{self, format_local, parse_local, Schedule, MAX_MESSAGE_BYTES};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// When it is on and what it says. Times are wall-clock times in `zone`.
@@ -113,16 +113,16 @@ async fn current(state: &AppState, user_id: Uuid) -> AppResult<AutoReply> {
     })
 }
 
-/// `GET /api/mail/auto-reply`.
+/// `GET /api/v1/mail/auto-reply`.
 #[utoipa::path(
     get,
-    path = "/api/mail/auto-reply",
+    path = "/api/v1/mail/auto-reply",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The account's auto-reply", body = AutoReply))
 )]
-pub async fn get(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<AutoReply>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn get(State(state): State<AppState>, user: AuthAccount) -> AppResult<Json<AutoReply>> {
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok(Json(current(&state, user_id).await?))
 }
 
@@ -132,11 +132,11 @@ fn minute(value: Option<i16>) -> AppResult<i16> {
         .ok_or_else(|| AppError::bad_request("times are minutes after midnight, 0 to 1439"))
 }
 
-/// `PUT /api/mail/auto-reply` — saves it whole; whoever was answered may be
+/// `PUT /api/v1/mail/auto-reply` — saves it whole; whoever was answered may be
 /// answered again.
 #[utoipa::path(
     put,
-    path = "/api/mail/auto-reply",
+    path = "/api/v1/mail/auto-reply",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = AutoReplySettings,
@@ -147,10 +147,10 @@ fn minute(value: Option<i16>) -> AppResult<i16> {
 )]
 pub async fn put(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<AutoReplySettings>,
 ) -> AppResult<Json<AutoReply>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if request.message_html.len() > MAX_MESSAGE_BYTES
         || request.message_text.len() > MAX_MESSAGE_BYTES
     {
@@ -224,10 +224,10 @@ pub async fn put(
     let mut tx = state.pool.begin().await?;
     sqlx::query(
         "INSERT INTO mail_auto_replies
-            (user_id, enabled, repeat, zone, start_local, end_local, days, start_day, end_day,
+            (account_id, enabled, repeat, zone, start_local, end_local, days, start_day, end_day,
              start_minute, end_minute, message_html, message_text)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-         ON CONFLICT (user_id) DO UPDATE SET
+         ON CONFLICT (account_id) DO UPDATE SET
              enabled = $2, repeat = $3, zone = $4, start_local = $5, end_local = $6, days = $7,
              start_day = $8, end_day = $9, start_minute = $10, end_minute = $11,
              message_html = $12, message_text = $13, updated_at = now()",
@@ -247,7 +247,7 @@ pub async fn put(
     .bind(&request.message_text)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("DELETE FROM mail_auto_reply_sent WHERE user_id = $1")
+    sqlx::query("DELETE FROM mail_auto_reply_sent WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;

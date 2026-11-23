@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::account_heads::{self, HeadOnly, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::{revisions, AppState};
 
 /// Contacts one import may carry, all or nothing.
@@ -104,11 +104,12 @@ impl Checked {
 
 /// The caller's key binding (which contact summaries bind) and authority key.
 async fn binding_of(state: &AppState, user_id: Uuid) -> AppResult<(String, [u8; 32])> {
-    let (binding, authority): (Option<String>, String) =
-        sqlx::query_as("SELECT key_binding, account_authority_public_key FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let (binding, authority): (Option<String>, String) = sqlx::query_as(
+        "SELECT key_binding::text, kutup_b64(account_authority_public_key) FROM accounts WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let binding = binding.ok_or_else(|| AppError::bad_request("the account has no key binding"))?;
     let authority = STANDARD
         .decode(&authority)
@@ -158,12 +159,12 @@ async fn write_index(
     contact_id: Uuid,
     summary: &ContactSummaryV1,
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM contact_emails WHERE contact_id = $1")
+    sqlx::query("DELETE FROM contacts_emails WHERE contact_id = $1")
         .bind(contact_id)
         .execute(&mut **tx)
         .await?;
     for (position, email) in summary.emails.iter().enumerate() {
-        sqlx::query("INSERT INTO contact_emails (contact_id, user_id, address, label, position) VALUES ($1, $2, $3, $4, $5)")
+        sqlx::query("INSERT INTO contacts_emails (contact_id, account_id, address, label, position) VALUES ($1, $2, $3, $4, $5)")
             .bind(contact_id)
             .bind(user_id)
             .bind(&email.address)
@@ -177,7 +178,7 @@ async fn write_index(
     if !summary.groups.is_empty() {
         let kept: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM account_records
-              WHERE user_id = $1 AND scope = $2 AND record_id = ANY($3)",
+              WHERE account_id = $1 AND scope = $2 AND record_id = ANY($3)",
         )
         .bind(user_id)
         .bind(RecordScope::ContactGroups.info().number)
@@ -199,9 +200,9 @@ async fn insert(
     checked: &Checked,
 ) -> AppResult<Uuid> {
     let id: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO contacts (user_id, uid, name, summary, signature, card, revision)
+        "INSERT INTO contacts (account_id, uid, name, summary, signature, card, revision)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (user_id, uid) DO NOTHING
+         ON CONFLICT (account_id, uid) DO NOTHING
          RETURNING id",
     )
     .bind(user_id)
@@ -219,7 +220,7 @@ async fn insert(
 }
 
 async fn room_for(tx: &mut Transaction<'_, Postgres>, user_id: Uuid, more: usize) -> AppResult<()> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE user_id = $1")
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE account_id = $1")
         .bind(user_id)
         .fetch_one(&mut **tx)
         .await?;
@@ -230,11 +231,12 @@ async fn room_for(tx: &mut Transaction<'_, Postgres>, user_id: Uuid, more: usize
 }
 
 async fn fetch(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<ContactRow> {
-    let row: Option<Row> = sqlx::query_as(&format!("{ROW_SELECT} WHERE id = $1 AND user_id = $2"))
-        .bind(id)
-        .bind(user_id)
-        .fetch_optional(&state.pool)
-        .await?;
+    let row: Option<Row> =
+        sqlx::query_as(&format!("{ROW_SELECT} WHERE id = $1 AND account_id = $2"))
+            .bind(id)
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?;
     row.map(to_row)
         .ok_or_else(|| AppError::not_found("not found"))
 }
@@ -253,31 +255,31 @@ pub struct ContactPage {
     pub total: i64,
 }
 
-/// `GET /api/contacts?offset=&limit=` — the caller's contacts, by name.
+/// `GET /api/v1/contacts?offset=&limit=` — the caller's contacts, by name.
 #[utoipa::path(
     get,
-    path = "/api/contacts",
+    path = "/api/v1/contacts",
     tag = "contacts",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "A page of contacts", body = ContactPage))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<ListQuery>,
 ) -> AppResult<Json<ContactPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(MAX_PAGE).clamp(1, MAX_PAGE);
     let offset = query.offset.unwrap_or(0).max(0);
     let rows: Vec<Row> = sqlx::query_as(&format!(
-        "{ROW_SELECT} WHERE user_id = $1 ORDER BY lower(name), id LIMIT $2 OFFSET $3"
+        "{ROW_SELECT} WHERE account_id = $1 ORDER BY lower(name), id LIMIT $2 OFFSET $3"
     ))
     .bind(user_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
     .await?;
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE user_id = $1")
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE account_id = $1")
         .bind(user_id)
         .fetch_one(&state.pool)
         .await?;
@@ -287,26 +289,26 @@ pub async fn list(
     }))
 }
 
-/// `POST /api/contacts` — adds a contact.
+/// `POST /api/v1/contacts` — adds a contact.
 #[utoipa::path(
     post,
-    path = "/api/contacts",
+    path = "/api/v1/contacts",
     tag = "contacts",
     security(("BearerAuth" = [])),
     request_body = ContactCreate,
     responses(
         (status = 201, description = "Added", body = ContactRow),
         (status = 400, description = "Not a valid, account-signed contact"),
-        (status = 409, description = "A contact with this UID exists, or head_conflict / head_required"),
+        (status = 409, description = "A contact with this UID exists, or headConflict / headRequired"),
         (status = 413, description = "Storage full"),
     )
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<ContactCreate>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let head = NextHead::parse(input.head.as_deref())?;
     let (binding, authority) = binding_of(&state, user_id).await?;
     let checked = check(
@@ -355,12 +357,12 @@ pub struct ContactUpdate {
     pub head: Option<String>,
 }
 
-/// `PUT /api/contacts/{id}` — replaces a contact (same UID) if nobody changed
-/// it since `baseRevision`; `409` with `code: "revision_conflict"` and the
+/// `PUT /api/v1/contacts/{id}` — replaces a contact (same UID) if nobody changed
+/// it since `baseRevision`; `409` with `code: "revisionConflict"` and the
 /// current revision otherwise.
 #[utoipa::path(
     put,
-    path = "/api/contacts/{id}",
+    path = "/api/v1/contacts/{id}",
     tag = "contacts",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Contact id")),
@@ -372,11 +374,11 @@ pub struct ContactUpdate {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(input): Json<ContactUpdate>,
 ) -> AppResult<Json<ContactRow>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let head = NextHead::parse(input.head.as_deref())?;
     let (binding, authority) = binding_of(&state, user_id).await?;
@@ -393,7 +395,7 @@ pub async fn update(
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let current: Option<(String, i64, i64)> = sqlx::query_as(
         "SELECT uid, revision, (octet_length(summary) + octet_length(card))::bigint FROM contacts
-          WHERE id = $1 AND user_id = $2 FOR UPDATE",
+          WHERE id = $1 AND account_id = $2 FOR UPDATE",
     )
     .bind(id)
     .bind(user_id)
@@ -444,7 +446,7 @@ async fn delete_ids(
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, session).await?;
     let freed: Option<i64> = sqlx::query_scalar(
-        "WITH gone AS (DELETE FROM contacts WHERE user_id = $1 AND id = ANY($2)
+        "WITH gone AS (DELETE FROM contacts WHERE account_id = $1 AND id = ANY($2)
                        RETURNING (octet_length(summary) + octet_length(card))::bigint AS bytes)
          SELECT SUM(bytes)::bigint FROM gone",
     )
@@ -466,10 +468,10 @@ async fn delete_ids(
     Ok(freed as u64)
 }
 
-/// `DELETE /api/contacts/{id}`.
+/// `DELETE /api/v1/contacts/{id}`.
 #[utoipa::path(
     delete,
-    path = "/api/contacts/{id}",
+    path = "/api/v1/contacts/{id}",
     tag = "contacts",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Contact id")),
@@ -478,11 +480,11 @@ async fn delete_ids(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Option<Json<HeadOnly>>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let head = body.and_then(|Json(body)| body.head);
     delete_ids(
@@ -505,10 +507,10 @@ pub struct DeleteContacts {
     pub head: Option<String>,
 }
 
-/// `POST /api/contacts/delete` — deletes several contacts.
+/// `POST /api/v1/contacts/delete` — deletes several contacts.
 #[utoipa::path(
     post,
-    path = "/api/contacts/delete",
+    path = "/api/v1/contacts/delete",
     tag = "contacts",
     security(("BearerAuth" = [])),
     request_body = DeleteContacts,
@@ -516,10 +518,10 @@ pub struct DeleteContacts {
 )]
 pub async fn delete_many(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<DeleteContacts>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if input.ids.len() > MAX_IMPORT {
         return Err(AppError::bad_request("too many contacts at once"));
     }
@@ -554,10 +556,10 @@ pub struct ImportResult {
     pub imported: usize,
 }
 
-/// `POST /api/contacts/import` — adds up to 500 contacts, all or nothing.
+/// `POST /api/v1/contacts/import` — adds up to 500 contacts, all or nothing.
 #[utoipa::path(
     post,
-    path = "/api/contacts/import",
+    path = "/api/v1/contacts/import",
     tag = "contacts",
     security(("BearerAuth" = [])),
     request_body = ImportContacts,
@@ -568,10 +570,10 @@ pub struct ImportResult {
 )]
 pub async fn import(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<ImportContacts>,
 ) -> AppResult<Json<ImportResult>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if input.contacts.is_empty() || input.contacts.len() > MAX_IMPORT {
         return Err(AppError::bad_request("import 1 to 500 contacts at once"));
     }
@@ -613,22 +615,22 @@ pub struct ContactEmailRow {
     pub label: Option<String>,
 }
 
-/// `GET /api/contacts/emails?q=&limit=` — addresses whose address or name
+/// `GET /api/v1/contacts/emails?q=&limit=` — addresses whose address or name
 /// starts with `q` (any word of the name), recently used first; for the
 /// recipient, share and invitee pickers.
 #[utoipa::path(
     get,
-    path = "/api/contacts/emails",
+    path = "/api/v1/contacts/emails",
     tag = "contacts",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Matching addresses", body = [ContactEmailRow]))
 )]
 pub async fn emails(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<EmailQuery>,
 ) -> AppResult<Json<Vec<ContactEmailRow>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(20).clamp(1, 200);
     let q = query.q.unwrap_or_default().trim().to_lowercase();
     let pattern = format!(
@@ -640,8 +642,8 @@ pub async fn emails(
     let word = format!("% {}", pattern);
     let rows: Vec<(Uuid, String, String, Option<String>)> = sqlx::query_as(
         "SELECT c.id, c.name, e.address, e.label
-           FROM contact_emails e JOIN contacts c ON c.id = e.contact_id
-          WHERE e.user_id = $1
+           FROM contacts_emails e JOIN contacts c ON c.id = e.contact_id
+          WHERE e.account_id = $1
             AND ($2 = '' OR e.address LIKE $3 OR lower(c.name) LIKE $3 OR lower(c.name) LIKE $4)
           ORDER BY e.last_used_at DESC NULLS LAST, lower(c.name), e.position
           LIMIT $5",

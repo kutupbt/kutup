@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::mail::{delete_for_good, mailbox, UpdatedMailMessages};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq, Eq, sqlx::FromRow)]
@@ -31,7 +31,7 @@ pub struct MailSettings {
     /// Every new message carries your public key as an attachment (Proton's
     /// `AttachPublicKey`).
     pub attach_public_key: bool,
-    /// `pgp_mime` or `inline`: how mail to outside OpenPGP users is
+    /// `pgpMime` or `inline`: how mail to outside OpenPGP users is
     /// encrypted or signed (Proton's `PGPScheme`); Inline is plain text.
     pub pgp_scheme: String,
     /// `column`: the reading pane beside the list; `row`: below it
@@ -51,8 +51,8 @@ pub struct MailSettings {
     /// Messages or conversations on a page of the list: 50, 100 or 200
     /// (Proton's `PageSize`).
     pub page_size: i32,
-    /// Moving list mail to Spam: `ask`, `just_spam`, or
-    /// `spam_and_unsubscribe` (Proton's `SpamAction`, "Auto-unsubscribe").
+    /// Moving list mail to Spam: `ask`, `justSpam`, or
+    /// `spamAndUnsubscribe` (Proton's `SpamAction`, "Auto-unsubscribe").
     pub spam_action: String,
     /// Remote images: `ask` (blocked until loaded) or `always` (Proton's
     /// "Auto show remote images"); never automatic in Spam.
@@ -107,7 +107,7 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
                 view_layout, density, composer_mode, view_mode, confirm_link, page_size, spam_action, remote_images, delay_send_seconds,
                 draft_type, text_direction, font_face, font_size, image_proxy, embedded_images, remove_image_metadata,
                 unread_favicon, keep_moved_sent
-           FROM mail_settings WHERE user_id = $1",
+           FROM mail_settings WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -117,7 +117,7 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
         almost_all_mail: false,
         sign_outside: true,
         attach_public_key: false,
-        pgp_scheme: "pgp_mime".into(),
+        pgp_scheme: "pgpMime".into(),
         view_layout: "column".into(),
         density: "comfortable".into(),
         composer_mode: "popup".into(),
@@ -139,16 +139,19 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
     }))
 }
 
-/// `GET /api/mail/settings`.
+/// `GET /api/v1/mail/settings`.
 #[utoipa::path(
     get,
-    path = "/api/mail/settings",
+    path = "/api/v1/mail/settings",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The account's mail settings", body = MailSettings))
 )]
-pub async fn get(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<MailSettings>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn get(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<MailSettings>> {
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok(Json(settings_of(&state, user_id).await?))
 }
 
@@ -180,10 +183,10 @@ pub struct UpdateMailSettings {
     pub keep_moved_sent: Option<bool>,
 }
 
-/// `PATCH /api/mail/settings`.
+/// `PATCH /api/v1/mail/settings`.
 #[utoipa::path(
     patch,
-    path = "/api/mail/settings",
+    path = "/api/v1/mail/settings",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = UpdateMailSettings,
@@ -194,10 +197,10 @@ pub struct UpdateMailSettings {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<UpdateMailSettings>,
 ) -> AppResult<Json<MailSettings>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if request
         .auto_delete_days
         .is_some_and(|days| days != 0 && days != 30)
@@ -239,10 +242,10 @@ pub async fn update(
     if request
         .spam_action
         .as_deref()
-        .is_some_and(|a| !["ask", "just_spam", "spam_and_unsubscribe"].contains(&a))
+        .is_some_and(|a| !["ask", "justSpam", "spamAndUnsubscribe"].contains(&a))
     {
         return Err(AppError::bad_request(
-            "spam action is ask, just_spam or spam_and_unsubscribe",
+            "spam action is ask, justSpam or spamAndUnsubscribe",
         ));
     }
     let one_of = |value: &Option<String>, allowed: [&str; 2]| {
@@ -252,27 +255,27 @@ pub async fn update(
         || !one_of(&request.density, ["comfortable", "compact"])
         || !one_of(&request.composer_mode, ["popup", "maximized"])
         || !one_of(&request.view_mode, ["conversation", "message"])
-        || !one_of(&request.pgp_scheme, ["pgp_mime", "inline"])
+        || !one_of(&request.pgp_scheme, ["pgpMime", "inline"])
         || !one_of(&request.remote_images, ["ask", "always"])
     {
         return Err(AppError::bad_request(
-            "layout is column or row, density comfortable or compact, the composer popup or maximized, view conversation or message, PGP pgp_mime or inline, remote images ask or always",
+            "layout is column or row, density comfortable or compact, the composer popup or maximized, view conversation or message, PGP pgpMime or inline, remote images ask or always",
         ));
     }
     sqlx::query(
         "INSERT INTO mail_settings
-             (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
+             (account_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
               view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link, page_size, spam_action, remote_images, delay_send_seconds,
               draft_type, text_direction, font_face, font_size, image_proxy, embedded_images, remove_image_metadata,
               unread_favicon, keep_moved_sent)
          VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, 'column'),
                  COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'),
-                 COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgp_mime'), COALESCE($11, true),
+                 COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgpMime'), COALESCE($11, true),
                  COALESCE($12, 50), COALESCE($13, 'ask'), COALESCE($14, 'ask'),
                  COALESCE($15, $16), COALESCE($17, 'html'), COALESCE($18, 'ltr'),
                  COALESCE($19, 'arial'), COALESCE($20, 14), COALESCE($21, true), COALESCE($22, true), COALESCE($23, true),
                  COALESCE($24, false), COALESCE($25, false))
-         ON CONFLICT (user_id) DO UPDATE SET
+         ON CONFLICT (account_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
              view_layout = COALESCE($4, mail_settings.view_layout),
@@ -337,11 +340,11 @@ pub struct EmptyMailFolder {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/empty` — deletes everything in Trash or Spam for
+/// `POST /api/v1/mail/messages/empty` — deletes everything in Trash or Spam for
 /// good (Proton's "Delete all"), freeing its storage.
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/empty",
+    path = "/api/v1/mail/messages/empty",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = EmptyMailFolder,
@@ -352,10 +355,10 @@ pub struct EmptyMailFolder {
 )]
 pub async fn empty(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<EmptyMailFolder>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let folder = match request.folder.as_str() {
         "trash" => "trash",
         "spam" => "spam",
@@ -379,7 +382,7 @@ pub(crate) async fn delete_all(
     loop {
         let ids: Vec<Uuid> = sqlx::query_scalar(
             "SELECT id FROM mail_messages
-              WHERE owner = $1 AND folder = $2
+              WHERE mailbox_owner = $1 AND folder = $2
                 AND ($3::int IS NULL OR folder_changed_at < now() - make_interval(days => $3))
               LIMIT 500",
         )

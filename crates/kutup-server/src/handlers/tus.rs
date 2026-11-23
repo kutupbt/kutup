@@ -1,24 +1,24 @@
 //! tus.io 1.0 resumable upload endpoint — mirrors `backend/handlers/tus.go`.
 //!
-//! The multipart POST in `files.rs` buffers the whole encrypted blob and restarts from
+//! The multipart POST in `drive_files.rs` buffers the whole encrypted blob and restarts from
 //! byte zero on any blip; tus gives bounded memory (S3 multipart) + resume (offset
 //! bookkeeping) + a commit of the encrypted metadata once the content is up. Flow:
 //!
-//!   OPTIONS /api/uploads        — discovery (anonymous)
-//!   POST    /api/uploads        — create session, allocate the S3 multipart
-//!   PATCH   /api/uploads/{id}    — append one part, bump the offset; the final PATCH
+//!   OPTIONS /api/v1/drive/uploads        — discovery (anonymous)
+//!   POST    /api/v1/drive/uploads        — create session, allocate the S3 multipart
+//!   PATCH   /api/v1/drive/uploads/{id}    — append one part, bump the offset; the final PATCH
 //!                                  completes the multipart, checks the stored object
 //!                                  and leaves an uploaded revision (the row kept, its
 //!                                  reservation held), made current by
 //!                                  `revision_commit::commit`
-//!   HEAD    /api/uploads/{id}    — resume: returns the current Upload-Offset
-//!   DELETE  /api/uploads/{id}    — cancel: abort the multipart, free reserved quota
+//!   HEAD    /api/v1/drive/uploads/{id}    — resume: returns the current Upload-Offset
+//!   DELETE  /api/v1/drive/uploads/{id}    — cancel: abort the multipart, free reserved quota
 //!
 //! Quota is soft-reserved: available bytes for a new upload are
-//! `storage_quota_bytes - storage_used_bytes - SUM(uploads.total_bytes - received_bytes)`,
+//! `quota - storage_used_bytes - SUM(uploads.total_bytes - received_bytes)`,
 //! so a half-uploaded 50 GB file blocks a concurrent 50 GB attempt without polluting
 //! `storage_used_bytes`. The revision's commit charges it, atomically with the
-//! `files` INSERT.
+//! `drive_files` INSERT.
 //!
 //! Unlike the JSON handlers, the tus error bodies are plain text + carry the
 //! `Tus-Resumable` header, matching Fiber's `c.SendString` — so responses are built
@@ -37,7 +37,7 @@ use crate::drive_blob::BlockBlob;
 use crate::drive_writes::Room;
 use crate::error::{AppError, AppResult};
 use crate::handlers::files::{canonical_uuid, validate_envelope};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::storage::{CompletedPart, MultipartUpload};
 use crate::AppState;
 
@@ -128,7 +128,7 @@ pub(crate) fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
 }
 
 // ---------------------------------------------------------------------------
-// OPTIONS /api/uploads — discovery
+// OPTIONS /api/v1/drive/uploads — discovery
 // ---------------------------------------------------------------------------
 
 /// Advertises the supported protocol version + extensions. No auth — the spec treats this
@@ -148,7 +148,7 @@ pub async fn options() -> Response {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/uploads — Create
+// POST /api/v1/drive/uploads — Create
 // ---------------------------------------------------------------------------
 
 /// Opens a new tus upload session — mirrors `Create`. Requires `Upload-Length` and an
@@ -157,22 +157,26 @@ pub async fn options() -> Response {
 /// `{"fileId": …}` body (tus-js-client surfaces it to the browser path).
 #[utoipa::path(
     post,
-    path = "/api/uploads",
-    tag = "tus",
+    path = "/api/v1/drive/uploads",
+    tag = "drive",
     operation_id = "tusCreate",
     security(("BearerAuth" = [])),
     params(
         ("Tus-Resumable" = String, Header, description = "Must be 1.0.0"),
         ("Upload-Length" = i64, Header, description = "Total upload size in bytes"),
-        ("Upload-Metadata" = String, Header, description = "Comma-separated `key <base64>` pairs. A new file: fileId, collectionId, fileKeyEnvelope, nameHash and revisionId. A new version of a file: versionOf, revisionId, and optional contentHash and basedOn. The upload lands as an uploaded revision, current only once committed (`POST /api/files/{id}/revisions/{revisionId}/commit`)")
+        ("Upload-Metadata" = String, Header, description = "Comma-separated `key <base64>` pairs. A new file: fileId, collectionId, fileKeyEnvelope, nameHash and revisionId. A new version of a file: versionOf, revisionId, and optional contentHash and basedOn. The upload lands as an uploaded revision, current only once committed (`POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`)")
     ),
     responses((status = 201, description = "Session created; `Location` + `Upload-Offset: 0` headers and a `{\"fileId\": …}` body"))
 )]
-pub async fn create(State(state): State<AppState>, user: AuthUser, headers: HeaderMap) -> Response {
+pub async fn create(
+    State(state): State<AppState>,
+    user: AuthAccount,
+    headers: HeaderMap,
+) -> Response {
     if let Some(resp) = require_tus_resumable(&headers) {
         return resp;
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -262,7 +266,7 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 
     // Permission check + quota gate, mirroring files.rs upload.
     let collection: Option<(Uuid, i32)> = match sqlx::query_as(
-        "SELECT owner_user_id, key_epoch FROM collections WHERE id=$1 AND deleted_at IS NULL",
+        "SELECT owner_account_id, key_epoch FROM drive_collections WHERE id=$1 AND deleted_at IS NULL",
     )
     .bind(coll_uuid)
     .fetch_optional(&mut *tx)
@@ -274,16 +278,16 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
             return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
         }
     };
-    let Some((owner_user_id, key_epoch)) = collection else {
+    let Some((owner_account_id, key_epoch)) = collection else {
         return tus_text(StatusCode::FORBIDDEN, "forbidden");
     };
-    let is_owner = owner_user_id == user_id;
+    let is_owner = owner_account_id == user_id;
 
     if !is_owner {
         let can_upload: Option<bool> = match sqlx::query_scalar(
-            "SELECT cs.can_upload FROM collection_shares cs \
-             JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL \
-             WHERE cs.collection_id=$1 AND cs.recipient_user_id=$2",
+            "SELECT cs.can_upload FROM drive_collection_shares cs \
+             JOIN drive_collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL \
+             WHERE cs.collection_id=$1 AND cs.recipient_account_id=$2",
         )
         .bind(coll_uuid)
         .bind(user_id)
@@ -374,15 +378,13 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         }
     };
 
-    // The metadata comes with the commit: NULL, never the columns' old
-    // default (`uploads_metadata_at_commit`).
+    // The metadata comes with the commit, never with the upload.
     let ins = sqlx::query(
-        "INSERT INTO uploads \
-            (id, user_id, collection_id, file_id, total_bytes, \
+        "INSERT INTO drive_uploads \
+            (id, account_id, collection_id, file_id, total_bytes, \
              file_key_envelope, key_epoch, \
-             storage_path, s3_upload_id, name_hash, revision_id, blob_suite, \
-             metadata_envelope, metadata_revision) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULL,NULL)",
+             s3_upload_id, name_hash, revision_id, blob_suite) \
+         VALUES ($1,$2,$3,$4,$5,kutup_unb64($6),$7,$8,decode($9, 'hex'),$10,$11)",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -391,7 +393,6 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     .bind(total_bytes)
     .bind(file_key_envelope)
     .bind(key_epoch)
-    .bind(&storage_path)
     .bind(&s3_upload_id)
     .bind(&name_hash)
     .bind(revision)
@@ -418,7 +419,7 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         StatusCode::CREATED,
         [
             ("Tus-Resumable", TUS_VERSION.to_string()),
-            ("Location", format!("/api/uploads/{upload_id}")),
+            ("Location", format!("/api/v1/drive/uploads/{upload_id}")),
             ("Upload-Offset", "0".to_string()),
             ("Content-Type", "application/json".to_string()),
         ],
@@ -428,15 +429,15 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 }
 
 // ---------------------------------------------------------------------------
-// HEAD /api/uploads/{id} — resume
+// HEAD /api/v1/drive/uploads/{id} — resume
 // ---------------------------------------------------------------------------
 
 /// Returns the current `Upload-Offset` so the client can resume — mirrors `Head`. 404 if
 /// the upload doesn't exist / isn't owned by the caller.
 #[utoipa::path(
     head,
-    path = "/api/uploads/{id}",
-    tag = "tus",
+    path = "/api/v1/drive/uploads/{id}",
+    tag = "drive",
     operation_id = "tusHead",
     security(("BearerAuth" = [])),
     params(
@@ -447,14 +448,14 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 )]
 pub async fn head(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(resp) = require_tus_resumable(&headers) {
         return resp;
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -464,7 +465,7 @@ pub async fn head(
     };
 
     let row: Option<(i64, i64)> = match sqlx::query_as(
-        "SELECT total_bytes, received_bytes FROM uploads WHERE id=$1 AND user_id=$2",
+        "SELECT total_bytes, received_bytes FROM drive_uploads WHERE id=$1 AND account_id=$2",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -494,17 +495,17 @@ pub async fn head(
 }
 
 // ---------------------------------------------------------------------------
-// PATCH /api/uploads/{id} — extend
+// PATCH /api/v1/drive/uploads/{id} — extend
 // ---------------------------------------------------------------------------
 
 /// Appends bytes — mirrors `Patch`. Each PATCH becomes one S3 multipart part; parts before
 /// the final must be ≥ 5 MiB. The PATCH that brings `received_bytes == total_bytes` runs the
-/// finaliser: complete-multipart, INSERT `files`, bump `storage_used_bytes`, DELETE the row;
+/// finaliser: complete-multipart, INSERT `drive_files`, bump `storage_used_bytes`, DELETE the row;
 /// it returns `X-Kutup-File-Id`.
 #[utoipa::path(
     patch,
-    path = "/api/uploads/{id}",
-    tag = "tus",
+    path = "/api/v1/drive/uploads/{id}",
+    tag = "drive",
     operation_id = "tusPatch",
     security(("BearerAuth" = [])),
     params(
@@ -524,7 +525,7 @@ pub async fn head(
 )]
 pub async fn patch(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -538,7 +539,7 @@ pub async fn patch(
             "Content-Type must be application/offset+octet-stream",
         );
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -578,7 +579,6 @@ pub async fn patch(
         /// None for a version.
         file_key_envelope: Option<String>,
         key_epoch: i32,
-        storage_path: String,
         s3_upload_id: String,
         s3_part_etags: serde_json::Value,
         pending_bytes: Vec<u8>,
@@ -594,11 +594,12 @@ pub async fn patch(
     }
     let row: Option<UploadRow> = match sqlx::query_as(
         "SELECT collection_id, file_id, total_bytes, received_bytes, \
-                file_key_envelope, key_epoch, \
-                storage_path, s3_upload_id, s3_part_etags, pending_bytes, name_hash, \
-                kind, key_generation, content_hash, based_on, revision_id, \
+                kutup_b64(file_key_envelope) AS file_key_envelope, key_epoch, \
+                s3_upload_id, s3_part_etags, pending_bytes, \
+                encode(name_hash, 'hex') AS name_hash, \
+                kind, key_generation, encode(content_hash, 'hex') AS content_hash, based_on, revision_id, \
                 uploaded_at IS NOT NULL AS uploaded \
-         FROM uploads WHERE id=$1 AND user_id=$2 FOR UPDATE",
+         FROM drive_uploads WHERE id=$1 AND account_id=$2 FOR UPDATE",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -618,7 +619,6 @@ pub async fn patch(
         received_bytes,
         file_key_envelope,
         key_epoch,
-        storage_path,
         s3_upload_id,
         s3_part_etags: part_etags_json,
         pending_bytes: pending,
@@ -633,8 +633,9 @@ pub async fn patch(
     else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
+    let storage_path = crate::file_content::revision_path(file_id, revision_id);
     // Every byte is here and checked: what is left is the commit
-    // (`POST /api/files/{id}/revisions/{revisionId}/commit`).
+    // (`POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`).
     if uploaded {
         return (
             StatusCode::CONFLICT,
@@ -670,7 +671,7 @@ pub async fn patch(
                     .storage
                     .abort_multipart(&storage_path, &s3_upload_id)
                     .await;
-                let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+                let _ = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
                     .bind(upload_id)
                     .execute(&state.pool)
                     .await;
@@ -735,7 +736,7 @@ pub async fn patch(
     let new_received = received_bytes + chunk_len;
 
     if sqlx::query(
-        "UPDATE uploads SET received_bytes=$1, s3_part_etags=$2, pending_bytes=$3, updated_at=NOW() WHERE id=$4",
+        "UPDATE drive_uploads SET received_bytes=$1, s3_part_etags=$2, pending_bytes=$3, updated_at=NOW() WHERE id=$4",
     )
     .bind(new_received)
     .bind(&parts_json)
@@ -771,7 +772,7 @@ pub async fn patch(
             &state,
             tx,
             super::tus_versions::Landing {
-                user_id,
+                account_id: user_id,
                 upload_id,
                 file_id,
                 collection_id: coll_id,
@@ -813,7 +814,7 @@ pub async fn patch(
             .storage
             .abort_multipart(&storage_path, &s3_upload_id)
             .await;
-        let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+        let _ = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
             .bind(upload_id)
             .execute(&state.pool)
             .await;
@@ -838,7 +839,7 @@ pub async fn patch(
                 .storage
                 .abort_multipart(&storage_path, &s3_upload_id)
                 .await;
-            let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+            let _ = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
                 .bind(upload_id)
                 .execute(&state.pool)
                 .await;
@@ -901,7 +902,7 @@ pub(super) async fn check_stored_tail(state: &AppState, path: &str, total: i64) 
 /// Call it with the transaction dropped: it holds the row's lock.
 async fn drop_landed(state: &AppState, storage_path: &str, upload_id: Uuid) {
     let _ = state.storage.delete(storage_path).await;
-    let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+    let _ = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
         .bind(upload_id)
         .execute(&state.pool)
         .await;
@@ -945,10 +946,10 @@ pub(super) async fn landing_check(
     total_bytes: i64,
 ) -> AppResult<()> {
     let folder: Option<(Uuid, i32, Option<bool>)> = sqlx::query_as(
-        "SELECT c.owner_user_id, c.key_epoch,
-                (SELECT cs.can_upload FROM collection_shares cs
-                 WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
-         FROM collections c WHERE c.id = $1 AND c.deleted_at IS NULL FOR SHARE",
+        "SELECT c.owner_account_id, c.key_epoch,
+                (SELECT cs.can_upload FROM drive_collection_shares cs
+                 WHERE cs.collection_id = c.id AND cs.recipient_account_id = $2)
+         FROM drive_collections c WHERE c.id = $1 AND c.deleted_at IS NULL FOR SHARE",
     )
     .bind(coll_id)
     .bind(user_id)
@@ -980,7 +981,6 @@ pub(super) struct NewFile<'a> {
     pub metadata_revision: i64,
     pub file_key_envelope: &'a str,
     pub key_epoch: i32,
-    pub storage_path: &'a str,
     pub size: i64,
     pub name_hash: Option<&'a str>,
     pub content_hash: Option<&'a str>,
@@ -995,13 +995,14 @@ pub(super) async fn insert_file(
     file: NewFile<'_>,
 ) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO files \
-            (id, collection_id, uploader_user_id, \
+        "INSERT INTO drive_files \
+            (id, collection_id, uploader_account_id, \
              metadata_envelope, file_key_envelope, key_epoch, key_generation, \
-             metadata_revision, storage_path, encrypted_size_bytes, original_key_generation, \
+             metadata_revision, encrypted_size_bytes, original_key_generation, \
              name_hash, content_hash, content_revision_id, \
-             blob_suite, revision_content_envelope) \
-         VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,1,$10,$11,$12,$13,$14)",
+             blob_suite, revision_content_envelope, current_doc_key_id) \
+         VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,$7,$8,1,decode($9, 'hex'), \
+                 decode($10, 'hex'),$11,$12,kutup_unb64($13),1)",
     )
     .bind(file.file_id)
     .bind(file.collection_id)
@@ -1010,7 +1011,6 @@ pub(super) async fn insert_file(
     .bind(file.file_key_envelope)
     .bind(file.key_epoch)
     .bind(file.metadata_revision)
-    .bind(file.storage_path)
     .bind(file.size)
     .bind(file.name_hash)
     .bind(file.content_hash)
@@ -1036,7 +1036,7 @@ pub(super) async fn mark_uploaded(
     total_bytes: i64,
 ) -> Response {
     let marked = sqlx::query(
-        "UPDATE uploads SET uploaded_at = NOW(), updated_at = NOW(),
+        "UPDATE drive_uploads SET uploaded_at = NOW(), updated_at = NOW(),
                             pending_bytes = '\\x'::bytea, s3_part_etags = '[]'::jsonb
          WHERE id = $1",
     )
@@ -1054,7 +1054,7 @@ pub(super) async fn mark_uploaded(
         // A commit can fail in the reporting after it took effect: the
         // object of a revision marked uploaded stays.
         let landed: sqlx::Result<bool> = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM uploads WHERE id = $1 AND uploaded_at IS NOT NULL)",
+            "SELECT EXISTS (SELECT 1 FROM drive_uploads WHERE id = $1 AND uploaded_at IS NOT NULL)",
         )
         .bind(upload_id)
         .fetch_one(&state.pool)
@@ -1091,7 +1091,7 @@ pub(super) async fn mark_uploaded(
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /api/uploads/{id} — cancel
+// DELETE /api/v1/drive/uploads/{id} — cancel
 // ---------------------------------------------------------------------------
 
 /// Cancels an in-flight upload — mirrors `Delete`. Removes the DB row (freeing
@@ -1103,8 +1103,8 @@ pub(super) async fn mark_uploaded(
 /// not owned by the caller.
 #[utoipa::path(
     delete,
-    path = "/api/uploads/{id}",
-    tag = "tus",
+    path = "/api/v1/drive/uploads/{id}",
+    tag = "drive",
     operation_id = "tusDelete",
     security(("BearerAuth" = [])),
     params(
@@ -1115,14 +1115,14 @@ pub(super) async fn mark_uploaded(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(resp) = require_tus_resumable(&headers) {
         return resp;
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -1140,11 +1140,12 @@ pub async fn delete(
         Ok(tx) => tx,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db begin"),
     };
-    let row: Option<(String, String, bool)> = match sqlx::query_as(
-        "SELECT u.storage_path, u.s3_upload_id, u.uploaded_at IS NOT NULL FROM uploads u
-         WHERE u.id = $1 AND (u.user_id = $2 OR (u.kind = 'version' AND EXISTS (
-             SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
-             WHERE f.id = u.file_id AND c.owner_user_id = $2)))
+    let row: Option<(Uuid, Uuid, String, bool)> = match sqlx::query_as(
+        "SELECT u.file_id, u.revision_id, u.s3_upload_id, u.uploaded_at IS NOT NULL
+         FROM drive_uploads u
+         WHERE u.id = $1 AND (u.account_id = $2 OR (u.kind = 'version' AND EXISTS (
+             SELECT 1 FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+             WHERE f.id = u.file_id AND c.owner_account_id = $2)))
          FOR UPDATE OF u",
     )
     .bind(upload_id)
@@ -1158,11 +1159,12 @@ pub async fn delete(
             return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
         }
     };
-    let Some((storage_path, s3_upload_id, uploaded)) = row else {
+    let Some((file_id, revision_id, s3_upload_id, uploaded)) = row else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
+    let storage_path = crate::file_content::revision_path(file_id, revision_id);
 
-    let deleted = sqlx::query("DELETE FROM uploads WHERE id=$1")
+    let deleted = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
         .bind(upload_id)
         .execute(&mut *tx)
         .await;

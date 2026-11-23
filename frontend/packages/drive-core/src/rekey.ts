@@ -30,7 +30,7 @@ export async function rekeyFile(folder: Folder, file: DriveFile): Promise<DriveF
     fileMetadataOf(file),
   )
   try {
-    await api.post(`/files/${file.id}/rekey`, {
+    await api.post(`/drive/files/${file.id}/rekey`, {
       fromGeneration: file.keyGeneration,
       fileKeyEnvelope: next.fileKeyEnvelope,
       metadataEnvelope: next.metadataEnvelope,

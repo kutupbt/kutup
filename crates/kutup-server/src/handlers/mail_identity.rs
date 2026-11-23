@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const MAX_NAME_CHARS: usize = 100;
@@ -49,7 +49,7 @@ async fn own_address(
                 // No address with a key yet: the account's own address.
                 None => sqlx::query_scalar(
                     "SELECT id FROM mail_addresses
-                      WHERE user_id = $1 AND state = 'active' AND domain_id IS NULL",
+                      WHERE account_id = $1 AND state = 'active' AND domain_id IS NULL",
                 )
                 .bind(user_id)
                 .fetch_optional(&state.pool)
@@ -59,8 +59,8 @@ async fn own_address(
         }
     };
     sqlx::query_as(
-        "SELECT a.id, a.address, u.username FROM mail_addresses a JOIN users u ON u.id = a.user_id
-          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active'",
+        "SELECT a.id, a.address, u.username FROM mail_addresses a JOIN accounts u ON u.id = a.account_id
+          WHERE a.id = $1 AND a.account_id = $2 AND a.state = 'active'",
     )
     .bind(address_id)
     .bind(user_id)
@@ -114,10 +114,10 @@ async fn identity(
     })
 }
 
-/// `GET /api/mail/identity` — the account address's display name and signature.
+/// `GET /api/v1/mail/identity` — the account address's display name and signature.
 #[utoipa::path(
     get,
-    path = "/api/mail/identity",
+    path = "/api/v1/mail/identity",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(IdentityQuery),
@@ -125,10 +125,10 @@ async fn identity(
 )]
 pub async fn get(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<IdentityQuery>,
 ) -> AppResult<Json<MailIdentity>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok(Json(
         identity(&state, user_id, query.address_id.as_deref()).await?,
     ))
@@ -141,10 +141,10 @@ pub struct UpdateMailIdentity {
     pub signature: Option<String>,
 }
 
-/// `PATCH /api/mail/identity`.
+/// `PATCH /api/v1/mail/identity`.
 #[utoipa::path(
     patch,
-    path = "/api/mail/identity",
+    path = "/api/v1/mail/identity",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(IdentityQuery),
@@ -156,11 +156,11 @@ pub struct UpdateMailIdentity {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<IdentityQuery>,
     Json(request): Json<UpdateMailIdentity>,
 ) -> AppResult<Json<MailIdentity>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let name = request.display_name.as_deref().map(str::trim);
     if let Some(name) = name {
         if name.chars().count() > MAX_NAME_CHARS || name.chars().any(char::is_control) {

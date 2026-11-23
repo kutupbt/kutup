@@ -3,7 +3,7 @@
 //! Registration, login (+ preflight, 2FA), recovery (+ preflight), token refresh,
 //! first-login setup, the `/user/*` profile + TOTP endpoints, and the lookup by address.
 //! Wire formats, status codes, and SQL match the Go handler exactly; the refresh token
-//! is set as the same HttpOnly cookie scoped to `/api/auth/refresh`.
+//! is set as the same HttpOnly cookie scoped to `/api/v1/auth/refresh`.
 
 use axum::extract::rejection::JsonRejection;
 use std::net::SocketAddr;
@@ -20,9 +20,9 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{
-    MeResponse, MessageResponse, OkResponse, PreflightRecoverResponse, RefreshResponse,
+    AccountResponse, MessageResponse, OkResponse, PreflightRecoverResponse, RefreshResponse,
     SettingsResponse, TotpSetupResponse,
 };
 use crate::sessions::{self, ClientType};
@@ -57,7 +57,8 @@ pub struct RegisterRequest {
     /// each, the identity and Drive roots at generation 1, sealed under the
     /// master key for the key binding.
     account_roots: Vec<String>,
-    public_key: String,
+    /// The account's Drive key (X-Wing).
+    drive_xwing_public_key: String,
     account_authority_public_key: String,
     account_authority_key_id: String,
     account_incarnation_id: String,
@@ -74,7 +75,7 @@ pub struct RegisterRequest {
     account_id: Option<String>,
     #[serde(default)]
     account_id_proof: Option<String>,
-    /// The documents shown and confirmed at sign-up (`GET /api/legal/documents`,
+    /// The documents shown and confirmed at sign-up (`GET /api/v1/legal/documents`,
     /// those `requiredAtSignup`): the current version of each required kind
     /// (docs/plans/server-personal-data.md, A3).
     #[serde(default)]
@@ -94,10 +95,10 @@ pub struct LoginResponse {
     /// Only for non-web clients (the CLI); web clients get an HttpOnly cookie.
     #[serde(skip_serializing_if = "Option::is_none")]
     refresh_token: Option<String>,
-    user_id: String,
+    account_id: String,
     username: String,
     master_key_envelope: String,
-    /// The account's root records (`GET /api/account/roots`), with the
+    /// The account's root records (`GET /api/v1/account/roots`), with the
     /// session only.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     account_roots: Vec<String>,
@@ -114,8 +115,13 @@ pub struct LoginResponse {
     /// empty before a first rotation.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     master_keyring: Vec<String>,
-    public_key: String,
-    is_admin: bool,
+    /// The account's Drive key (X-Wing); empty on the setup/2FA branches.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    drive_xwing_public_key: String,
+    /// `member`, `admin` or `breakGlassAdmin`; left out on the setup/2FA
+    /// branches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<crate::models::AccountRole>,
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
     color: String,
@@ -145,7 +151,7 @@ pub struct LoginResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     setup_token: Option<String>,
     /// The account is closing: no session, but `grant` (purpose `keep`, no
-    /// session, minutes) keeps it at `POST /api/auth/keep`.
+    /// session, minutes) keeps it at `POST /api/v1/auth/keep`.
     #[serde(skip_serializing_if = "Option::is_none")]
     closing: Option<Closing>,
 }
@@ -203,7 +209,7 @@ pub struct CodeRequest {
     grant: String,
     /// Instead of `code`, where the second factor is proved again: a
     /// security key's answer (`PublicKeyCredential.toJSON()`) to
-    /// `POST /api/auth/security-keys/proof/start`.
+    /// `POST /api/v1/auth/security-keys/proof/start`.
     #[serde(rename = "securityKey")]
     #[schema(value_type = Option<Object>)]
     pub(crate) security_key: Option<serde_json::Value>,
@@ -318,9 +324,10 @@ pub struct CompleteSetupResponse {
     session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     refresh_token: Option<String>,
-    user_id: String,
+    account_id: String,
     username: String,
-    is_admin: bool,
+    /// `member`, `admin` or `breakGlassAdmin`.
+    role: crate::models::AccountRole,
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
 }
@@ -381,7 +388,7 @@ fn checked_drive_key_binding(
         account,
         &req.account_authority_public_key,
         1,
-        &req.public_key,
+        &req.drive_xwing_public_key,
         &req.drive_signing_public_key,
         &req.drive_key_binding,
     )?;
@@ -428,9 +435,9 @@ fn validate_account_identity(req: &RegisterRequest) -> AppResult<()> {
     let authority: [u8; 32] = authority.try_into().expect("validated length");
     // The Drive key is X-Wing (identity suite 2, docs/plans/pq-shares.md).
     decode_canonical_base64_exact(
-        &req.public_key,
+        &req.drive_xwing_public_key,
         kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN,
-        "publicKey",
+        "driveXwingPublicKey",
     )?;
     decode_canonical_base64_exact(&req.drive_signing_public_key, 32, "driveSigningPublicKey")?;
     if req.account_authority_key_id
@@ -510,12 +517,12 @@ pub struct RegistrationCodeCheck {
     pub code: String,
 }
 
-/// `POST /api/auth/registration-code/check` — whether a referral code can
+/// `POST /api/v1/auth/registration-code/check` — whether a referral code can
 /// admit a sign-up now, before the sign-up page derives the account's keys.
 /// It uses nothing up; the same answer for every code that cannot.
 #[utoipa::path(
     post,
-    path = "/api/auth/registration-code/check",
+    path = "/api/v1/auth/registration-code/check",
     tag = "auth",
     request_body = RegistrationCodeCheck,
     responses(
@@ -540,16 +547,16 @@ pub async fn check_registration_code(
     Ok(axum::http::StatusCode::NO_CONTENT.into_response())
 }
 
-/// `GET /api/auth/settings` — mirrors `GetPublicSettings`.
+/// `GET /api/v1/auth/settings` — mirrors `GetPublicSettings`.
 #[utoipa::path(
     get,
-    path = "/api/auth/settings",
+    path = "/api/v1/auth/settings",
     tag = "auth",
     responses((status = 200, description = "Public registration settings", body = SettingsResponse))
 )]
 pub async fn get_public_settings(
     State(state): State<AppState>,
-    user: Option<AuthUser>,
+    user: Option<AuthAccount>,
 ) -> AppResult<Response> {
     let registration_mode = crate::registration::mode(&state).await?;
     let federation_enabled = match state.federation.as_ref() {
@@ -605,7 +612,7 @@ pub async fn get_public_settings(
             .unwrap_or(u32::MAX),
         // A signed-in caller's own limit (docs/plans/settings-registry.md),
         // else the site's.
-        maximum_active_devices: match user.as_ref().map(|user| parse_uuid(&user.user_id)) {
+        maximum_active_devices: match user.as_ref().map(|user| parse_uuid(&user.account_id)) {
             Some(Ok(account)) => {
                 crate::site_settings::CHAT_MAX_ACTIVE_DEVICES
                     .load_for(&state.pool, account)
@@ -701,10 +708,10 @@ pub async fn get_public_settings(
     Ok(response)
 }
 
-/// `POST /api/auth/register` — mirrors `Register`.
+/// `POST /api/v1/auth/register` — mirrors `Register`.
 #[utoipa::path(
     post,
-    path = "/api/auth/register",
+    path = "/api/v1/auth/register",
     tag = "auth",
     request_body = RegisterRequest,
     responses((status = 201, description = "Account created", body = MessageResponse))
@@ -750,8 +757,7 @@ pub async fn register(
     // This is an HKDF-derived authorization proof, never the recovery entropy
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
-    let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
-    let federation_default = crate::federation_switch::site_default(&state.pool).await?;
+    let federation_default = crate::federation_switch::new_account_state(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     // The account id this server minted for the sign-up (register/start),
     // never one in use or ever used.
@@ -779,21 +785,24 @@ pub async fn register(
         return Err(unavailable.error());
     }
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
-        r#"INSERT INTO users (
+        r#"INSERT INTO accounts (
             username, master_key_envelope, recovery_key_envelope,
-            public_key, account_authority_public_key, account_authority_key_id,
+            drive_xwing_public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
             opaque_record, opaque_suite, opaque_server_key_id,
-            recovery_key_verifier, storage_quota_bytes, drive_key_binding,
-            key_binding, id, identity_suite, drive_key_binding_epoch
-        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$1,$16,2,1)
+            recovery_key_verifier, drive_key_binding,
+            key_binding, id, identity_suite, drive_key_binding_epoch, master_key_generation,
+            keys_set_up_at
+        ) VALUES ($2,kutup_unb64($3),kutup_unb64($4),kutup_unb64($5),kutup_unb64($6),
+                  decode($7, 'hex'),decode($8, 'hex'),kutup_unb64($9),$10,$11,$12,$13,
+                  kutup_unb64($14),$1::uuid,$15,2,1,1,now())
         RETURNING id"#,
     )
     .bind(&req.key_binding)
     .bind(&req.username)
     .bind(&req.master_key_envelope)
     .bind(&req.recovery_key_envelope)
-    .bind(&req.public_key)
+    .bind(&req.drive_xwing_public_key)
     .bind(&req.account_authority_public_key)
     .bind(&req.account_authority_key_id)
     .bind(&req.account_incarnation_id)
@@ -802,7 +811,6 @@ pub async fn register(
     .bind(kutup_crypto::opaque::SUITE as i16)
     .bind(opaque_server_key_id)
     .bind(&recovery_verifier)
-    .bind(storage_quota_bytes)
     .bind(&drive_key_binding)
     .bind(account_id)
     .fetch_one(&mut *tx)
@@ -866,8 +874,7 @@ pub(crate) async fn signed_in_answer(
         String,
         String,
         bool,
-        bool,
-        i64,
+        String,
         i64,
         bool,
         bool,
@@ -877,12 +884,14 @@ pub(crate) async fn signed_in_answer(
         bool,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT master_key_envelope, public_key,
-                  totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes,
-                  (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), is_first_login,
-                  COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, ''),
+        r#"SELECT COALESCE(kutup_b64(master_key_envelope), ''),
+                  COALESCE(kutup_b64(drive_xwing_public_key), ''),
+                  totp_secret_sealed IS NOT NULL, role, storage_used_bytes,
+                  (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)),
+                  keys_set_up_at IS NULL,
+                  COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding::text, ''),
                   COALESCE(substring(sha256(opaque_record) from 1 for 16) = $2, false)
-           FROM users WHERE id = $1"#,
+           FROM accounts WHERE id = $1"#,
     )
     .bind(user_id)
     .bind(epoch)
@@ -892,8 +901,7 @@ pub(crate) async fn signed_in_answer(
         master_key_envelope,
         pub_key,
         totp_enabled,
-        is_admin,
-        quota_bytes,
+        role,
         used_bytes,
         is_active,
         is_first_login,
@@ -924,7 +932,7 @@ pub(crate) async fn signed_in_answer(
         return Ok(Json(LoginResponse {
             requires_setup: true,
             setup_token: Some(setup_token),
-            user_id,
+            account_id: user_id,
             username,
             ..Default::default()
         })
@@ -953,6 +961,7 @@ pub(crate) async fn signed_in_answer(
         .into_response());
     }
 
+    let quota_bytes = crate::storage_pool::quota(&state.pool, parse_uuid(&user_id)?).await?;
     issue_tokens_and_respond(
         state,
         headers,
@@ -961,7 +970,7 @@ pub(crate) async fn signed_in_answer(
         &username,
         &master_key_envelope,
         &pub_key,
-        is_admin,
+        crate::models::AccountRole::stored(&role),
         quota_bytes,
         used_bytes,
         &color,
@@ -972,10 +981,10 @@ pub(crate) async fn signed_in_answer(
     .await
 }
 
-/// `POST /api/auth/login/2fa` — mirrors `LoginTwoFA`.
+/// `POST /api/v1/auth/login/2fa` — mirrors `LoginTwoFA`.
 #[utoipa::path(
     post,
-    path = "/api/auth/login/2fa",
+    path = "/api/v1/auth/login/2fa",
     tag = "auth",
     request_body = TwoFALoginRequest,
     responses((status = 200, description = "Full session after TOTP", body = LoginResponse))
@@ -1001,8 +1010,8 @@ pub async fn login_two_fa(
     // The authenticator app's secret, only once it is turned on: a secret
     // still being set up never signs anyone in.
     let row: Option<(Option<Vec<u8>>, bool)> = sqlx::query_as(
-        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END, (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
-         FROM users WHERE id = $1",
+        "SELECT totp_secret_sealed, (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
+         FROM accounts WHERE id = $1",
     )
     .bind(Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
     .fetch_optional(&state.pool)
@@ -1016,17 +1025,39 @@ pub async fn login_two_fa(
 
     let account = Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     let had_secret = totp_secret.is_some();
-    let totp_secret = match totp_secret {
-        Some(sealed) => open_totp_secret(&state, account, &sealed).await?,
+    let opened = match &totp_secret {
+        Some(sealed) => open_totp_secret(&state, account, sealed).await?,
         None => None,
     };
     // A secret the account has but nobody can read: only a recovery code (or
     // a security key) signs in.
-    let lost = had_secret && totp_secret.is_none();
-    let valid = totp_secret
-        .as_deref()
-        .map(|s| totp::validate_totp(s, &req.code))
-        .unwrap_or(false);
+    let lost = had_secret && opened.is_none();
+    // The code's step, recorded (committed) before the session is issued:
+    // one code signs in once (RFC 6238 §5.2), and a reused one is answered
+    // as a wrong one. Recorded first, then the password checked still the
+    // one proved, in one transaction: the step's row lock makes a second
+    // request with the code wait and then find it recorded, and a changed
+    // password rolls the step back (the code isn't spent). A session that
+    // fails to issue after the commit leaves the code spent; the next step's
+    // code signs in.
+    let valid = match (opened.as_deref(), totp_secret.as_deref()) {
+        (Some(secret), Some(sealed)) => {
+            let skew = totp::skew_for(&state.pool, account).await?;
+            match totp::matched_step(secret, &req.code, skew) {
+                Some(step) => {
+                    let mut tx = state.pool.begin().await?;
+                    let recorded = totp::record_step(&mut *tx, account, sealed, step).await?;
+                    if recorded && credential_held(&mut tx, account, &epoch).await?.is_none() {
+                        return Err(pre_auth_invalid());
+                    }
+                    tx.commit().await?;
+                    recorded
+                }
+                None => false,
+            }
+        }
+        _ => false,
+    };
     // A recovery code takes the second factor's place once
     // (docs/plans/security-keys.md, D2); spent with the sign-in it allows.
     let valid = valid || {
@@ -1089,13 +1120,14 @@ pub(crate) async fn issue_after_second_step(
     user_id: &str,
     epoch: &[u8],
 ) -> AppResult<Response> {
-    type Row = (String, String, bool, i64, i64, String, bool, String, String);
+    type Row = (String, String, String, i64, String, bool, String, String);
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT master_key_envelope, public_key,
-                  is_admin, storage_quota_bytes, storage_used_bytes,
+        r#"SELECT COALESCE(kutup_b64(master_key_envelope), ''),
+                  COALESCE(kutup_b64(drive_xwing_public_key), ''),
+                  role, storage_used_bytes,
                   COALESCE(username, ''), (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), COALESCE(color, ''),
-                  COALESCE(key_binding, '')
-           FROM users WHERE id = $1"#,
+                  COALESCE(key_binding::text, '')
+           FROM accounts WHERE id = $1"#,
     )
     .bind(Uuid::parse_str(user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
     .fetch_optional(&state.pool)
@@ -1103,8 +1135,7 @@ pub(crate) async fn issue_after_second_step(
     let Some((
         master_key_envelope,
         pub_key,
-        is_admin,
-        quota_bytes,
+        role,
         used_bytes,
         username,
         is_active,
@@ -1117,6 +1148,11 @@ pub(crate) async fn issue_after_second_step(
     if !is_active {
         return Err(AppError::unauthorized("account disabled"));
     }
+    let quota_bytes = crate::storage_pool::quota(
+        &state.pool,
+        Uuid::parse_str(user_id).map_err(|_| AppError::unauthorized("unauthorized"))?,
+    )
+    .await?;
     issue_tokens_and_respond(
         state,
         headers,
@@ -1125,7 +1161,7 @@ pub(crate) async fn issue_after_second_step(
         &username,
         &master_key_envelope,
         &pub_key,
-        is_admin,
+        crate::models::AccountRole::stored(&role),
         quota_bytes,
         used_bytes,
         &color,
@@ -1136,10 +1172,10 @@ pub(crate) async fn issue_after_second_step(
     .await
 }
 
-/// `GET /api/auth/recover/preflight` — mirrors `GetRecoveryPreflight`.
+/// `GET /api/v1/auth/recover/preflight` — mirrors `GetRecoveryPreflight`.
 #[utoipa::path(
     get,
-    path = "/api/auth/recover/preflight",
+    path = "/api/v1/auth/recover/preflight",
     tag = "auth",
     params(("name" = String, Query, description = "The username or the Kutup address")),
     responses((status = 200, description = "The binding a recovery proof is derived with", body = PreflightRecoverResponse))
@@ -1149,17 +1185,16 @@ pub async fn get_recovery_preflight(
     Query(q): Query<NameQuery>,
 ) -> AppResult<Response> {
     let name = q.name()?;
-    let row: Option<String> = match account_by_name(&state, &name).await? {
-        Some(id) => {
-            sqlx::query_scalar(
-                "SELECT key_binding FROM users WHERE id = $1 AND key_binding IS NOT NULL",
+    let row: Option<String> =
+        match account_by_name(&state, &name).await? {
+            Some(id) => sqlx::query_scalar(
+                "SELECT key_binding::text FROM accounts WHERE id = $1 AND key_binding IS NOT NULL",
             )
             .bind(id)
             .fetch_optional(&state.pool)
-            .await?
-        }
-        None => None,
-    };
+            .await?,
+            None => None,
+        };
 
     let resp = match row {
         Some(envelope_binding) => PreflightRecoverResponse { envelope_binding },
@@ -1173,7 +1208,7 @@ pub async fn get_recovery_preflight(
     Ok(Json(resp).into_response())
 }
 
-/// `POST /api/auth/recover/grant` — the recovery phrase's proof, for a
+/// `POST /api/v1/auth/recover/grant` — the recovery phrase's proof, for a
 /// `recovery` grant (no session) and the recovery envelope (the master key
 /// under the phrase): with them the client opens the master key and
 /// registers a new password (register/start, register/finish), which ends
@@ -1181,7 +1216,7 @@ pub async fn get_recovery_preflight(
 /// verifier and a wrong phrase are the same `401`, checked at full cost.
 #[utoipa::path(
     post,
-    path = "/api/auth/recover/grant",
+    path = "/api/v1/auth/recover/grant",
     tag = "auth",
     request_body = RecoverRequest,
     responses(
@@ -1198,18 +1233,20 @@ pub async fn recover_grant(
     // full cost.
     let proof = decode_canonical_base64_exact(&req.recovery_proof, 32, "recoveryProof")?;
     let account = account_by_name(&state, &req.name).await?;
+    // No verifier (a first sign-in, or after a reset) recovers nothing.
     let stored: Option<String> = match account {
         Some(id) => {
-            sqlx::query_scalar(
+            sqlx::query_scalar::<_, Option<String>>(
                 // A closing account recovers too, to keep it at the sign-in after.
                 &format!(
-                    "SELECT recovery_key_verifier FROM users WHERE id = $1 AND {}",
+                    "SELECT recovery_key_verifier FROM accounts WHERE id = $1 AND {}",
                     crate::account_closing::SIGNS_IN
                 ),
             )
             .bind(id)
             .fetch_optional(&state.pool)
             .await?
+            .flatten()
         }
         None => None,
     };
@@ -1224,7 +1261,7 @@ pub async fn recover_grant(
     // setup) in between replaces the verifier, and leaves no grant behind.
     let mut tx = state.pool.begin().await?;
     let still: Option<String> = sqlx::query_scalar(&format!(
-        "SELECT recovery_key_envelope FROM users
+        "SELECT kutup_b64(recovery_key_envelope) FROM accounts
          WHERE id = $1 AND {} AND recovery_key_verifier = $2
          FOR SHARE",
         crate::account_closing::SIGNS_IN
@@ -1266,12 +1303,12 @@ pub struct RecoverGrantResponse {
     recovery_key_envelope: String,
 }
 
-/// `POST /api/auth/refresh` — rotates the session's refresh token. Web clients present
+/// `POST /api/v1/auth/refresh` — rotates the session's refresh token. Web clients present
 /// it in the HttpOnly cookie on their own origin and receive the next one the same way;
 /// the CLI presents and receives it in the JSON body.
 #[utoipa::path(
     post,
-    path = "/api/auth/refresh",
+    path = "/api/v1/auth/refresh",
     tag = "auth",
     request_body(content = RefreshRequest, description = "CLI only; web clients use the refresh_token cookie"),
     responses((status = 200, description = "Fresh access token", body = RefreshResponse))
@@ -1305,12 +1342,12 @@ pub async fn refresh(
         sessions::RefreshOutcome::Rotated {
             session,
             refresh_token,
-        } => (session, Some(refresh_token)),
+            ttl,
+        } => (session, Some((refresh_token, ttl))),
         sessions::RefreshOutcome::Grace { session } => (session, None),
     };
     let access = jwt::generate_access_token(
-        &session.user_id.to_string(),
-        session.is_admin,
+        &session.account_id.to_string(),
         &session.session_id.to_string(),
         &state.config.jwt_secret,
     )
@@ -1321,48 +1358,56 @@ pub async fn refresh(
         refresh_token: if session.client.uses_cookie() {
             None
         } else {
-            next.clone()
+            next.as_ref().map(|(token, _)| token.clone())
         },
     };
     match (session.client.uses_cookie(), next) {
-        (true, Some(next)) => {
-            Ok(([(SET_COOKIE, refresh_cookie(&state, &next))], Json(body)).into_response())
-        }
+        (true, Some((next, ttl))) => Ok((
+            [(SET_COOKIE, refresh_cookie(&state, &next, ttl))],
+            Json(body),
+        )
+            .into_response()),
         _ => Ok(Json(body).into_response()),
     }
 }
 
-/// `GET /api/user/me` — mirrors `GetMe`.
+/// `GET /api/v1/account` — mirrors `GetMe`.
 #[utoipa::path(
     get,
-    path = "/api/user/me",
+    path = "/api/v1/account",
     tag = "auth",
     security(("BearerAuth" = [])),
-    responses((status = 200, description = "The caller's profile", body = MeResponse))
+    responses((status = 200, description = "The caller's profile", body = AccountResponse))
 )]
-pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn get_me(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
     type Row = (
         Uuid,
         String,
         String,
         String,
         bool,
-        i64,
-        i64,
         bool,
+        i64,
+        String,
         String,
         i32,
-        String,
-        String,
+        Option<i64>,
+        bool,
     );
+    // Public sharing: off only with the account's own switch at 0
+    // (`crate::public_sharing`).
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, COALESCE(key_binding, ''), COALESCE(username, ''), public_key, totp_enabled,
-                  storage_quota_bytes, storage_used_bytes,
-                  is_admin, COALESCE(color, ''), version_retention_days, public_sharing,
-                  federation
-           FROM users WHERE id = $1"#,
+        r#"SELECT id, COALESCE(key_binding::text, ''), COALESCE(username, ''),
+                  COALESCE(kutup_b64(drive_xwing_public_key), ''),
+                  totp_secret_sealed IS NOT NULL, totp_pending_secret_sealed IS NOT NULL,
+                  storage_used_bytes,
+                  role, COALESCE(color, ''), version_retention_days,
+                  (SELECT value FROM account_entitlements WHERE account_id = u.id AND key = $2),
+                  kutup_account_federates(u.id)
+           FROM accounts u WHERE id = $1"#,
     )
-    .bind(parse_uuid(&user.user_id)?)
+    .bind(parse_uuid(&user.account_id)?)
+    .bind(crate::entitlements::PUBLIC_SHARING)
     .fetch_optional(&state.pool)
     .await?;
 
@@ -1370,19 +1415,22 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         id,
         envelope_binding,
         username,
-        public_key,
-        totp_enabled,
-        quota,
+        drive_xwing_public_key,
+        totp_on,
+        totp_pending,
         used,
-        is_admin,
+        role,
         color,
         version_retention_days,
         public_sharing,
-        federation,
+        federates,
     )) = row
     else {
         return Err(AppError::not_found("user not found"));
     };
+    let quota = crate::storage_pool::quota(&state.pool, id).await?;
+    let public_sharing = crate::public_sharing::account_switch(public_sharing).to_owned();
+    let federation = if federates { "on" } else { "off" }.to_owned();
     let address = if username.is_empty() {
         String::new()
     } else {
@@ -1390,28 +1438,30 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     };
     // The account's rename chain, of its current incarnation: where it ends.
     let anchor: Option<(i32, String)> = sqlx::query_as(
-        "SELECT r.sequence, r.digest FROM account_renames r
-           JOIN users u ON u.account_incarnation_id = r.incarnation_id
+        "SELECT r.sequence, encode(r.digest, 'hex') FROM account_renames r
+           JOIN accounts u ON u.account_incarnation_id = r.incarnation_id
           WHERE u.id = $1 ORDER BY r.sequence DESC LIMIT 1",
     )
     .bind(id)
     .fetch_optional(&state.pool)
     .await?;
-    Ok(Json(MeResponse {
+    Ok(Json(AccountResponse {
         id: id.to_string(),
         account_id: id.to_string(),
         server: state.config.chat_server_name.clone(),
         address,
         envelope_binding,
         username,
-        public_key,
-        totp_enabled,
+        drive_xwing_public_key,
+        two_factor: crate::models::TwoFactorState::of(totp_on, totp_pending),
         security_keys: crate::two_factor::factors(&state.pool, id).await?.keys,
         storage_quota_bytes: quota,
         storage_used_bytes: used,
-        is_admin,
+        role: crate::models::AccountRole::stored(&role),
         color,
         version_retention_days,
+        version_retention_choices: crate::site_settings::version_retention_choices(&state.pool)
+            .await?,
         public_sharing,
         federation,
         renames: crate::models::RenameAnchor {
@@ -1422,10 +1472,10 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     .into_response())
 }
 
-/// `PATCH /api/user/me` — mirrors `UpdateMe`.
+/// `PATCH /api/v1/account` — mirrors `UpdateMe`.
 #[utoipa::path(
     patch,
-    path = "/api/user/me",
+    path = "/api/v1/account",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = UpdateMeRequest,
@@ -1433,7 +1483,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
 )]
 pub async fn update_me(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<UpdateMeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|rejection| {
@@ -1452,23 +1502,35 @@ pub async fn update_me(
             return Err(AppError::bad_request("invalid color: expected #rrggbb hex"));
         }
         let value: Option<String> = if color.is_empty() { None } else { Some(color) };
-        sqlx::query("UPDATE users SET color = $1 WHERE id = $2")
+        sqlx::query("UPDATE accounts SET color = $1 WHERE id = $2")
             .bind(value)
-            .bind(parse_uuid(&user.user_id)?)
+            .bind(parse_uuid(&user.account_id)?)
             .execute(&state.pool)
             .await
             .map_err(|_| AppError::internal("failed to update color"))?;
     }
 
     if let Some(days) = req.version_retention_days {
-        if !crate::version_retention::RETENTION_DAYS.contains(&days) {
-            return Err(AppError::bad_request(
-                "versionRetentionDays must be 7, 30, 90, 180, 365 or 3650",
-            ));
+        // One of the periods the administrators offer
+        // (`drive.version_retention_choices`).
+        let choices = crate::site_settings::version_retention_choices(&state.pool).await?;
+        if !choices.contains(&days) {
+            let offered = choices
+                .iter()
+                .map(i32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(AppError::bad_request(format!(
+                "versionRetentionDays must be one of {offered}"
+            ))
+            .with_details(serde_json::json!({
+                "code": "versionRetentionNotOffered",
+                "choices": choices,
+            })));
         }
-        sqlx::query("UPDATE users SET version_retention_days = $1 WHERE id = $2")
+        sqlx::query("UPDATE accounts SET version_retention_days = $1 WHERE id = $2")
             .bind(days)
-            .bind(parse_uuid(&user.user_id)?)
+            .bind(parse_uuid(&user.account_id)?)
             .execute(&state.pool)
             .await
             .map_err(|_| AppError::internal("failed to update version retention"))?;
@@ -1488,14 +1550,14 @@ fn local_account_username(address: &str, server_name: &str) -> Option<String> {
     Some(username.to_ascii_lowercase())
 }
 
-/// `GET /api/users/by-address/:address` — an account by the address a
+/// `GET /api/v1/accounts/by-address/:address` — an account by the address a
 /// person would type: its Kutup address, here or on another server. The one
 /// place a name becomes an account (docs/plans/account-ids.md); everything
 /// after takes the account id. Another server's account is asked of that
 /// server through federation (its pinned identity), as `by-id` asks.
 #[utoipa::path(
     get,
-    path = "/api/users/by-address/{address}",
+    path = "/api/v1/accounts/by-address/{address}",
     tag = "auth",
     security(("BearerAuth" = [])),
     params(("address" = String, Path, description = "Target account's Kutup address (username@server)")),
@@ -1503,7 +1565,7 @@ fn local_account_username(address: &str, server_name: &str) -> Option<String> {
 )]
 pub async fn get_user_by_address(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(address): Path<String>,
 ) -> AppResult<Response> {
     if let Some((name, server)) = address.trim().rsplit_once('@') {
@@ -1512,12 +1574,12 @@ pub async fn get_user_by_address(
             // (crate::federation_switch).
             crate::federation_switch::ensure_federates(
                 &state.pool,
-                crate::handlers::trusted_uuid(&user.user_id)?,
+                crate::handlers::trusted_uuid(&user.account_id)?,
             )
             .await?;
             let remote = crate::drive_federation::remote_user_by_name(
                 &state,
-                &user.user_id,
+                &user.account_id,
                 name,
                 &server.to_ascii_lowercase(),
             )
@@ -1530,7 +1592,7 @@ pub async fn get_user_by_address(
     let local = local_account_username(&address, &state.config.chat_server_name);
     let id: Option<Uuid> = match &local {
         Some(username) => {
-            sqlx::query_scalar("SELECT kutup_current_user($1)")
+            sqlx::query_scalar("SELECT kutup_current_account($1)")
                 .bind(username)
                 .fetch_one(&state.pool)
                 .await?
@@ -1555,18 +1617,18 @@ pub async fn get_user_by_address(
     }
 }
 
-/// `POST /api/user/2fa/setup` — mirrors `SetupTOTP`.
+/// `POST /api/v1/account/2fa/setup` — mirrors `SetupTOTP`.
 #[utoipa::path(
     post,
-    path = "/api/user/2fa/setup",
+    path = "/api/v1/account/2fa/setup",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "TOTP secret + provisioning URI", body = TotpSetupResponse))
 )]
-pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn setup_totp(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
     let username: Option<Option<String>> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-            .bind(parse_uuid(&user.user_id)?)
+        sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
+            .bind(parse_uuid(&user.account_id)?)
             .fetch_optional(&state.pool)
             .await?;
     let Some(username) = username else {
@@ -1584,14 +1646,16 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
 
     // Never while it is on: the secret in use is replaced only by turning it
     // off (with the password) and on again.
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     let sealed = seal_totp_secret(&state, user_id, &secret).await?;
-    let set =
-        sqlx::query("UPDATE users SET totp_secret_sealed = $1 WHERE id = $2 AND NOT totp_enabled")
-            .bind(&sealed)
-            .bind(user_id)
-            .execute(&state.pool)
-            .await?;
+    let set = sqlx::query(
+        "UPDATE accounts SET totp_pending_secret_sealed = $1
+          WHERE id = $2 AND totp_secret_sealed IS NULL",
+    )
+    .bind(&sealed)
+    .bind(user_id)
+    .execute(&state.pool)
+    .await?;
     if set.rows_affected() != 1 {
         return Err(AppError::conflict("two-step sign-in is already on"));
     }
@@ -1599,10 +1663,10 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
     Ok(Json(TotpSetupResponse { secret, qr_uri }).into_response())
 }
 
-/// `POST /api/user/2fa/verify` — mirrors `VerifyTOTP`.
+/// `POST /api/v1/account/2fa/verify` — mirrors `VerifyTOTP`.
 #[utoipa::path(
     post,
-    path = "/api/user/2fa/verify",
+    path = "/api/v1/account/2fa/verify",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = CodeRequest,
@@ -1610,14 +1674,14 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
 )]
 pub async fn verify_totp(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
     let sealed: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT totp_secret_sealed FROM users WHERE id = $1")
-            .bind(parse_uuid(&user.user_id)?)
+        sqlx::query_scalar("SELECT totp_pending_secret_sealed FROM accounts WHERE id = $1")
+            .bind(parse_uuid(&user.account_id)?)
             .fetch_optional(&state.pool)
             .await?
             .flatten();
@@ -1625,20 +1689,24 @@ pub async fn verify_totp(
         return Err(AppError::bad_request("TOTP not set up"));
     };
     // A secret being set up whose key is gone: set it up again.
-    let Some(secret) = open_totp_secret(&state, parse_uuid(&user.user_id)?, &sealed).await? else {
+    let Some(secret) = open_totp_secret(&state, parse_uuid(&user.account_id)?, &sealed).await?
+    else {
         return Err(AppError::conflict("set the authenticator app up again")
             .with_details(serde_json::json!({ "code": "authenticatorLost" })));
     };
 
-    if !totp::validate_totp(&secret, &req.code) {
+    let user_id = parse_uuid(&user.account_id)?;
+    let skew = totp::skew_for(&state.pool, user_id).await?;
+    // The code's step becomes the account's last once the secret is turned
+    // on, with it: the code that turned it on doesn't sign in too.
+    let Some(step) = totp::matched_step(&secret, &req.code, skew) else {
         return Err(AppError::bad_request("invalid code"));
-    }
+    };
 
     // The password proved again, for this session: used with the change.
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
-    let user_id = parse_uuid(&user.user_id)?;
     // Already on with a security key: the app joins it once a key (or a
     // recovery code) is proved too, and the recovery codes the account has
     // stay (none are shown).
@@ -1651,10 +1719,13 @@ pub async fn verify_totp(
     )
     .await?;
     let enabled = sqlx::query(
-        "UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret_sealed = $2",
+        "UPDATE accounts SET totp_secret_sealed = totp_pending_secret_sealed,
+                             totp_pending_secret_sealed = NULL, totp_last_step = $3
+          WHERE id = $1 AND totp_pending_secret_sealed = $2",
     )
     .bind(user_id)
     .bind(&sealed)
+    .bind(step)
     .execute(&mut *tx)
     .await?;
     // A new setup or a turn-off landed since the secret was read.
@@ -1706,30 +1777,31 @@ pub struct RecoveryCodesResponse {
     recovery_codes: Vec<String>,
 }
 
-/// `GET /api/user/2fa/recovery-codes` — how many recovery codes are left.
+/// `GET /api/v1/account/2fa/recovery-codes` — how many recovery codes are left.
 #[utoipa::path(
     get,
-    path = "/api/user/2fa/recovery-codes",
+    path = "/api/v1/account/2fa/recovery-codes",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, body = RecoveryCodesLeft))
 )]
 pub async fn recovery_codes_left(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<RecoveryCodesLeft>> {
-    let remaining = crate::two_factor::remaining(&state.pool, parse_uuid(&user.user_id)?).await?;
+    let remaining =
+        crate::two_factor::remaining(&state.pool, parse_uuid(&user.account_id)?).await?;
     Ok(Json(RecoveryCodesLeft { remaining }))
 }
 
-/// `POST /api/user/2fa/recovery-codes` — new recovery codes in place of the
+/// `POST /api/v1/account/2fa/recovery-codes` — new recovery codes in place of the
 /// old ones, with the password proved again (a `totp` grant from a reauth of
 /// this session) and the second factor too (an authenticator code, or an
 /// unused recovery code), as Proton asks: a stolen session and password
 /// alone cannot mint codes. `409` while two-factor sign-in is off.
 #[utoipa::path(
     post,
-    path = "/api/user/2fa/recovery-codes",
+    path = "/api/v1/account/2fa/recovery-codes",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = CodeRequest,
@@ -1741,11 +1813,11 @@ pub async fn recovery_codes_left(
 )]
 pub async fn renew_recovery_codes(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     second_factor_not_blocked(user_id)?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
@@ -1790,11 +1862,11 @@ pub(crate) enum SecondFactor {
 pub(crate) async fn prove_second_factor(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     code: &str,
     security_key: Option<&serde_json::Value>,
 ) -> AppResult<SecondFactor> {
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     let factors = crate::two_factor::factors_locked(tx, user_id).await?;
     if !factors.on() {
         return Ok(SecondFactor::Off);
@@ -1819,21 +1891,32 @@ pub(crate) async fn prove_second_factor(
             SecondFactor::Wrong
         });
     }
-    let sealed: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END FROM users WHERE id = $1",
-    )
-    .bind(user_id)
-    .fetch_one(&mut **tx)
-    .await?;
+    let sealed: Option<Vec<u8>> =
+        sqlx::query_scalar("SELECT totp_secret_sealed FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if code.is_empty() {
+        return Ok(SecondFactor::Wrong);
+    }
     // A destroyed secret checks no code; a recovery code still does.
-    let secret = match sealed {
-        Some(sealed) => open_totp_secret(state, user_id, &sealed).await?,
+    let secret = match &sealed {
+        Some(sealed) => open_totp_secret(state, user_id, sealed).await?,
         None => None,
     };
-    if code.is_empty()
-        || !(secret.is_some_and(|secret| totp::validate_totp(&secret, code))
-            || crate::two_factor::spend(tx, &state.pool, user_id, code).await?)
-    {
+    // The code's step is recorded in `tx`, with the change it allows: one
+    // code proves once (RFC 6238 §5.2); a reused one is a wrong one.
+    let app = match (secret, &sealed) {
+        (Some(secret), Some(sealed)) => {
+            let skew = totp::skew_for(&mut **tx, user_id).await?;
+            match totp::matched_step(&secret, code, skew) {
+                Some(step) => totp::record_step(&mut **tx, user_id, sealed, step).await?,
+                None => false,
+            }
+        }
+        _ => false,
+    };
+    if !(app || crate::two_factor::spend(tx, &state.pool, user_id, code).await?) {
         return Ok(SecondFactor::Wrong);
     }
     Ok(SecondFactor::Proved)
@@ -1851,11 +1934,11 @@ pub(crate) async fn prove_second_factor(
 pub(crate) async fn second_factor_if_on<'c>(
     mut tx: sqlx::Transaction<'c, sqlx::Postgres>,
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     code: &str,
     security_key: Option<&serde_json::Value>,
 ) -> AppResult<(sqlx::Transaction<'c, sqlx::Postgres>, bool)> {
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     if !crate::two_factor::factors_locked(&mut tx, user_id)
         .await?
         .on()
@@ -1912,10 +1995,10 @@ pub(crate) async fn settle_second_factor<'c>(
     }
 }
 
-/// `DELETE /api/user/2fa` — mirrors `DisableTOTP`.
+/// `DELETE /api/v1/account/2fa` — mirrors `DisableTOTP`.
 #[utoipa::path(
     delete,
-    path = "/api/user/2fa",
+    path = "/api/v1/account/2fa",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = CodeRequest,
@@ -1923,7 +2006,7 @@ pub(crate) async fn settle_second_factor<'c>(
 )]
 pub async fn disable_totp(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let req = match body {
@@ -1937,7 +2020,7 @@ pub async fn disable_totp(
     // The password (the grant, taken first) and the code (an authenticator's,
     // or a recovery code when the authenticator is lost): a stolen session
     // alone cannot turn it off.
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     second_factor_not_blocked(user_id)?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
@@ -1956,7 +2039,9 @@ pub async fn disable_totp(
     // codes): only the authenticator app goes.
     let kind = if factors.keys > 0 {
         sqlx::query(
-            "UPDATE users SET totp_enabled = false, totp_secret_sealed = NULL WHERE id = $1",
+            "UPDATE accounts SET totp_secret_sealed = NULL, totp_pending_secret_sealed = NULL,
+                                 totp_last_step = NULL
+              WHERE id = $1",
         )
         .bind(user_id)
         .execute(&mut *tx)
@@ -1976,11 +2061,11 @@ pub async fn disable_totp(
     .into_response())
 }
 
-/// `POST /api/auth/complete-setup` — mirrors `CompleteSetup`. Authenticated by the
+/// `POST /api/v1/auth/complete-setup` — mirrors `CompleteSetup`. Authenticated by the
 /// short-lived setup token (not a regular access token).
 #[utoipa::path(
     post,
-    path = "/api/auth/complete-setup",
+    path = "/api/v1/auth/complete-setup",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = RegisterRequest,
@@ -2000,10 +2085,11 @@ pub async fn complete_setup(
     let (user_id, setup_epoch) = jwt::validate_setup_token(token, &state.config.jwt_secret)
         .map_err(|_| setup_token_invalid())?;
 
-    let active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM users WHERE id = $1")
-        .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
-        .fetch_optional(&state.pool)
-        .await?;
+    let active: Option<bool> =
+        sqlx::query_scalar("SELECT state = 'active' FROM accounts WHERE id = $1")
+            .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some(true) = active else {
         return Err(AppError::unauthorized("account disabled"));
     };
@@ -2047,24 +2133,26 @@ pub async fn complete_setup(
     // after setup completes.
     let mut tx = state.pool.begin().await?;
     let res = sqlx::query(
-        r#"UPDATE users SET
+        r#"UPDATE accounts SET
               opaque_record = $1, opaque_suite = $9, opaque_server_key_id = $10,
-              master_key_envelope = $2, recovery_key_envelope = $3,
-              public_key = $4,
-              account_authority_public_key = $5, account_authority_key_id = $6,
-              account_incarnation_id = $7, drive_signing_public_key = $8,
+              master_key_envelope = kutup_unb64($2), recovery_key_envelope = kutup_unb64($3),
+              drive_xwing_public_key = kutup_unb64($4),
+              account_authority_public_key = kutup_unb64($5),
+              account_authority_key_id = decode($6, 'hex'),
+              account_incarnation_id = decode($7, 'hex'),
+              drive_signing_public_key = kutup_unb64($8),
               recovery_key_verifier = $11,
-              drive_key_binding = $13,
-              key_binding = $14,
+              drive_key_binding = kutup_unb64($13),
+              key_binding = $14::uuid,
               identity_suite = 2, drive_key_binding_epoch = 1,
-              is_first_login = false, updated_at = NOW()
-           WHERE id = $12 AND is_first_login
+              keys_set_up_at = NOW(), updated_at = NOW()
+           WHERE id = $12 AND keys_set_up_at IS NULL
              AND substring(sha256(opaque_record) from 1 for 16) = $15"#,
     )
     .bind(&opaque_record)
     .bind(&req.master_key_envelope)
     .bind(&req.recovery_key_envelope)
-    .bind(&req.public_key)
+    .bind(&req.drive_xwing_public_key)
     .bind(&req.account_authority_public_key)
     .bind(&req.account_authority_key_id)
     .bind(&req.account_incarnation_id)
@@ -2100,12 +2188,15 @@ pub async fn complete_setup(
     crate::account_names::set_incarnation(&mut tx, uid, &req.account_incarnation_id).await?;
     tx.commit().await?;
 
-    let (is_admin, quota, used, username): (bool, i64, i64, String) = sqlx::query_as(
-        "SELECT is_admin, storage_quota_bytes, storage_used_bytes, COALESCE(username, '') FROM users WHERE id = $1",
+    let quota = crate::storage_pool::quota(&state.pool, uid).await?;
+    let (role, used, username): (String, i64, String) = sqlx::query_as(
+        "SELECT role, storage_used_bytes, COALESCE(username, '')
+           FROM accounts WHERE id = $1",
     )
     .bind(uid)
     .fetch_one(&state.pool)
     .await?;
+    let role = crate::models::AccountRole::stored(&role);
 
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(&headers)).await?;
     // An admin reset may land between the setup and its session.
@@ -2128,7 +2219,6 @@ pub async fn complete_setup(
     tx.commit().await?;
     let access = jwt::generate_access_token(
         &user_id,
-        is_admin,
         &issued.session_id.to_string(),
         &state.config.jwt_secret,
     )
@@ -2137,15 +2227,18 @@ pub async fn complete_setup(
         access_token: access,
         session_id: issued.session_id.to_string(),
         refresh_token: (!client.uses_cookie()).then(|| issued.refresh_token.clone()),
-        user_id,
+        account_id: user_id,
         username,
-        is_admin,
+        role,
         storage_quota_bytes: quota,
         storage_used_bytes: used,
     };
     if client.uses_cookie() {
         Ok((
-            [(SET_COOKIE, refresh_cookie(&state, &issued.refresh_token))],
+            [(
+                SET_COOKIE,
+                refresh_cookie(&state, &issued.refresh_token, issued.ttl),
+            )],
             Json(body),
         )
             .into_response())
@@ -2182,8 +2275,8 @@ pub(crate) async fn credential_held(
     epoch: &[u8],
 ) -> AppResult<Option<Option<i16>>> {
     Ok(sqlx::query_scalar(
-        "SELECT opaque_server_key_id FROM users
-         WHERE id = $1 AND is_active
+        "SELECT opaque_server_key_id FROM accounts
+         WHERE id = $1 AND state = 'active'
            AND substring(sha256(opaque_record) from 1 for 16) = $2
          FOR SHARE",
     )
@@ -2206,11 +2299,19 @@ pub(crate) fn direct_sign_in_client(headers: &HeaderMap) -> AppResult<ClientType
     Ok(client)
 }
 
+/// The client type `X-Kutup-Client` names (`<type>/<version>`, or the type
+/// alone); its version is the gate's (crate::client_version).
 pub(crate) fn client_header(headers: &HeaderMap) -> Option<ClientType> {
     headers
         .get(CLIENT_HEADER)
         .and_then(|v| v.to_str().ok())
-        .and_then(ClientType::parse)
+        .and_then(|value| {
+            // A version that doesn't parse still names the type: the gate
+            // left it unchecked, and sign-in must not fail on it.
+            crate::client_version::parse_client(value)
+                .map(|(client, _)| client)
+                .or_else(|| ClientType::parse(value.split('/').next().unwrap_or(value)))
+        })
 }
 
 pub(crate) fn user_agent(headers: &HeaderMap) -> Option<&str> {
@@ -2226,7 +2327,7 @@ async fn issue_tokens_and_respond(
     username: &str,
     master_key_envelope: &str,
     pub_key: &str,
-    is_admin: bool,
+    role: crate::models::AccountRole,
     quota: i64,
     used: i64,
     color: &str,
@@ -2239,7 +2340,7 @@ async fn issue_tokens_and_respond(
     // offer to keep it (docs/plans/server-personal-data.md, A5).
     let closing: Option<(time::OffsetDateTime, bool)> = sqlx::query_as(
         "SELECT closes_at, closes_at > now() OR kutup_account_held(id)
-           FROM users WHERE id = $1 AND state = 'closing'",
+           FROM accounts WHERE id = $1 AND state = 'closing'",
     )
     .bind(uid)
     .fetch_optional(&state.pool)
@@ -2259,7 +2360,7 @@ async fn issue_tokens_and_respond(
         )
         .await?;
         return Ok(Json(LoginResponse {
-            user_id: user_id.to_owned(),
+            account_id: user_id.to_owned(),
             username: username.to_owned(),
             closing: Some(Closing { closes_at, grant }),
             ..Default::default()
@@ -2306,7 +2407,6 @@ async fn issue_tokens_and_respond(
     let keys = crate::account_roots::account_keys(&state.pool, uid).await?;
     let access = jwt::generate_access_token(
         user_id,
-        is_admin,
         &issued.session_id.to_string(),
         &state.config.jwt_secret,
     )
@@ -2315,15 +2415,15 @@ async fn issue_tokens_and_respond(
         access_token: access,
         session_id: issued.session_id.to_string(),
         refresh_token: (!client.uses_cookie()).then(|| issued.refresh_token.clone()),
-        user_id: user_id.to_string(),
+        account_id: user_id.to_string(),
         username: username.to_string(),
         master_key_envelope: master_key_envelope.to_string(),
         account_roots: keys.account_roots,
         account_authority_public_key: keys.account_authority_public_key,
         master_key_generation: keys.master_key_generation,
         master_keyring: keys.master_keyring,
-        public_key: pub_key.to_string(),
-        is_admin,
+        drive_xwing_public_key: pub_key.to_string(),
+        role: Some(role),
         storage_quota_bytes: quota,
         storage_used_bytes: used,
         color: color.to_string(),
@@ -2335,14 +2435,13 @@ async fn issue_tokens_and_respond(
     if client.uses_cookie() {
         Ok((
             AppendHeaders([
-                (SET_COOKIE, refresh_cookie(state, &issued.refresh_token)),
                 (
                     SET_COOKIE,
-                    auth_check::known_client_cookie(state, uid).await?,
+                    refresh_cookie(state, &issued.refresh_token, issued.ttl),
                 ),
                 (
                     SET_COOKIE,
-                    auth_check::clear_retired_known_client_cookie(state),
+                    auth_check::known_client_cookie(state, uid).await?,
                 ),
             ]),
             Json(body),
@@ -2353,15 +2452,16 @@ async fn issue_tokens_and_respond(
     }
 }
 
-pub(crate) const REFRESH_COOKIE: &str = "refresh_token";
-pub(crate) const CLIENT_HEADER: &str = "x-kutup-client";
+pub(crate) const REFRESH_COOKIE: &str = "kutup.refresh";
+pub(crate) const CLIENT_HEADER: &str = crate::client_version::CLIENT_HEADER;
 
 /// The refresh cookie: HttpOnly, host-only on the app's own origin (no `Domain`), sent
-/// only to `/api/auth/refresh`, 30-day sliding lifetime; `Secure` outside development.
-pub(crate) fn refresh_cookie(state: &AppState, value: &str) -> String {
+/// only to `/api/v1/auth/refresh`, living as long as the session does unused (`ttl`,
+/// `account.session_ttl_days`); `Secure` outside development.
+pub(crate) fn refresh_cookie(state: &AppState, value: &str, ttl: time::Duration) -> String {
     let mut c = format!(
-        "{REFRESH_COOKIE}={value}; Max-Age={}; Path=/api/auth/refresh; HttpOnly; SameSite=Lax",
-        sessions::SESSION_TTL.whole_seconds()
+        "{REFRESH_COOKIE}={value}; Max-Age={}; Path=/api/v1/auth/refresh; HttpOnly; SameSite=Lax",
+        ttl.whole_seconds()
     );
     if state.config.app_env == "production" {
         c.push_str("; Secure");
@@ -2371,7 +2471,7 @@ pub(crate) fn refresh_cookie(state: &AppState, value: &str) -> String {
 
 pub(crate) fn clear_refresh_cookie(state: &AppState) -> String {
     let mut c =
-        format!("{REFRESH_COOKIE}=; Max-Age=0; Path=/api/auth/refresh; HttpOnly; SameSite=Lax");
+        format!("{REFRESH_COOKIE}=; Max-Age=0; Path=/api/v1/auth/refresh; HttpOnly; SameSite=Lax");
     if state.config.app_env == "production" {
         c.push_str("; Secure");
     }
@@ -2453,7 +2553,7 @@ fn deterministic_fake_bytes(secret: &[u8], name: &str, purpose: &str, len: usize
 
 /// Where the authenticator app's secret is sealed: the account's own row.
 fn totp_field(user_id: &str) -> (&'static str, &'static str, &str) {
-    ("users", "totp_secret", user_id)
+    ("accounts", "totp_secret", user_id)
 }
 
 /// The authenticator app's secret, sealed under the account's data key
@@ -2594,7 +2694,7 @@ mod tests {
         )
         .unwrap();
         let mut request = RegisterRequest {
-            public_key: STANDARD.encode(identity.drive_hpke_public_key()),
+            drive_xwing_public_key: STANDARD.encode(identity.drive_xwing_public_key()),
             account_authority_public_key: STANDARD.encode(identity.authority_public_key()),
             account_authority_key_id: identity.authority_key_id(),
             account_incarnation_id: identity.incarnation_id(),
@@ -2627,9 +2727,10 @@ mod tests {
         let obj = body.as_object().unwrap();
         // Present (non-omitempty), zero-valued:
         assert_eq!(obj["accessToken"], "");
-        assert_eq!(obj["isAdmin"], false);
         assert_eq!(obj["storageQuotaBytes"], 0);
         // omitempty, absent at default:
+        assert!(!obj.contains_key("role"));
+        assert!(!obj.contains_key("driveXwingPublicKey"));
         assert!(!obj.contains_key("requiresTotp"));
         assert!(!obj.contains_key("preAuthToken"));
         // Set on this branch:

@@ -43,7 +43,7 @@ test('README screenshots', async ({ browser }) => {
   test.setTimeout(600_000)
   mkdirSync(SHOTS, { recursive: true })
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, colorScheme: 'light' })
-  await context.addInitScript(() => localStorage.setItem('kutup-theme', 'light'))
+  await context.addInitScript(() => localStorage.setItem('kutup.ui.theme', 'light'))
   await registerAccount(context, newAccount('readme', 'Deneme123*ReadmeScreenshots'))
   const drive = await openDrive(context)
 

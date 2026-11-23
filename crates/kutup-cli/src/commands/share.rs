@@ -189,7 +189,7 @@ fn share_folder(
         &ctx,
         profile,
         &recipient.account,
-        &recipient.drive_hpke_public_key,
+        &recipient.drive_xwing_public_key,
         &recipient.account_incarnation_id,
         share_anyway,
     )?;
@@ -212,7 +212,7 @@ fn share_folder(
         &person,
         &recipient.account_incarnation_id,
         &b64()
-            .decode(&recipient.drive_hpke_public_key)
+            .decode(&recipient.drive_xwing_public_key)
             .context("decode recipient HPKE public key")?,
     )?;
 
@@ -221,7 +221,7 @@ fn share_folder(
             collection_id,
             &ShareRequest {
                 // On this server the account id is the user id.
-                recipient_user_id: recipient.account_id,
+                recipient_account_id: recipient.account_id,
                 named_share_envelope: envelope.encode_b64()?,
                 can_upload: upload,
                 can_delete: delete,
@@ -293,7 +293,7 @@ fn share_federated(
         &ctx,
         profile,
         &remote.account,
-        &remote.drive_hpke_public_key,
+        &remote.drive_xwing_public_key,
         &remote.account_incarnation_id,
         share_anyway,
     )?;
@@ -320,7 +320,7 @@ fn share_federated(
         &person,
         &remote.account_incarnation_id,
         &b64()
-            .decode(&remote.drive_hpke_public_key)
+            .decode(&remote.drive_xwing_public_key)
             .context("decode remote HPKE public key")?,
     )?;
 
@@ -359,7 +359,7 @@ fn share_public(profile: &str, json: bool, collection_id: &str) -> Result<()> {
         collection.key_epoch,
         1,
         collection_id,
-        &ctx.session.user_id,
+        &ctx.session.account_id,
     )?;
     let collection_key_envelope =
         drive_envelope::seal_b64(&collection_key, &link_key, envelope_context)?;
@@ -368,7 +368,11 @@ fn share_public(profile: &str, json: bool, collection_id: &str) -> Result<()> {
     let owner_link_key_envelope = drive_envelope::seal_under_drive_root(
         &link_key,
         &roots.drive,
-        DriveEnvelopeContextV1::owner_link_key(&id, &ctx.session.user_id, roots.drive_generation)?,
+        DriveEnvelopeContextV1::owner_link_key(
+            &id,
+            &ctx.session.account_id,
+            roots.drive_generation,
+        )?,
     )?;
 
     let resp = ctx
@@ -415,7 +419,7 @@ fn unwrap_shared_collection_key(s: &IncomingShare, sess: &Session) -> Result<Vec
     let collection = crate::api::Collection {
         name_hash: None,
         id: s.remote_collection_id.clone(),
-        owner_user_id: s.owner_user_id.clone(),
+        owner_account_id: s.owner_account_id.clone(),
         name_envelope: s.name_envelope.clone(),
         owner_key_envelope: None,
         named_share_envelope: Some(s.named_share_envelope.clone()),
@@ -445,9 +449,9 @@ fn unwrap_shared_collection_key(s: &IncomingShare, sess: &Session) -> Result<Vec
 fn shared_keyring(ctx: &Ctx, share: &IncomingShare, key: &[u8]) -> Result<Keyring> {
     Keyring::load_from(
         &ctx.client,
-        &format!("/drive/federation/shares/{}/epochs", share.id),
+        &format!("/drive/federation/folder-shares/{}/epochs", share.id),
         &share.remote_collection_id,
-        &share.owner_user_id,
+        &share.owner_account_id,
         share.key_epoch,
         Some(&share.epoch_statement_hash),
         key,
@@ -689,7 +693,7 @@ fn decrypt_incoming_name(s: &IncomingShare, sess: &Session) -> Result<String> {
     let collection = crate::api::Collection {
         name_hash: None,
         id: s.remote_collection_id.clone(),
-        owner_user_id: s.owner_user_id.clone(),
+        owner_account_id: s.owner_account_id.clone(),
         name_envelope: s.name_envelope.clone(),
         owner_key_envelope: None,
         named_share_envelope: None,

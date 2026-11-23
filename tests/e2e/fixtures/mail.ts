@@ -8,7 +8,7 @@ import { apiUrl } from './apps'
  * page's `Authorization` header, for API checks.
  */
 export async function seedDrafts(mail: Page, subject: string, count: number): Promise<string> {
-  const saved = mail.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/mail/drafts')
+  const saved = mail.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/mail/drafts')
   await mail.getByRole('button', { name: 'New message' }).first().click()
   await mail.getByRole('dialog', { name: 'New message' }).getByRole('textbox', { name: 'Subject' }).fill(subject)
   await mail.getByRole('textbox', { name: 'Message' }).fill('taslak')
