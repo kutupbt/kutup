@@ -110,10 +110,13 @@ test('calendar: an .ics import reports what it can’t take, the export reads ba
   const monday = page.getByTestId('calendar-column-2026-11-02')
   await expect(monday.getByTestId('calendar-event').filter({ hasText: 'Team sync' })).toContainText('10:00', { timeout: 60_000 })
   await expect(page.getByTestId('calendar-column-2026-11-04').getByTestId('calendar-event').filter({ hasText: 'Lunch with Deniz' })).toContainText('12:00')
+  // Its details, opened here: the location unescaped, the rule as Proton words it.
   await monday.getByTestId('calendar-event').filter({ hasText: 'Team sync' }).click()
-  const editor = page.getByRole('dialog', { name: 'Event' })
-  await expect(editor.getByLabel('Location')).toHaveValue('Room 4, Floor 2')
-  await editor.getByRole('button', { name: 'Cancel' }).click()
+  const peek = page.getByTestId('event-popover')
+  await expect(peek.getByTestId('event-popover-location')).toContainText('Room 4, Floor 2')
+  await expect(peek.getByTestId('event-popover-repeat')).toContainText('Weekly on Monday')
+  await page.keyboard.press('Escape')
+  await expect(peek).toBeHidden()
   // Every occurrence of the series, week after week: the changed one in
   // place of its own, and the last one (the third is excluded).
   await page.goto(appUrl('calendar', '/?view=week&date=2026-11-09'))
