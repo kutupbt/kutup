@@ -26,12 +26,13 @@
 #      and refuses if a backup is among it;
 #   4. runs the new server's check-config against .env with the commit's compose
 #      files read from git (also in --dry-run), then checks out the commit,
-#      validates its nginx config and runs check-config again;
+#      validates its edge config (nginx -t, or koru check with Koru) and runs
+#      check-config again;
 #   5. backs up the database and Mail's Stalwart data (the systemd backup units);
 #   6. with --wipe only: stops the stack, drops the database volume and empties
 #      the bucket except the backup prefixes; Stalwart's volume (DKIM keys) stays;
 #   7. sets the images in .env, pinned by digest (kept as .env.bak-<old tag>),
-#      starts the stack and restarts nginx;
+#      starts the stack and restarts nginx (Koru: reloads it);
 #   8. checks: migrations, backend errors, Stalwart's setup, storage, every host;
 #   9. removes Kutup images other than the new and the previous release.
 # It reports success only when the server's part ran to its last line.
@@ -223,11 +224,22 @@ if [ "$dry" = true ]; then
   exit 0
 fi
 
-echo "== update: the commit's compose files and nginx config"
-# Before anything destructive: a failed checkout or nginx check leaves the
+echo "== update: the commit's compose files and edge config"
+# Before anything destructive: a failed checkout or edge check leaves the
 # database, the bucket, .env and the running stack as they were.
 git checkout -q --detach "$sha"
-docker compose run --rm --no-deps --entrypoint nginx nginx -t
+# The edge: nginx, or Koru when docker-compose.koru.yml is among the compose
+# files (docs/self-hosting.md, "Koru edge (optional)"). Koru's image is built
+# here from the operator's checkout of its sources (KORU_SRC); its check
+# writes the configuration from .env as a start would, and validates it.
+if docker compose config --services | grep -qx koru; then
+  edge=koru
+  docker compose build -q koru
+  docker compose run --rm --no-deps -T koru check
+else
+  edge=nginx
+  docker compose run --rm --no-deps --entrypoint nginx nginx -t
+fi
 check_config
 
 echo "== backups"
@@ -258,7 +270,13 @@ done
 grep -E '^KUTUP_(SERVER|WEB|STALWART_SETUP)_IMAGE=' .env
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 docker compose up -d --wait
-docker compose restart nginx >/dev/null
+if [ "$edge" = koru ]; then
+  # Recreated by `up` when its settings changed; a reload re-reads the
+  # certificates and reopens the logs without dropping a connection.
+  docker compose kill -s HUP koru >/dev/null
+else
+  docker compose restart nginx >/dev/null
+fi
 
 echo "== checks"
 sleep 5

@@ -1222,6 +1222,78 @@ Files are stored compressed at build time (gzip and brotli, served with
 
 ---
 
+## Koru edge (optional)
+
+Koru is a web application firewall and
+reverse proxy in one binary (Rust, on Pingora). `docker-compose.koru.yml`
+puts it on the edge ports in place of the bundled nginx; everything behind it
+(the frontend container's own nginx, which serves the apps and their
+Content-Security-Policy, the backend, the relays) stays as it is. The nginx
+edge remains the default.
+
+**Licence.** Koru has no licence yet and is not distributed with Kutup: there
+is no Koru image or source here. Build it from your own checkout of its
+sources, for your own server only.
+
+```sh
+# .env: KORU_SRC=/path/to/koru (a checkout of Koru's sources)
+#       COMPOSE_FILE=docker-compose.yml:docker-compose.koru.yml
+docker compose build koru          # the image kutup-koru:local
+docker compose up -d --wait
+```
+
+`koru/render.sh` writes Koru's configuration at every start from the
+settings the apps already read, as nginx's own does:
+
+- every app host (`KUTUP_BASE_DOMAIN`, or `KUTUP_<APP>_URL`), `MAIL_HOSTNAME`
+  and the other names in `KUTUP_ACME_EXTRA_DOMAINS` on one site: the frontend
+  by default, the API, `/api/fed/` and `/.well-known/` (federation discovery,
+  `security.txt`, the Web Key Directory) to the backend;
+- the editor sandbox on a site of its own whose `/api/` is 404;
+- `sfu.<domain>` (`CHAT_SFU_URL`) to LiveKit, with an hour for its socket;
+- `turn.<domain>` (`CHAT_TURN_URLS` with `turns:`, or the name in
+  `KUTUP_ACME_EXTRA_DOMAINS`) and `sfu-turn.<domain>` (`CHAT_SFU_TURN_DOMAIN`)
+  passed through by name on port 443 without being decrypted. Koru cannot end
+  TLS for a passed-through connection, so with this overlay coturn ends it
+  itself (port 5350) and LiveKit too (port 5349), with the same certificate.
+
+nginx's limits carry over: 1 MB bodies outside `/api/`, 10 GB on it, streamed;
+5 minutes for an API answer, an hour for Drive (uploads and live editing) and
+the Chat socket, 15 minutes for linking a device; 15 sign-in attempts (login
+start, second factor, registration, recovery grant) a minute per address and
+1,000 API requests per 10 seconds; HSTS, `nosniff` and `Referrer-Policy` on
+every answer, Koru's own included, and no CSP at the edge. Koru's 429 says
+`rateLimited`, as nginx's does. Public calendar and Drive links are logged by
+their route alone (`/api/v1/calendar/links/*`): no id, no key, also in
+Koru's events and error lines.
+
+| Setting | Default | |
+|---|---|---|
+| `KORU_MODE` | `detect` | `detect` logs what Koru would refuse; `block` refuses it (403 with an event id). Start with `detect` and read the events (`docker compose logs koru`, lines with `"action"`) before blocking. |
+| `KORU_TLS` | `files` | `files`: `nginx/certs/fullchain.pem` and `privkey.pem`, which must be readable by UID 65532 (Koru's user). `acme`: Koru gets and renews Let's Encrypt certificates itself (HTTP-01 on port 80; set `KUTUP_HTTP_PORT=80` and `KUTUP_HTTPS_PORT=443`; `KUTUP_ACME_EMAIL`, `KUTUP_ACME_STAGING=1`). Leave `docker-compose.acme.yml` out either way. |
+| `KORU_RELAY_CERT`, `KORU_RELAY_KEY` | `nginx/certs` | The relays' certificate. With `KORU_TLS=acme`: `/koru/acme/certs/turn.<domain>.crt` and `.key` (Koru names the files after the first relay name). The relays read it at start: restart `coturn` and `livekit` after a renewal. |
+| `KORU_TRUSTED_PROXIES`, `KORU_PROXY_PROTOCOL_FROM` | none | Behind a load balancer: whose `X-Forwarded-For` to believe, or which balancers send the PROXY protocol. |
+| `KORU_RELAY_PROXY_PROTOCOL` | none | `v1`/`v2`: a PROXY header in front of passed-through TURN connections. Neither coturn's TLS listener nor LiveKit's reads one, so leave it unset with the bundled relays; they see Koru's address, as they see nginx's today. |
+
+What differs from the nginx edge:
+
+- **No HTTP/3**: Koru (Pingora) has none; browsers use HTTP/2 over TCP.
+- **No compression of API answers**: Koru compresses per site, not per
+  route, so it is off (the apps' files arrive compressed already).
+- **Rate-limit counters per route**: the four sign-in requests and each API
+  route count apart, where nginx had one zone each.
+- **Mail with `KORU_TLS=acme`**: Stalwart reads `nginx/certs/`; with Koru's
+  own certificates, give Mail its certificate there yourself, or use `files`.
+
+`scripts/deploy.sh` notices the overlay in `COMPOSE_FILE`: it builds the
+image, validates the configuration with `koru check` instead of `nginx -t`,
+and reloads Koru with `SIGHUP` after the start. `scripts/test-koru-edge.sh`
+runs Koru in block mode in front of a stub and checks the limits, headers and
+log privacy above; the static gate checks the written configuration
+(`scripts/test-koru-config.py`).
+
+---
+
 ## Maps
 
 Kutup stores no map data. On the admin **Maps** page you choose the
