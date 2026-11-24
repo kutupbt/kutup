@@ -23,9 +23,11 @@ import { NotificationBanner } from '@kutup/ui/components/notification-banner'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { CalendarDialog } from '../features/CalendarDialog'
+import { EventDeleteFlow } from '../features/EventDelete'
 import { EventDialog } from '../features/EventDialog'
 import { ExportDialog } from '../features/ics/ExportDialog'
 import { ImportDialog } from '../features/ics/ImportDialog'
+import { MiniCalendar } from '../features/MiniCalendar'
 import { AlarmWatcher } from '../features/reminders/AlarmWatcher'
 import { refreshPush } from '../features/reminders/push'
 import { useAccountZone } from '../features/reminders/useAccountZone'
@@ -168,6 +170,9 @@ export function CalendarShell() {
       }
       nav={
         <>
+          <li>
+            <MiniCalendar />
+          </li>
           <li className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-chrome-muted">{t('nav.calendars')}</li>
           {account.isError ? (
             <li className="px-3 text-xs">
@@ -243,6 +248,7 @@ export function CalendarShell() {
     >
       <Outlet />
       <EventDialog />
+      <EventDeleteFlow />
       <AlarmWatcher />
       <NotificationBanner
         storageKey="kutup.calendar.notificationBannerDismissed"

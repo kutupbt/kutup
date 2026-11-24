@@ -2,27 +2,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  EventRefusedError,
-  PERMISSION,
-  deleteEvent,
-  loadSeries,
-  saveEvent,
-  useCalendarMutation,
-  useCalendars,
-  type Calendar,
-  type CalendarEvent,
-  type Reminder,
-} from '@kutup/calendar-core/api'
-import { addDays, timeOf, type CivilDate } from '@kutup/calendar-core/time'
-import { occurrences, timeZones, type CalendarTime, type EventFields } from '@kutup/crypto/calendar'
+import { EventRefusedError, PERMISSION, loadSeries, saveEvent, useCalendarMutation, useCalendars, type Reminder } from '@kutup/calendar-core/api'
+import { occurrences, timeZones } from '@kutup/crypto/calendar'
 import { useMailAccount } from '@kutup/mail-core/api'
 import { loadServerSettings } from '@kutup/session/apps'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
-import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
@@ -31,15 +18,16 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { notificationStatus, requestNotifications } from '@kutup/ui/lib/desktopNotifications'
 import { cn } from '@kutup/ui/lib/cn'
 import { Choice } from './Choice'
-import { DEFAULT_DURATION_MINUTES } from './gridInteraction'
 import { zoneOptions } from './format'
-import { openEditor, useEditorTarget, type EditorTarget } from './editorState'
+import { openEditor, useEditorTarget } from './editorState'
+import { isRecurring, requestDelete, useDeleteRequest } from './deleteState'
+import { draftOf, endsAfterStart, fieldsOf, formOf, remindersOf, startOf, type Draft } from './eventDraft'
 import { useCalendarPrefs } from './prefs'
 import { refreshPush } from './reminders/push'
 import { ReminderList } from './reminders/ReminderList'
 import { hasRepeats } from './reminders/triggers'
-import { choicesFor, planDelete, planSave, saveWarnings, seriesContext, type FormValues, type RecurringType, type SaveWarnings, type SeriesContext } from './recurrence/actions'
-import { DEFAULT_MAX_COUNT, followStart, modelOf, onceModel, ruleOf, type FrequencyModel } from './recurrence/frequency'
+import { choicesFor, planSave, saveWarnings, seriesContext, type FormValues, type RecurringType, type SaveWarnings, type SeriesContext } from './recurrence/actions'
+import { DEFAULT_MAX_COUNT, followStart, modelOf, onceModel } from './recurrence/frequency'
 import { RecurringDialog } from './recurrence/RecurringDialog'
 import { RepeatField } from './recurrence/RepeatField'
 import { planOf, runPlan, type Plan } from './recurrence/run'
@@ -52,146 +40,15 @@ const MAX_DESCRIPTION = 3000
 const MAX_REMINDERS = 10
 
 
-interface Draft {
-  calendarId: string
-  title: string
-  allDay: boolean
-  startDate: CivilDate
-  startTime: string
-  endDate: CivilDate
-  endTime: string
-  tzid: string
-  location: string
-  description: string
-  /**
-   * Proton's notifications: the calendar's defaults until edited
-   * (`custom`); a timed and an all-day list, the one that applies saved.
-   */
-  reminders: { custom: boolean; timed: Reminder[]; allDay: Reminder[] }
-  /** Proton's repeat choice; null until the stored rule is read. */
-  frequency: FrequencyModel | null
-}
-
-/** The editor's reminders: the event's own (for its kind), else the calendar's defaults. */
-function remindersOf(calendar: Calendar | undefined, own: Reminder[] | null | undefined, allDay: boolean): Draft['reminders'] {
-  const defaults = calendar?.defaultReminders ?? { timed: [], allDay: [] }
-  if (!own) return { custom: false, timed: defaults.timed, allDay: defaults.allDay }
-  return { custom: true, timed: allDay ? defaults.timed : own, allDay: allDay ? own : defaults.allDay }
-}
-
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
-/** `HH:MM` from minutes since midnight. */
-function hhmm(minutes: number): string {
-  return `${pad(Math.floor(minutes / 60) % 24)}:${pad(minutes % 60)}`
-}
-
-function draftOf(target: EditorTarget, zone: string, defaultCalendar: string): Omit<Draft, 'reminders' | 'frequency'> {
-  if (target.kind === 'new') {
-    const start = target.minutes ?? 9 * 60
-    const end = target.endMinutes ?? start + DEFAULT_DURATION_MINUTES
-    const endDate = target.endDate ?? target.date
-    return {
-      calendarId: defaultCalendar,
-      title: '',
-      allDay: target.allDay ?? false,
-      startDate: target.date,
-      startTime: hhmm(start),
-      endDate: target.allDay ? (target.lastDate ?? target.date) : end >= 24 * 60 ? addDays(endDate, 1) : endDate,
-      endTime: hhmm(end),
-      tzid: zone,
-      location: '',
-      description: '',
-    }
-  }
-  // A repeating event opens at its occurrence (Proton's: the form shows the one clicked).
-  const instance = target.instance
-  const fields = instance ? { ...target.event.fields, start: instance.start, end: instance.end } : target.event.fields
-  const base = { calendarId: target.event.calendarId, title: fields.summary ?? '', location: fields.location ?? '', description: fields.description ?? '' }
-  const moved = target.moved
-  if ('date' in fields.start) {
-    if (moved) return { ...base, allDay: true, startDate: moved.start, startTime: '09:00', endDate: moved.end, endTime: '10:00', tzid: zone }
-    const end = fields.end && 'date' in fields.end ? fields.end.date : addDays(fields.start.date, 1)
-    // DTEND is exclusive; the form shows the last day.
-    return { ...base, allDay: true, startDate: fields.start.date, startTime: '09:00', endDate: addDays(end, -1), endTime: '10:00', tzid: zone }
-  }
-  const local = (time: EventFields['start'] | null) => (time === null ? null : 'zoned' in time ? time.zoned.local : 'utc' in time ? time.utc.slice(0, 19) : `${time.date}T00:00:00`)
-  const tzid = 'zoned' in fields.start ? fields.start.zoned.tzid : 'UTC'
-  const start = moved?.start ?? local(fields.start)!
-  const end = moved?.end ?? local(fields.end) ?? start
-  return { ...base, allDay: false, startDate: start.slice(0, 10), startTime: timeOf(start), endDate: end.slice(0, 10), endTime: timeOf(end), tzid }
-}
-
-function startOf(draft: Draft): CalendarTime {
-  return draft.allDay ? { date: draft.startDate } : { zoned: { local: `${draft.startDate}T${draft.startTime}:00`, tzid: draft.tzid } }
-}
-
-/** What the form says, its rule written by the Rust core (`previous`: the stored rule, its WKST kept). */
-async function formOf(draft: Draft, weekStart: number, previous: string | null): Promise<FormValues> {
-  const start = startOf(draft)
-  return {
-    start,
-    end: draft.allDay ? { date: addDays(draft.endDate, 1) } : { zoned: { local: `${draft.endDate}T${draft.endTime}:00`, tzid: draft.tzid } },
-    rrule: draft.frequency ? await ruleOf(draft.frequency, start, draft.startDate, weekStart, previous) : null,
-    summary: draft.title.trim() || null,
-    description: draft.description || null,
-    location: draft.location.trim() || null,
-  }
-}
-
-/**
- * The editor's fields as the Rust core takes them: a new event, or one that
- * isn't a series changed (a changed occurrence whose series is gone stays
- * one, its RECURRENCE-ID kept). What a newer client wrote is kept.
- */
-function fieldsOf(form: FormValues, domain: string, existing?: CalendarEvent): EventFields {
-  const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z')
-  const before = existing?.fields
-  return {
-    ...before,
-    uid: before?.uid ?? `${crypto.randomUUID()}@${domain}`,
-    dtstamp: now,
-    created: before?.created ?? now,
-    start: form.start,
-    end: form.end,
-    recurrenceId: before?.recurrenceId ?? null,
-    rrule: before?.recurrenceId ? null : form.rrule,
-    exdates: [],
-    organizer: null,
-    sequence: before ? (before.sequence ?? 0) + 1 : 0,
-    summary: form.summary,
-    description: form.description,
-    location: form.location,
-    status: before?.status ?? 'confirmed',
-    transp: before?.transp ?? 'opaque',
-    comment: before?.comment ?? null,
-    other: before?.other ?? [],
-  }
-}
-
-/** Whether an event is part of a series: one itself, or one changed occurrence of it. */
-function isRecurring(event: CalendarEvent | undefined): boolean {
-  return !!event && (!!event.fields.rrule || !!event.fields.recurrenceId)
-}
-
-/** A recurring change or delete waiting for its choice. */
+/** A recurring change waiting for its choice. */
 interface Pending {
-  mode: 'save' | 'delete'
   types: RecurringType[]
   context: SeriesContext
-  form?: FormValues
+  form: FormValues
   reminders?: Reminder[] | null
 }
 
-/** Whether the end comes after the start (one zone for both, so the local times compare). */
-function endsAfterStart(draft: Draft): boolean {
-  if (draft.allDay) return draft.endDate >= draft.startDate
-  return `${draft.endDate}T${draft.endTime}` > `${draft.startDate}T${draft.startTime}`
-}
-
-/** Creates an event, or changes or deletes one. */
+/** Creates an event (maybe a duplicate), or changes or deletes one. */
 export function EventDialog() {
   const { t } = useTranslation()
   const target = useEditorTarget()
@@ -212,13 +69,16 @@ export function EventDialog() {
     staleTime: Infinity,
   }).data?.calendar?.maxCount ?? DEFAULT_MAX_COUNT
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [confirming, setConfirming] = useState(false)
   const [pending, setPending] = useState<Pending | null>(null)
   const [warnings, setWarnings] = useState<SaveWarnings | null>(null)
   // A planned series change, kept so Save again sends only what hasn't landed.
   const plan = useRef<{ type: RecurringType; plan: Plan } | null>(null)
   const existing = target?.kind === 'edit' ? target.event : undefined
   const recurring = isRecurring(existing)
+  // A duplicate keeps its source's repeat (Proton's), not a changed occurrence's.
+  const duplicated = target?.kind === 'duplicate' ? target.event : undefined
+  const duplicateRule = duplicated && !duplicated.fields.recurrenceId ? duplicated.fields.rrule : null
+  const deleting = useDeleteRequest()
   const existingCalendar = writable.find((c) => c.id === existing?.calendarId)
   // A changed occurrence's series, for the rule it shows (Proton's: a single edit shows its series' repeat).
   const series = useQuery({
@@ -228,17 +88,17 @@ export function EventDialog() {
   })
   const seriesRule = existing?.fields.recurrenceId
     ? (series.data?.find((event) => !event.fields.recurrenceId && event.fields.rrule)?.fields.rrule ?? null)
-    : (existing?.fields.rrule ?? null)
+    : (existing?.fields.rrule ?? duplicateRule)
 
   useEffect(() => {
     if (!target) return
     const base = draftOf(target, prefs.zone, writable[0]?.id ?? '')
     const calendar = writable.find((c) => c.id === base.calendarId)
-    setDraft({
-      ...base,
-      reminders: remindersOf(calendar, target.kind === 'edit' ? target.event.reminders : null, base.allDay),
-      frequency: isRecurring(target.kind === 'edit' ? target.event : undefined) ? null : onceModel(base.startDate),
-    })
+    const source = target.kind === 'new' ? undefined : target.event
+    // A duplicate into another calendar takes that one's defaults.
+    const own = source && source.calendarId === base.calendarId ? source.reminders : null
+    const repeats = target.kind === 'edit' ? isRecurring(source) : target.kind === 'duplicate' && !!source?.fields.rrule && !source.fields.recurrenceId
+    setDraft({ ...base, reminders: remindersOf(calendar, own, base.allDay), frequency: repeats ? null : onceModel(base.startDate) })
     setPending(null)
     plan.current = null
     save.reset()
@@ -246,7 +106,7 @@ export function EventDialog() {
   }, [target])
   // The stored rule read into the repeat choice, at the start the form shows.
   useEffect(() => {
-    if (!target || !recurring || !draft || draft.frequency) return
+    if (!target || !(recurring || duplicateRule) || !draft || draft.frequency) return
     if (existing?.fields.recurrenceId && !series.data) return
     let cancelled = false
     void modelOf(seriesRule, startOf(draft), draft.startDate).then((frequency) => {
@@ -255,7 +115,7 @@ export function EventDialog() {
     return () => {
       cancelled = true
     }
-  }, [target, recurring, draft, existing, series.data, seriesRule])
+  }, [target, recurring, duplicateRule, draft, existing, series.data, seriesRule])
 
   /** This member's reminders as the save sends them: own when edited, back to the defaults when they were own, else as they are. */
   const remindersFor = (next: Draft) => (next.reminders.custom ? (next.allDay ? next.reminders.allDay : next.reminders.timed) : existing?.reminders ? null : undefined)
@@ -272,7 +132,7 @@ export function EventDialog() {
       const context = await seriesContext(await loadSeries(account.data, calendar, existing.fields.uid), existing, target?.kind === 'edit' ? target.instance : null)
       if (context) {
         const types = await choicesFor(context)
-        setPending({ mode: 'save', types, context, form, reminders })
+        setPending({ types, context, form, reminders })
         return 'asked'
       }
     }
@@ -283,25 +143,11 @@ export function EventDialog() {
     const many = fields.rrule ? (await occurrences(fields, '1970-01-01T00:00:00Z', '2038-01-01T00:00:00Z', 2).catch(() => [])).length > 1 : false
     return many ? 'createdMany' : 'created'
   })
-  const remove = useCalendarMutation(async () => {
-    const calendar = writable.find((c) => c.id === existing?.calendarId)
-    if (!account.data || !calendar || !existing) throw new Error('no calendar')
-    await deleteEvent(session, account.data, calendar, existing)
-  })
-  // A delete of a repeating event asks which occurrences first.
-  const askDelete = useCalendarMutation(async () => {
-    const calendar = writable.find((c) => c.id === existing?.calendarId)
-    if (!account.data || !calendar || !existing) throw new Error('no calendar')
-    const context = await seriesContext(await loadSeries(account.data, calendar, existing.fields.uid), existing, target?.kind === 'edit' ? target.instance : null)
-    if (!context) return false
-    setPending({ mode: 'delete', types: await choicesFor(context), context })
-    return true
-  })
   const recurringRun = useCalendarMutation(async (type: RecurringType) => {
     const calendar = writable.find((c) => c.id === existing?.calendarId)
     if (!account.data || !calendar || !pending) throw new Error('no calendar')
     if (!plan.current || plan.current.type !== type) {
-      const steps = pending.mode === 'delete' ? await planDelete(type, pending.context) : await planSave(type, pending.context, pending.form!, pending.reminders)
+      const steps = await planSave(type, pending.context, pending.form, pending.reminders)
       plan.current = { type, plan: planOf(steps) }
     }
     await runPlan(plan.current.plan, session, account.data, calendar)
@@ -338,11 +184,8 @@ export function EventDialog() {
         : error
           ? apiErrorMessage(error, fallback)
           : null
-  const saveError = errorText(save.error, t('events.saveFailed')) ?? errorText(askDelete.error, t('events.saveFailed'))
-  const doneText: Record<string, Record<RecurringType, string>> = {
-    save: { single: t('events.saved'), future: t('recurrence.futureUpdated'), all: t('recurrence.allUpdated') },
-    delete: { single: t('events.deleted'), future: t('recurrence.futureDeleted'), all: t('recurrence.allDeleted') },
-  }
+  const saveError = errorText(save.error, t('events.saveFailed'))
+  const doneText: Record<RecurringType, string> = { single: t('events.saved'), future: t('recurrence.futureUpdated'), all: t('recurrence.allUpdated') }
 
   return (
     <>
@@ -476,11 +319,8 @@ export function EventDialog() {
                   <Button
                     type="button"
                     variant="ghost"
-                    loading={askDelete.isPending}
-                    onClick={() => {
-                      if (!recurring) return setConfirming(true)
-                      askDelete.mutate(undefined, { onSuccess: (asked) => !asked && setConfirming(true) })
-                    }}
+                    loading={deleting?.event === existing}
+                    onClick={() => requestDelete(existing, target?.kind === 'edit' ? target.instance : null, close)}
                     data-testid="event-delete"
                   >
                     {t('events.delete')}
@@ -502,23 +342,22 @@ export function EventDialog() {
         </DialogContent>
       </Dialog>
       <RecurringDialog
-        mode={pending?.mode ?? 'save'}
+        mode="save"
         types={pending?.types ?? null}
         warnings={warnings}
         pending={recurringRun.isPending}
         error={errorText(recurringRun.error, t('events.saveFailed'))}
         onWarnings={(type) => {
           setWarnings(null)
-          if (pending?.mode === 'save' && pending.form) void saveWarnings(type, pending.context, pending.form).then(setWarnings)
+          if (pending) void saveWarnings(type, pending.context, pending.form).then(setWarnings)
         }}
         onConfirm={(type) =>
           recurringRun.mutate(type, {
             onSuccess: (done) => {
-              const mode = pending?.mode ?? 'save'
               setPending(null)
               plan.current = null
               void queryClient.invalidateQueries({ queryKey: ['calendar'] })
-              toast.success(doneText[mode][done])
+              toast.success(doneText[done])
               close()
             },
           })
@@ -529,29 +368,6 @@ export function EventDialog() {
           recurringRun.reset()
         }}
       />
-      {existing ? (
-        <ConfirmDestructive
-          open={confirming}
-          onOpenChange={setConfirming}
-          title={t('events.deleteTitle', { name: existing.fields.summary ?? t('events.untitled') })}
-          description={t('events.deleteDescription')}
-          submit={t('events.delete')}
-          pending={remove.isPending}
-          error={remove.error}
-          errorFallback={
-            remove.error instanceof EventRefusedError && remove.error.code === 'revisionConflict' ? t('events.changedElsewhere') : t('events.saveFailed')
-          }
-          onConfirm={() =>
-            remove.mutate(undefined, {
-              onSuccess: () => {
-                setConfirming(false)
-                close()
-                toast.success(t('events.deleted'))
-              },
-            })
-          }
-        />
-      ) : null}
     </>
   )
 }

@@ -627,8 +627,8 @@ only where they do better.
     Shortcuts setting first; Kutup's are always on, never in a field or
     dialog.
 - **Beyond Proton** (the user's request; Proton lacks these):
-  - **Release opens the full editor** with the span. Kutup has no quick
-    popover yet (below).
+  - **Release opens the quick-create popover** with the span (Proton's;
+    below); a move or resize still opens the full editor.
   - **Resize** by an event's bottom edge for every event (Proton resizes
     only booking ranges): at least 30 minutes, on the day it ends, opening
     the editor as a move does.
@@ -648,19 +648,71 @@ only where they do better.
 
 | | Proton | Kutup |
 | --- | --- | --- |
-| Quick-create popover on a click or drag (title, then Save or "More options") | `CreateEventPopover` | ❌ the full editor opens |
-| Event peek popover (Edit, Delete, Duplicate; location, calendar, notifications) | `EventPopover` | ❌ the editor opens |
-| Mini month navigator, with a drag for a custom range of days or weeks | `MiniCalendar` | ❌ |
+| Quick-create popover on a click or drag (title, then Save or "More options") | `CreateEventPopover` | ✅ (below) |
+| Event peek popover (Edit, Delete, Duplicate; location, calendar, notifications) | `EventPopover` | ✅ (below) |
+| Mini month navigator, with a drag for a custom range of days or weeks | `MiniCalendar` | ✅ (below) |
 | Search events (`/`) | `CalendarSearch` | ❌ |
 | Shortcuts list (`?`) and the quick actions menu (Meta+K) | `CalendarShortcutsAndCommander` | ❌ |
 | Week numbers | `DisplayWeekNumber` | ❌ |
 | A secondary time zone column | settings, `TimeGrid` | ❌ |
 | Default view, default event duration (per calendar: 30, 60, 90, 120) | `CalendarLayoutSection`, `CalendarEventDefaultsSection` | ❌ (E2 settings) |
-| A day header opens that day | `handleClickDateWeekView` | ❌ |
-| "+N more" in the month opens the day's events | `MorePopoverEvent` | ❌ a count only |
+| A day header opens that day | `handleClickDateWeekView` | ✅ |
+| "+N more" in the month opens the day's events | `MorePopoverEvent` | ✅ (below) |
 | Working hours shaded | none | ❌ (Google, Outlook: worth having) |
 | Per-user snap step | none | ❌ (Outlook's; Proton's fixed 30 kept) |
 | Natural-language quick add | none | ➖ (Fantastical's; not planned) |
+
+**Popovers and the mini calendar (2026-11-24).** Read from Proton's
+`components/events/EventPopover.tsx`, `PopoverEventContent.tsx`,
+`PopoverContainer.tsx`, `MorePopoverEvent.tsx`,
+`components/eventModal/CreateEventPopover.tsx`, `hooks/useUrlifyString.tsx`,
+`packages/shared/lib/calendar/urlify.ts`, `recurrence/getFrequencyString.ts`,
+`alarms/getNotificationString.ts`, `containers/calendar/InteractiveCalendarView.tsx`
+(Duplicate), `CalendarContainer.tsx` (`handleClickDateWeekView`,
+`handleChangeDateRange`), `getDateRange.ts`, `getDateDiff.ts` and
+`packages/components/components/miniCalendar/`.
+- **As Proton:**
+  - One popover at a time. A click on an event shows its details: the
+    title, when (in the view's zone), the repeat in words ("Weekly on
+    Monday", "Every 2 weeks on Monday, Wednesday, 5 times", the series' zone
+    named when its days depend on it, "Custom monthly" for a rule the editor
+    doesn't make), the location, the organizer when the event names one, the
+    calendar, the notifications ("15 minutes before", "1 day before at 09:00
+    by email") and the description. Edit opens the editor at that
+    occurrence; Delete asks as the editor does ("this / this and future /
+    all" for a series); Duplicate opens the editor as a new event filled
+    from it at that occurrence, the series' rule kept and a changed
+    occurrence's dropped. Edit and Delete only on a calendar the member can
+    write to, Duplicate when any can be (into it, or the first writable).
+  - A click or a drag on the empty grid (the all-day row and the month
+    too) opens the quick-create popover beside the new event, drawn on the
+    grid: a title and Save (the calendar's default notifications), or "More
+    options" for the editor with what was typed. While a popover is open a
+    press on the grid only closes it. N and "New event" open the editor.
+  - A day's header (the week's, the month's day number) opens that day;
+    "+N more" lists the day's events, each opening its details.
+  - The mini calendar: a click goes to the day in the view shown, the
+    arrows step through months without moving the view, a drag across days
+    shows those days (a week view of them) and across a week or more a month
+    view of those weeks (`?range=`, Proton's `range`); the arrows of the
+    toolbar step by the range, a view tab or Today ends it.
+  - Escape closes a popover and focus goes back to what opened it.
+- **Kutup's own:**
+  - Links: only http, https and mailto (Proton's also take ftps, file, tel
+    and sms), the text never read as HTML (Proton sanitizes and allows some
+    markup), and closing punctuation left out of the link.
+  - The popover doesn't trap focus (Radix's non-modal popover; Proton's
+    traps it): Tab past its end closes it, as a click outside does.
+  - Time zone: the zone is shown under the time; an event kept in another
+    zone also shows its own times there.
+  - The mini calendar's days are one Tab stop with arrows, Page Up and Page
+    Down (Proton's are each in the Tab order).
+  - The quick-create popover can't be dragged (Proton's header drags it)
+    and changes no dates or times (Proton's has its date and time rows):
+    those are in More options. Closing it drops the new event without
+    asking.
+- **Not yet:** week numbers in the mini calendar wait for the setting
+  (E2 §7); participants (E4); the RSVP row (E4).
 
 ## E2b-3: reminders in the app (second session, 2026-10-23)
 

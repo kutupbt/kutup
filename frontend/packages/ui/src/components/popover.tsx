@@ -5,6 +5,8 @@ import { cn } from '../lib/cn'
 export const Popover = PopoverPrimitive.Root
 export const PopoverTrigger = PopoverPrimitive.Trigger
 export const PopoverClose = PopoverPrimitive.Close
+/** Where the panel points when it has no trigger (an element, or a `virtualRef` measured on each move). */
+export const PopoverAnchor = PopoverPrimitive.Anchor
 
 /** A small panel anchored to its trigger, dismissed by Escape or a click outside. */
 export const PopoverContent = forwardRef<

@@ -17,6 +17,9 @@
 #   KUTUP_DEPLOY_DIR    the server's checkout                      (default /opt/kutup)
 #   KUTUP_DEPLOY_HOSTS  app hostnames to check, space-separated    (default: the ten apps
 #                       under the server's KUTUP_BASE_DOMAIN)
+#   KUTUP_DEPLOY_KORU_SRC  a checkout of Koru's sources, for a server whose edge is Koru
+#                       (docker-compose.koru.yml in its COMPOSE_FILE); required there
+#   KUTUP_KORU_COMMIT   the Koru commit to ship                    (default: that checkout's HEAD)
 #
 # What it does, in order, and it stops at the first failure:
 #   1. refuses unless GitHub CI passed for the tag's commit on master;
@@ -34,6 +37,15 @@
 #      starts the stack and restarts nginx;
 #   8. checks: migrations, backend errors, Stalwart's setup, storage, every host;
 #   9. removes Kutup images other than the new and the previous release.
+# With Koru as the edge (docs/self-hosting.md, "Koru edge (optional)"), first,
+# here: builds or reuses the image for the Koru commit (scripts/build-koru-image.sh),
+# copies it to the server (docker save | docker load; no registry) unless it is
+# there already, and checks that the server's image has the same layers.
+# On the server, step 2 records it (commit and the server's image id) beside
+# the others, step 4 runs `koru check` instead of `nginx -t`, step 7 sets
+# KUTUP_KORU_IMAGE and KUTUP_KORU_IMAGE_ID in .env (the id checked again first) and
+# reloads Koru instead of restarting nginx, and step 9 keeps the new and the
+# previous Koru image. --dry-run builds nothing and copies nothing.
 # It reports success only when the server's part ran to its last line.
 
 set -euo pipefail
@@ -85,10 +97,52 @@ if $wipe && ! $dry; then
   [ "$answer" = "${host#*@}" ] || { echo "deploy: not confirmed" >&2; exit 1; }
 fi
 
+# Koru's image, when the server's edge is Koru: built on this machine and
+# copied over, never fetched from a registry.
+koru_image="" koru_id="" koru_commit=""
+if [ -n "${KUTUP_DEPLOY_KORU_SRC:-}" ]; then
+  echo "== Koru image"
+  server_files="$(ssh "${ssh_opts[@]}" "$host" "grep -E '^COMPOSE_FILE=' '$dir/.env' | tail -1 | cut -d= -f2-" </dev/null)"
+  case ":${server_files//[\"\']/}:" in
+    *:docker-compose.koru.yml:*) ;;
+    *) echo "deploy: KUTUP_DEPLOY_KORU_SRC is set, but the server's COMPOSE_FILE has no docker-compose.koru.yml" >&2; exit 1 ;;
+  esac
+  build_koru=(env KORU_SRC="$KUTUP_DEPLOY_KORU_SRC" scripts/build-koru-image.sh)
+  if $dry; then
+    read -r koru_image koru_id koru_commit < <("${build_koru[@]}" --dry-run | tail -1)
+  else
+    read -r koru_image koru_id koru_commit < <("${build_koru[@]}" | tail -1)
+  fi
+  [ -n "$koru_commit" ] || { echo "deploy: no Koru image" >&2; exit 1; }
+  # The same image on both machines: the same layers (their content
+  # digests). Its id is not compared, since Docker's two image stores
+  # (classic and containerd) give one image different ids.
+  layers() { printf '%s' "$1" | sha256sum | cut -c1-16; }
+  layers_of="docker image inspect -f '{{range .RootFS.Layers}}{{.}} {{end}}' '$koru_image' 2>/dev/null || true"
+  remote_layers() { layers "$(ssh "${ssh_opts[@]}" "$host" "$layers_of" </dev/null)"; }
+  if [ "$koru_id" = "-" ]; then
+    echo "   would build $koru_image (Koru $koru_commit) and copy it to $host"
+  else
+    local_layers="$(layers "$(bash -c "$layers_of")")"
+    if [ "$(remote_layers)" = "$local_layers" ]; then
+      echo "   $koru_image (Koru $koru_commit, layers $local_layers) is on $host already"
+    elif $dry; then
+      echo "   would copy $koru_image (Koru $koru_commit, layers $local_layers, $koru_id here) to $host"
+    else
+      echo "   copying $koru_image (Koru $koru_commit, layers $local_layers) to $host"
+      docker save "$koru_image" | ssh "${ssh_opts[@]}" "$host" docker load >/dev/null
+      [ "$(remote_layers)" = "$local_layers" ] || { echo "deploy: $host's $koru_image does not have the layers built here" >&2; exit 1; }
+    fi
+    # From here on the image is named by the server's own id for it.
+    koru_id="$(ssh "${ssh_opts[@]}" "$host" "docker image inspect -f '{{.Id}}' '$koru_image' 2>/dev/null || echo -" </dev/null)"
+  fi
+fi
+
 # The server's output, kept to see that its script ran to the end.
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
-ssh "${ssh_opts[@]}" "$host" bash -s -- "$dir" "$tag" "$sha" "$wipe" "$dry" "$has_check_config" "${KUTUP_DEPLOY_HOSTS:-}" <<'REMOTE' | tee "$log"
+ssh "${ssh_opts[@]}" "$host" bash -s -- "$dir" "$tag" "$sha" "$wipe" "$dry" "$has_check_config" "${KUTUP_DEPLOY_HOSTS:-}" \
+  "$koru_image" "$koru_id" "$koru_commit" <<'REMOTE' | tee "$log"
 set -euo pipefail
 # bash -s reads this script from stdin as it runs, and a command that reads
 # stdin (docker compose run or exec) would swallow the rest of it, ending the
@@ -96,6 +150,7 @@ set -euo pipefail
 # nothing in it gets the script as its stdin.
 {
 dir="$1" tag="$2" sha="$3" wipe="$4" dry="$5" has_check_config="$6" hosts="${7:-}"
+koru_image="${8:-}" koru_id="${9:-}" koru_commit="${10:-}"
 cd "$dir"
 # One value from .env, read literally (.env is a Compose file, not shell).
 env_get() {
@@ -187,6 +242,27 @@ for f in "${files[@]}"; do
   fi
 done
 
+# The edge: nginx, or Koru when its overlay is among the compose files. Its
+# image came from the deploying machine; every compose command below uses it.
+edge=nginx
+case ":$compose_files:" in *:docker-compose.koru.yml:*) edge=koru ;; esac
+if [ "$edge" = koru ]; then
+  [ -n "$koru_image" ] || { echo "deploy: this server's edge is Koru: set KUTUP_DEPLOY_KORU_SRC" >&2; exit 1; }
+  old_koru="$(env_get KUTUP_KORU_IMAGE)"
+  echo "new kutup-koru $koru_image $koru_id (Koru $koru_commit)" >> "$record"
+  [ -n "$old_koru" ] && echo "old kutup-koru $old_koru $(env_get KUTUP_KORU_IMAGE_ID)" >> "$record"
+  if [ "$dry" != true ]; then
+    [ "$(docker image inspect -f '{{.Id}}' "$koru_image" 2>/dev/null)" = "$koru_id" ] \
+      || { echo "deploy: $koru_image here is not $koru_id" >&2; exit 1; }
+    export KUTUP_KORU_IMAGE="$koru_image"
+  elif [ "$(docker image inspect -f '{{.Id}}' "$koru_image" 2>/dev/null || true)" = "$koru_id" ]; then
+    export KUTUP_KORU_IMAGE="$koru_image"
+  else
+    # Not here yet: the settings check runs with the current Koru image.
+    export KUTUP_KORU_IMAGE="${old_koru:-$koru_image}"
+  fi
+fi
+
 # The new server's settings check against this .env (kutup-server
 # check-config: environment only, no database), with the new image; the
 # arguments choose the compose files. Repeated after the checkout below.
@@ -218,16 +294,28 @@ if [ "$dry" = true ]; then
   echo "== dry run: would back up${wipe:+, wipe: $wipe}, check out $sha, set .env to $tag"
   echo "   (pinned by digest), start the stack and check it. Current image lines:"
   grep -E '^KUTUP_(SERVER|WEB|STALWART_SETUP)_IMAGE=' .env
+  if [ "$edge" = koru ]; then
+    echo "   Koru: would set KUTUP_KORU_IMAGE=$koru_image (id $koru_id, Koru $koru_commit), now:"
+    grep -E '^KUTUP_KORU_IMAGE(_ID)?=' .env || echo "   (none)"
+  fi
   git log --oneline -1
   echo "== server done: dry run"
   exit 0
 fi
 
-echo "== update: the commit's compose files and nginx config"
-# Before anything destructive: a failed checkout or nginx check leaves the
-# database, the bucket, .env and the running stack as they were.
-git checkout -q --detach "$sha"
-docker compose run --rm --no-deps --entrypoint nginx nginx -t
+if [ "$edge" = koru ]; then
+  echo "== update: the commit's compose files and Koru's config ($koru_image)"
+  # As for nginx below; Koru's check writes its configuration from .env as
+  # a start would, and validates it.
+  git checkout -q --detach "$sha"
+  docker compose run --rm --no-deps -T koru check
+else
+  echo "== update: the commit's compose files and nginx config"
+  # Before anything destructive: a failed checkout or nginx check leaves the
+  # database, the bucket, .env and the running stack as they were.
+  git checkout -q --detach "$sha"
+  docker compose run --rm --no-deps --entrypoint nginx nginx -t
+fi
 check_config
 
 echo "== backups"
@@ -256,9 +344,23 @@ for i in $images; do
   sed -i "s#^KUTUP_${var}_IMAGE=.*#KUTUP_${var}_IMAGE=$registry/$i:$tag@$digest#" .env
 done
 grep -E '^KUTUP_(SERVER|WEB|STALWART_SETUP)_IMAGE=' .env
+if [ "$edge" = koru ]; then
+  # Koru's image is local to this server: pinned by its id, which was
+  # checked above to be the one built for $koru_commit.
+  for kv in "KUTUP_KORU_IMAGE=$koru_image" "KUTUP_KORU_IMAGE_ID=$koru_id"; do
+    if grep -qE "^${kv%%=*}=" .env; then sed -i "s#^${kv%%=*}=.*#$kv#" .env; else echo "$kv" >> .env; fi
+  done
+  grep -E '^KUTUP_KORU_IMAGE(_ID)?=' .env
+fi
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 docker compose up -d --wait
-docker compose restart nginx >/dev/null
+if [ "$edge" = koru ]; then
+  # Recreated by `up` for a new image or settings; a reload re-reads the
+  # certificates and reopens the logs without dropping a connection.
+  docker compose kill -s HUP koru >/dev/null
+else
+  docker compose restart nginx >/dev/null
+fi
 
 echo "== checks"
 sleep 5
@@ -345,6 +447,11 @@ done
 echo "== images kept: $tag ${old:-}"
 docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^$registry/" \
   | grep -vE ":($tag${old:+|$old})$" | xargs -r docker rmi >/dev/null 2>&1 || true
+if [ "$edge" = koru ]; then
+  echo "== Koru images kept: $koru_image ${old_koru:-}"
+  docker images --format '{{.Repository}}:{{.Tag}}' kutup-koru \
+    | grep -vxF -e "$koru_image" ${old_koru:+-e "$old_koru"} | xargs -r docker rmi >/dev/null 2>&1 || true
+fi
 docker image prune -f >/dev/null
 df -h / | tail -1
 echo "== server done: deployed"

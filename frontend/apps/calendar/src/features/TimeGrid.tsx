@@ -3,13 +3,13 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as Rea
 import { useTranslation } from 'react-i18next'
 import { addDays, minutesOf, type CivilDate } from '@kutup/calendar-core/time'
 import { cn } from '@kutup/ui/lib/cn'
-import { ghostCovers, pressDays, pressShiftDays, type DaySpanGhost } from './DaySpan'
+import { draftCovers, ghostCovers, pressDays, pressShiftDays, type DaySpanGhost } from './DaySpan'
 import { EventChip } from './EventChip'
-import { openEditor } from './editorState'
 import { formatHour, formatLongDate, formatTime, formatDayNumber, formatWeekday } from './format'
 import { clickSpan, createSpan, DAY_MINUTES, localAt, resizeEnd, shiftLocal, snap, SNAP_MINUTES } from './gridInteraction'
-import { openMoved, openNew, openTimes } from './moves'
+import { openMoved, openTimes, quickNew } from './moves'
 import { columns, covers, type Placed } from './placement'
+import { openPopover, popoverOpen, usePopover } from './popoverState'
 import { follow, holdTouches, type Point } from './press'
 import { useCalendarPrefs } from './prefs'
 import { useNowMinutes } from './today'
@@ -41,15 +41,31 @@ function segment(start: string, end: string, day: CivilDate): { top: number; bot
  * to move it, drag its bottom edge to resize it; a touch drags after a long
  * press. On the keyboard: arrows move between slots and days, Shift with ↑
  * or ↓ widens the span, Enter opens it; on an event, Alt with the arrows
- * moves it, Alt+Shift with ↑ or ↓ resizes it, Enter or Space opens it.
+ * moves it, Alt+Shift with ↑ or ↓ resizes it, Enter or Space opens it. A
+ * click or a span opens the quick-create popover, a click on an event its
+ * popover; a day's header opens that day (`onOpenDay`).
  */
-export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]; today?: CivilDate; placed: Placed[]; scrollKey: string }) {
+export function TimeGrid({
+  days,
+  today,
+  placed,
+  scrollKey,
+  onOpenDay,
+}: {
+  days: CivilDate[]
+  today?: CivilDate
+  placed: Placed[]
+  scrollKey: string
+  onOpenDay: (day: CivilDate) => void
+}) {
   const { t, i18n } = useTranslation()
   const prefs = useCalendarPrefs()
   const scroller = useRef<HTMLDivElement>(null)
   const columnsRef = useRef<(HTMLDivElement | null)[]>([])
   const cells = useRef(new Map<string, HTMLButtonElement>())
   const now = useNowMinutes(prefs.zone)
+  const popover = usePopover()
+  const draft = popover?.kind === 'create' && !popover.target.allDay ? popover.target : null
   const [ghost, setGhostState] = useState<Ghost | null>(null)
   const ghostRef = useRef<Ghost | null>(null)
   const setGhost = (next: Ghost | null) => {
@@ -98,9 +114,12 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
       end: formatTime(localAt(days[dayIndex], end), i18n.language, prefs.hour12),
     })
 
-  // A press on a day's empty time: drag for a span, click for one slot (the default length).
+  // A press on a day's empty time: drag for a span, click for one slot (the
+  // default length). While a popover is open it only closes it (Proton's).
   const pressCreate = (event: ReactPointerEvent, dayIndex: number) => {
     if (event.target instanceof Element && event.target.closest('[data-event]')) return
+    if (popoverOpen()) return
+    const column = event.currentTarget
     const pressSlot = snap(at({ x: event.clientX, y: event.clientY }).minutes)
     follow(
       event,
@@ -111,11 +130,11 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
         drop: () => {
           const g = ghostRef.current
           setGhost(null)
-          if (g?.kind === 'create') void openNew(days[g.day], g.start, g.end, prefs.zone)
+          if (g?.kind === 'create') void quickNew(days[g.day], g.start, g.end, prefs.zone, column)
         },
         click: () => {
           const span = clickSpan(pressSlot)
-          void openNew(days[dayIndex], span.start, span.end, prefs.zone)
+          void quickNew(days[dayIndex], span.start, span.end, prefs.zone, column)
         },
         cancel: () => setGhost(null),
       },
@@ -126,7 +145,8 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
   // A press on an event: drag to move it (across days too), its bottom edge to resize it.
   const pressEvent = (event: ReactPointerEvent<HTMLElement>, p: Placed, dayIndex: number, resizable: boolean) => {
     event.stopPropagation()
-    const rect = event.currentTarget.getBoundingClientRect()
+    const block = event.currentTarget
+    const rect = block.getBoundingClientRect()
     const resizing = resizable && event.clientY > rect.bottom - RESIZE_EDGE_PX
     const origin = at({ x: event.clientX, y: event.clientY })
     const originSlot = snap(origin.minutes)
@@ -152,7 +172,7 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
           setGhost(null)
           if (g?.kind === 'times' && (g.start !== p.start || g.end !== p.end)) void openTimes(p, g.start, g.end, prefs.zone)
         },
-        click: () => openEditor({ kind: 'edit', event: p.event, instance: p.instance }),
+        click: () => openPopover({ kind: 'event', placed: p }, block),
         cancel: () => setGhost(null),
       },
       scroller.current,
@@ -199,7 +219,7 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
       const span = keySpan({ day: dayIndex, slot, anchor: focus.anchor })
       setFocus({ day: dayIndex, slot, anchor: null })
       setGhost(null)
-      void openNew(days[dayIndex], span.start, span.end, prefs.zone)
+      void quickNew(days[dayIndex], span.start, span.end, prefs.zone, event.currentTarget)
     } else return
     // Keys the grid took stay out of the page's shortcuts.
     event.stopPropagation()
@@ -255,16 +275,35 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
             key={day}
             data-day={day}
             onPointerDown={(e) => {
-              if (e.target instanceof Element && e.target.closest('[data-testid="calendar-event"]')) return
+              if (e.target instanceof Element && e.target.closest('[data-testid="calendar-event"], [data-day-link]')) return
               pressDays(e, day, setDayGhost, null)
             }}
-            className={cn('min-h-12 touch-pan-y border-l border-border px-2 py-1 text-center', ghostCovers(dayGhost, day) && 'bg-primary/15')}
+            className={cn(
+              'min-h-12 touch-pan-y border-l border-border px-2 py-1 text-center',
+              (ghostCovers(dayGhost, day) || draftCovers(popover, day)) && 'bg-primary/15',
+            )}
             data-testid={`calendar-allday-${day}`}
           >
-            <div className="text-xs text-muted-foreground">{formatWeekday(day, i18n.language)}</div>
-            <div className={cn('mx-auto grid size-7 place-items-center rounded-full text-sm', day === today && 'bg-primary text-primary-foreground')}>
-              {formatDayNumber(day, i18n.language)}
-            </div>
+            {/* Proton's `handleClickDateWeekView`: the day's header opens that day. */}
+            <button
+              type="button"
+              data-day-link
+              onClick={() => onOpenDay(day)}
+              aria-label={t('view.openDay', { day: formatLongDate(day, i18n.language) })}
+              aria-current={day === today ? 'date' : undefined}
+              className="group mx-auto block rounded-md px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              data-testid={`calendar-day-link-${day}`}
+            >
+              <span className="block text-xs text-muted-foreground group-hover:text-foreground">{formatWeekday(day, i18n.language)}</span>
+              <span
+                className={cn(
+                  'mx-auto grid size-7 place-items-center rounded-full text-sm group-hover:bg-accent',
+                  day === today && 'bg-primary text-primary-foreground group-hover:bg-primary/90',
+                )}
+              >
+                {formatDayNumber(day, i18n.language)}
+              </span>
+            </button>
             <div className="mt-1 space-y-0.5">
               {allDay(day).map((p) => (
                 <EventChip
@@ -295,6 +334,8 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
                 const s = segment(p.start, p.end, day)
                 return s ? [{ placed: p, ...s }] : []
               })
+            // The quick-create popover's new event, drawn where it will be (Proton's temporary event).
+            const draftHere = draft ? segment(localAt(draft.date, draft.minutes ?? 0), localAt(draft.endDate ?? draft.date, draft.endMinutes ?? 0), day) : null
             const ghostHere =
               ghost?.kind === 'create'
                 ? ghost.day === dayIndex
@@ -370,6 +411,18 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
                     />
                   </div>
                 ))}
+                {draftHere && draft ? (
+                  <div
+                    className="pointer-events-none absolute inset-x-0.5 z-30 rounded border-l-4 border-primary bg-primary/30 px-1.5 py-0.5 text-xs tabular-nums shadow-md"
+                    style={{ top: (draftHere.top / 60) * HOUR_PX, height: ((draftHere.bottom - draftHere.top) / 60) * HOUR_PX }}
+                    data-calendar-draft
+                    data-testid="calendar-draft"
+                    aria-hidden
+                  >
+                    {formatTime(localAt(draft.date, draft.minutes ?? 0), i18n.language, prefs.hour12)} –{' '}
+                    {formatTime(localAt(draft.endDate ?? draft.date, draft.endMinutes ?? 0), i18n.language, prefs.hour12)}
+                  </div>
+                ) : null}
                 {ghostHere ? (
                   <div
                     className="pointer-events-none absolute inset-x-0.5 z-30 rounded border-2 border-primary bg-primary/20 px-1.5 py-0.5 text-xs tabular-nums"
@@ -423,8 +476,8 @@ function TimedBlock({
       onBlur={onBlur}
       onClick={(e) => {
         e.stopPropagation()
-        // A pointer's click is the grid's press; a key's opens the event.
-        if (e.detail === 0) openEditor({ kind: 'edit', event: placed.event, instance: placed.instance })
+        // A pointer's click is the grid's press; a key's opens the event's popover.
+        if (e.detail === 0) openPopover({ kind: 'event', placed }, e.currentTarget)
       }}
       aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight Alt+Shift+ArrowUp Alt+Shift+ArrowDown"
       className={cn(

@@ -25,7 +25,9 @@ test('calendar: a first calendar, events in two time zones, week and month, edit
   await expect(page.getByTestId('calendar-title')).toHaveText('October 2026')
 
   // An event at nine on Thursday, moved to half past.
+  // A click opens the quick-create popover; "More options" the whole editor.
   await page.getByTestId('calendar-slot-2026-10-29-18').click()
+  await page.getByTestId('create-popover-more').click()
   const editor = page.getByRole('dialog', { name: 'New event' })
   await expect(editor.getByLabel('Start time')).toHaveValue('09:00')
   await editor.getByLabel('Title').fill('Republic Day lunch')
@@ -39,6 +41,7 @@ test('calendar: a first calendar, events in two time zones, week and month, edit
 
   // One set in New York's time: 09:00 there (EDT, UTC−4) is 16:00 in Istanbul (UTC+3).
   await page.getByTestId('calendar-slot-2026-10-30-18').click()
+  await page.getByTestId('create-popover-more').click()
   const call = page.getByRole('dialog', { name: 'New event' })
   await call.getByLabel('Title').fill('Call with New York')
   await call.getByTestId('event-zone').click()
@@ -51,6 +54,7 @@ test('calendar: a first calendar, events in two time zones, week and month, edit
 
   // Edited: what was encrypted opens, and the change is saved.
   await thursday.getByTestId('calendar-event').filter({ hasText: 'Republic Day lunch' }).click()
+  await page.getByTestId('event-popover-edit').click()
   const edit = page.getByRole('dialog', { name: 'Event' })
   await expect(edit.getByLabel('Location')).toHaveValue('Moda, İstanbul')
   await edit.getByLabel('Title').fill('Republic Day dinner')
@@ -61,7 +65,8 @@ test('calendar: a first calendar, events in two time zones, week and month, edit
   // The month, and an all-day event made from a day in it.
   await page.getByTestId('calendar-view-month').click()
   await expect(page.getByTestId('calendar-day-2026-10-29').getByTestId('calendar-event')).toContainText('Republic Day dinner')
-  await page.getByTestId('calendar-day-2026-10-28').click()
+  await page.getByTestId('calendar-day-2026-10-28').click({ position: { x: 20, y: 60 } })
+  await page.getByTestId('create-popover-more').click()
   const allDay = page.getByRole('dialog', { name: 'New event' })
   await expect(allDay.getByLabel('All day')).toBeChecked()
   await allDay.getByLabel('Title').fill('Holiday eve')
@@ -97,7 +102,7 @@ test('calendar: a first calendar, events in two time zones, week and month, edit
   // An event deleted.
   await page.getByTestId('calendar-view-week').click()
   await thursday.getByTestId('calendar-event').filter({ hasText: 'Republic Day dinner' }).click()
-  await page.getByRole('dialog', { name: 'Event' }).getByTestId('event-delete').click()
+  await page.getByTestId('event-popover-delete').click()
   await page.getByRole('button', { name: 'Delete event' }).last().click()
   await expect(thursday.getByTestId('calendar-event').filter({ hasText: 'Republic Day dinner' })).toHaveCount(0, { timeout: 30_000 })
   await context.close()
