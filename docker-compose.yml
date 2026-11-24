@@ -12,6 +12,10 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+    # The log's line prefix: PostgreSQL's own by default. CI adds the
+    # SQLSTATE (%e), which its sanitized failure diagnostics keep
+    # (scripts/collect-chat-e2e-diagnostics.sh).
+    command: ["postgres", "-c", "log_line_prefix=${POSTGRES_LOG_LINE_PREFIX:-%m [%p] }"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kutup}"]
       interval: 5s

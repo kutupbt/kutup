@@ -28,6 +28,9 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
+  # The test stacks' database log names each error's SQLSTATE, which the
+  # sanitized failure diagnostics keep (docker-compose.yml).
+  POSTGRES_LOG_LINE_PREFIX: "%m [%p] %e "
 
 jobs:
   format-and-fuzz:

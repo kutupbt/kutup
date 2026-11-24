@@ -61,27 +61,85 @@ error_classes() {
       constraint=" constraint=${BASH_REMATCH[1]}"
     fi
     printf '%s%s\n' "$class" "$constraint"
-  done | sort | uniq -c | awk '{ $1 = $1; n = $1; $1 = ""; sub(/^ /, ""); print $0 " count=" n }'
+  done | count_labels
 }
 
-# A server request-failure line: its status (a number) and its class.
+# Counts identical labels (stdin, one per line): "<label> count=<n>".
+count_labels() {
+  sort | uniq -c | awk '{ n = $1; $1 = ""; sub(/^ /, ""); print $0 " count=" n }'
+}
+
+# A server request-failure line: its status (a number), its class, and the
+# server's fixed label for a database failure (`sqlstate=23505`,
+# `sqlx=PoolTimedOut`: crates/kutup-server/src/error.rs, sql_failure).
 classify_request_failures() {
-  local line status
+  local line status label
   while IFS= read -r line; do
-    status=""
+    status="" label=""
     [[ "$line" =~ status=([0-9]{3}) ]] && status="${BASH_REMATCH[1]}"
-    printf 'status=%s %s\n' "${status:-unknown}" "$(error_classes <<<"$line" | sed 's/ count=1$//')"
-  done | sort | uniq -c | awk '{ n = $1; $1 = ""; sub(/^ /, ""); print $0 " count=" n }'
+    [[ "$line" =~ \((sqlstate=[0-9A-Z]{5}|sqlx=[A-Za-z]{1,40})\) ]] && label=" ${BASH_REMATCH[1]}"
+    printf 'status=%s%s %s\n' "${status:-unknown}" "$label" "$(error_classes <<<"$line" | sed 's/ count=1$//')"
+  done | count_labels
 }
 
-# A database log line: its severity and class.
+# The statement an error was raised in, from its SQL text: the first keyword
+# and, for a plain INSERT, UPDATE, DELETE or SELECT ... FROM, the table, only
+# when it is shaped as a schema identifier. Nothing else of the text.
+statement_label() {
+  local sql="$1" keyword table=""
+  keyword="$(awk '{ print toupper($1) }' <<<"$sql")"
+  case "$keyword" in
+    SELECT | INSERT | UPDATE | DELETE | WITH | MERGE | COPY | VALUES | BEGIN | COMMIT | ROLLBACK | SET | LOCK | DO | CREATE | ALTER | DROP | TRUNCATE) ;;
+    *) keyword=OTHER ;;
+  esac
+  local written='^[[:space:]]*(INSERT[[:space:]]+INTO|UPDATE|DELETE[[:space:]]+FROM|insert[[:space:]]+into|update|delete[[:space:]]+from)[[:space:]]+([a-z_]{1,63}(\.[a-z_]{1,63})?)([[:space:](]|$)'
+  local read='[[:space:]](FROM|from)[[:space:]]+([a-z_]{1,63}(\.[a-z_]{1,63})?)([[:space:]]|$)'
+  if [[ "$sql" =~ $written ]]; then
+    table="${BASH_REMATCH[2]}"
+  elif [[ "$keyword" == SELECT && "$sql" =~ $read ]]; then
+    table="${BASH_REMATCH[2]}"
+  fi
+  printf 'statement=%s%s' "$keyword" "${table:+ table=$table}"
+}
+
+# The database's log (stdin, Compose's "service  | " prefix allowed): each
+# ERROR, FATAL or PANIC as its severity, SQLSTATE (the line prefix's %e:
+# docker-compose.yml), class, and the statement it names on its STATEMENT
+# line (paired by the backend's pid; the SQL may start on the next line).
 classify_database_errors() {
-  local line severity
+  local line text pid code severity sql
+  local -A pending=() waiting=()
+  local raised='\[([0-9]+)\] (([0-9A-Z]{5}) )?(ERROR|FATAL|PANIC): '
+  local statement='\[([0-9]+)\] ([0-9A-Z]{5} )?STATEMENT: +(.*)$'
   while IFS= read -r line; do
-    severity=ERROR
-    [[ "$line" =~ (FATAL|PANIC): ]] && severity="${BASH_REMATCH[1]}"
-    printf 'severity=%s %s\n' "$severity" "$(error_classes <<<"$line" | sed 's/ count=1$//')"
-  done | sort | uniq -c | awk '{ n = $1; $1 = ""; sub(/^ /, ""); print $0 " count=" n }'
+    text="${line#*| }"
+    if [[ "$text" =~ $raised ]]; then
+      pid="${BASH_REMATCH[1]}" code="${BASH_REMATCH[3]}" severity="${BASH_REMATCH[4]}"
+      [[ -n "${pending[$pid]:-}" ]] && printf '%s\n' "${pending[$pid]}"
+      pending[$pid]="severity=$severity sqlstate=${code:-unknown} $(error_classes <<<"$text" | sed 's/ count=1$//')"
+      unset "waiting[$pid]"
+    elif [[ "$text" =~ $statement ]]; then
+      pid="${BASH_REMATCH[1]}" sql="${BASH_REMATCH[3]}"
+      [[ -n "${pending[$pid]:-}" ]] || continue
+      if [[ -z "${sql//[[:space:]]/}" || "$sql" =~ ^[[:space:]]*-- ]]; then
+        waiting[$pid]=1
+      else
+        printf '%s %s\n' "${pending[$pid]}" "$(statement_label "$sql")"
+        unset "pending[$pid]"
+      fi
+    elif [[ ! "$text" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\  ]] && ((${#waiting[@]} > 0)); then
+      # A statement's next line: the first that is SQL, for the one waiting.
+      [[ -z "${text//[[:space:]]/}" || "$text" =~ ^[[:space:]]*-- ]] && continue
+      for pid in "${!waiting[@]}"; do
+        printf '%s %s\n' "${pending[$pid]}" "$(statement_label "$text")"
+        unset "pending[$pid]" "waiting[$pid]"
+        break
+      done
+    fi
+  done
+  for pid in "${!pending[@]}"; do
+    printf '%s\n' "${pending[$pid]}"
+  done
 }
 
 compose=(docker compose)
@@ -89,6 +147,12 @@ if [[ -n "$project" ]]; then
   compose+=(--project-name "$project")
 fi
 compose+=(--file "$compose_file")
+
+# A service's log, without colour: Compose's own (--no-color) and the
+# terminal escapes the server's log writes between a field and its value.
+service_logs() {
+  { "${compose[@]}" logs --no-color "$1" 2>/dev/null || true; } | sed 's/\x1b\[[0-9;]*m//g'
+}
 
 for service in "${services[@]}"; do
   # Only aggregate numbers and fixed labels leave the database. No account,
@@ -113,7 +177,7 @@ for service in "${gateways[@]}"; do
   # Gateway logs can contain request paths and addresses, so retain only fixed
   # lifecycle/error counts. This distinguishes a crashed edge from an
   # unavailable upstream without publishing request data.
-  logs="$("${compose[@]}" logs --no-color "$service" 2>/dev/null || true)"
+  logs="$(service_logs "$service")"
   {
     printf 'emergency_lines=%s\n' "$(grep -Eic '(^|[^a-z])emerg([^a-z]|$)' <<<"$logs" || true)"
     printf 'fatal_lines=%s\n' "$(grep -Eic '(^|[^a-z])fatal([^a-z]|$)' <<<"$logs" || true)"
@@ -126,7 +190,7 @@ done
 for service in "${backends[@]}"; do
   # Logs are inspected in memory but never retained. Only severity/category
   # counts with fixed labels are safe to publish.
-  logs="$("${compose[@]}" logs --no-color "$service" 2>/dev/null || true)"
+  logs="$(service_logs "$service")"
   {
     printf 'error_lines=%s\n' "$(grep -Eic '(^|[^a-z])error([^a-z]|$)' <<<"$logs" || true)"
     printf 'warning_lines=%s\n' "$(grep -Eic '(^|[^a-z])warn(ing)?([^a-z]|$)' <<<"$logs" || true)"
@@ -145,8 +209,8 @@ done
 for service in "${services[@]}"; do
   # The database's own errors, by class (its log can quote statements and
   # values, so only the class and a constraint's name are kept).
-  logs="$("${compose[@]}" logs --no-color "$service" 2>/dev/null || true)"
-  grep -E '(ERROR|FATAL|PANIC):' <<<"$logs" | classify_database_errors >"$output_dir/$service-database-errors.txt" || true
+  logs="$(service_logs "$service")"
+  classify_database_errors <<<"$logs" | count_labels >"$output_dir/$service-database-errors.txt" || true
   [[ -s "$output_dir/$service-database-errors.txt" ]] || echo 'database_errors=0' >"$output_dir/$service-database-errors.txt"
   unset logs
   # Who is waiting on what when the run failed: counts by state, wait event

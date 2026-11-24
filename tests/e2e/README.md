@@ -250,8 +250,11 @@ durable phase names. On stack failure,
 `scripts/collect-chat-e2e-diagnostics.sh` writes sanitized aggregate service,
 checkpoint, and error-category counts: per backend, the HTTP status and a
 fixed error class of each failed request (`pool_timed_out`, `deadlock`,
-`unique_violation constraint=<name>`, ...); per database, its logged errors by
-class and a snapshot of waits and locks by state and mode. It must never retain keys, phrases,
+`unique_violation constraint=<name>`, ...) with the server's label for a
+database failure (`sqlstate=0A000`, `sqlx=PoolTimedOut`); per database, its
+logged errors by SQLSTATE (CI sets `POSTGRES_LOG_LINE_PREFIX` to log it),
+class, and the statement's first keyword and table, and a snapshot of waits and
+locks by state and mode. It must never retain keys, phrases,
 tokens, ciphertext, capabilities, digests, or stable user identifiers.
 
 CI uploads only `tests/e2e/sanitized-results/**` for these jobs. If a failure is
