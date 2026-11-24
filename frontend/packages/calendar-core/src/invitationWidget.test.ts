@@ -10,14 +10,15 @@ import type { Calendar, CalendarEvent } from './api'
 // reading is Rust's (its tests); here the calendars and the server are
 // stand-ins.
 
-const store = vi.hoisted(() => ({
-  series: new Map<string, unknown[]>(),
-  syncs: [] as unknown[],
-  replies: [] as unknown[],
-  replyOutcome: 'applied',
-  invited: [] as unknown[],
-  opened: null,
-}))
+interface Store {
+  series: Map<string, unknown[]>
+  syncs: unknown[]
+  replies: unknown[]
+  replyOutcome: 'applied' | 'stale'
+  invited: unknown[]
+  opened: unknown
+}
+const store = vi.hoisted((): Store => ({ series: new Map(), syncs: [], replies: [], replyOutcome: 'applied', invited: [], opened: null }))
 vi.mock('./api', () => ({
   activeAddressId: () => Promise.resolve('a1'),
   beforeEventWrite: () => Promise.resolve(),
