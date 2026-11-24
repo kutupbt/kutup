@@ -70,6 +70,8 @@ test('a file’s and a folder’s details say what Kutup knows of them', async (
   await expect(details(page).getByTestId('details-signature')).toHaveAttribute('data-verdict', 'verified', { timeout: 30_000 })
   await details(page).getByTestId('details-advanced').click()
   await expect(field(page, 'original-size-bytes')).toHaveText(String(Buffer.byteLength(svg(90))))
+  // The replacement's own digest, never the first upload's.
+  await expect(field(page, 'sha256')).toHaveText(createHash('sha256').update(svg(90)).digest('hex'))
   await details(page).getByRole('button', { name: 'Close' }).last().click()
   await expect(details(page)).toHaveCount(0)
 

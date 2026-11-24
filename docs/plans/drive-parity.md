@@ -108,7 +108,7 @@ Both are cheapest before the wipe.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Name search on the device | `modules/search/internal/` (SharedWorker, WASM, encrypted IndexedDB index, 50,000 entries, opt in) | 🟡 names decrypted in the browser and matched there (`search/SearchPage.tsx`, `editors/src/search.ts`), accents and Turkish i folded; rebuilt per visit, no stored index |
-| Filters: type, date, shared, author | index entry fields (no filter UI) | ✅ the toolbar's type, and on the results: modified (today, 7 days, 30 days, 12 months), location (My files, Shared with me), created by (me, others), shared by me; kept in the URL (`search/FilterBar.tsx`, `search/filters.ts`) |
+| Filters: type, date, shared, author | index entry fields (no filter UI) | 🟡 the toolbar's type, and on the results: modified (today, 7 days, 30 days, 12 months), location (My files, Shared with me), created by (me, others), shared by me; kept in the URL (`search/FilterBar.tsx`, `search/filters.ts`). No filter by a chosen person or a custom date range |
 | Content search | (none) | ❌ neither |
 
 ## Previews and players
