@@ -505,6 +505,56 @@ integration remain tracked in [`roadmap.md`](roadmap.md).
 
 ---
 
+## Edge and serving
+
+Two web servers stand between a browser and the backend, with different jobs.
+
+- **The edge** takes ports 80 and 443. It ends TLS, routes by host name and
+  path to the frontend container, the backend (`/api/`, `/api/fed/`,
+  `/.well-known/`) and LiveKit (`sfu.`), applies per-route body limits,
+  timeouts and rate limits, adds HSTS, `nosniff` and `Referrer-Policy`, and
+  keeps link secrets out of its logs (calendar link keys, Drive and calendar
+  link ids). It also passes TURN over TLS through on 443 by server name,
+  undecrypted (`turn.` to coturn, `sfu-turn.` to LiveKit), so calls work
+  behind firewalls that allow only 443. The default edge is the bundled
+  nginx (`nginx/nginx.conf`, a `stream` block for TURN). The opt-in edge is
+  Koru, a Rust WAF and reverse proxy (`docker-compose.koru.yml`,
+  `koru/render.sh`, [`self-hosting.md`](self-hosting.md) "Koru edge"): the
+  same routes and limits, plus request inspection where bodies are readable
+  (sign-in, registration, public pages, federation) and none on encrypted
+  API bodies, uploads and WebSockets. With Koru, coturn and LiveKit end
+  TURN's TLS themselves, since Koru passes streams through without ending
+  TLS. kutup.dev runs Koru since 2026-11-24
+  ([`research/21-kutup-dev-edge-and-mail-switch.md`](research/21-kutup-dev-edge-and-mail-switch.md)).
+- **The frontend container's own nginx** (`frontend/docker/40-kutup-hosts.sh`)
+  serves each app's built files on its host (404 for any other), falls back
+  to `index.html` for the single-page apps, sets `Cache-Control` per path
+  (content-hashed `/assets/` immutable; pages, the service worker and the
+  WASM runtimes revalidated), and sends each app's Content-Security-Policy.
+  The strict policy (report-only for now) allows `<style>` only with a nonce
+  made for each response: this nginx writes the response's random
+  `$request_id` over the placeholder in `index.html`'s
+  `<meta name="csp-nonce">` and into the header, and serves that page without
+  ETag, Last-Modified or a precompressed copy. The edge never sets CSP.
+  Koru can do this too (a per-response `{nonce}` and body substitution);
+  moving the file serving to Koru and dropping this container is a later
+  step on the roadmap.
+
+**Browser cryptography runtimes.** Rust code runs in the browser as WASM
+runtimes, each a separate file under its app's origin and loaded under the
+CSP's `wasm-unsafe-eval` only: `crypto` (every app), `crypto-calendar`
+(Calendar: event keys, sharing, recurrence), `calendar-ics` (`.ics` import
+and export, loaded only when a file is imported or exported), `chat`,
+`pass` and `mail-search`. Each has a gzipped size budget
+(`frontend/wasm-budgets.json`) that the web gate enforces. A runtime near
+its budget is split, not given a bigger one: `calendar-ics` was split off
+`crypto-calendar` when import and export took it past its budget, after
+building the crypto crate for size (`opt-level = "s"`) was measured and
+refused because it made 4 MiB block sealing 22–33 % slower
+([`plans/calendar.md`](plans/calendar.md) E2c).
+
+---
+
 ## Storage Layer
 
 Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backend uses the Rust `aws-sdk-s3` crate configured to point at the internal SeaweedFS S3 gateway.

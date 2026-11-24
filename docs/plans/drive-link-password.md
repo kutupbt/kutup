@@ -205,3 +205,43 @@ new bytes through the link.
 - Expiry has no cap by default (Proton's links may also never expire; its
   date picker stops at 90 days); an administrator can set one.
 - No human-verification challenge after repeated wrong passwords.
+
+## Security review (2026-11-24)
+
+An independent review read the branch twice before it merged (#434). It
+found no route that gives a URL holder names, keys or the verifier, and no
+offline guessing for the server. What it did find, all fixed before merge:
+
+First round:
+- **Medium.** Clearing the password field and pressing Save, with
+  "Require password" still on, sent an empty password, which the client
+  treated as "remove": the link became open to anyone with the URL. An empty
+  field is now invalid; only the toggle removes a password.
+- **Low.** Setting a password locked the link row, then the target; folder
+  and file re-keys lock the target, then the link. Two at once could
+  deadlock (a 500). Setting a password now locks the target first.
+- A correct password took the per-link counter's row lock and rolled it
+  back, so every viewer of a busy link queued on one row; the count is now
+  read first and written only for a wrong password.
+- The maximum expiry did not stop "never"; 0 now means no cap, and any cap
+  also refuses links that never expire, for links made or changed after it
+  is set.
+- If the owner's copy of the password failed to open, the dialog showed the
+  link as having none; it now shows an error.
+
+Decided by the operator after that round: every read is gated, as Proton
+(downloads, ranges, streams, state, assets, thumbnails), and wrong
+passwords follow Proton (no lock on the link itself, which a URL holder
+could use to shut out every viewer; per link and address, then per address,
+with Retry-After).
+
+Second round, on those changes:
+- **Medium.** The wrong-password counters were checked before the proof and
+  added to after it, so many parallel wrong guesses from one address all got
+  checked. A try is now reserved first and given back when the password was
+  right, in the database and in the address limiter; a live test fires 40
+  parallel wrong proofs at a limit of 2 and sees at most 2 checked.
+- **Low-medium.** Blocking a reported link kept the report's link and
+  password, which the table's CHECK refuses: the block failed with a 500 and
+  the password stayed stored. Blocking now erases both, as every other
+  resolution does.

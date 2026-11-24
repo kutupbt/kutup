@@ -23,6 +23,13 @@ history implementation. It is retained as design and debugging history;
 | [`07-collab-architecture-comparison.md`](./07-collab-architecture-comparison.md) | Point-in-time comparison used to diagnose the then-open XLSX second-direction synchronization problem; the lock-state implementation later resolved it. |
 | [`08-office-cell-formatting-getlock.md`](./08-office-cell-formatting-getlock.md) | Investigation record for the then-open cell-formatting lock failure; the issue is resolved and guarded by Office Playwright specs. |
 
+### Operations and investigations (2026-11)
+
+| File | Topic |
+|---|---|
+| [`21-kutup-dev-edge-and-mail-switch.md`](./21-kutup-dev-edge-and-mail-switch.md) | kutup.dev's MX moved from Cloudflare Email Routing to Kutup, and its edge from nginx to Koru (2026-11-24): the causes, the problems found before and during the switch and their fixes, the checks, and what is left (certificate renewal by 2026-12-15, block mode). |
+| [`22-signup-500-investigation.md`](./22-signup-500-investigation.md) | Open: an intermittent 500 on `POST /api/v1/auth/register` in master CI. Evidence, what is ruled out and why, the diagnostics that should name it next time. |
+
 ### Other forward-looking notes
 
 | File | Topic |
