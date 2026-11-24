@@ -213,6 +213,16 @@ site_common() {
   [ -z "${KORU_BLOCK_CONTACT:-}" ] || printf 'block_contact = "%s"\n' "$(printf '%s' "$KORU_BLOCK_CONTACT" | tr -d '"\\')"
 }
 
+# With certbot renewing the certificate files (docker-compose.koru-certbot.yml):
+# its HTTP-01 answers, from the webroot it writes them to. Let's Encrypt
+# follows the plain-HTTP redirect to HTTPS, so every site serves them; the
+# catch-all site below serves them over plain HTTP for names with no site
+# (the TURN names, passed through on 443 only).
+acme_route() {
+  [ -n "${KORU_ACME_WEBROOT:-}" ] || return 0
+  printf '\n[[site.route]]\npath = "/.well-known/acme-challenge/*"\nroot = "%s"\nmode = "off"\n' "$KORU_ACME_WEBROOT"
+}
+
 body_off='inspect_body = false'
 private='log_query = false\nlog_path = "prefix"'
 
@@ -276,6 +286,7 @@ render() {
   backend_route "/.well-known/kutup/*"
   backend_route "/.well-known/security.txt"
   backend_route "/.well-known/openpgpkey/*"
+  acme_route
   edge_headers
   # The apps tell people to wait on this code (nginx's @rate_limited).
   printf '\n[site.error_pages]\n429 = "%s/429.json"\n' "$out_dir"
@@ -286,6 +297,7 @@ render() {
     site_common
     printf 'max_body_size = "1MB"\n'
     printf '\n[[site.rule]]\nname = "no API on the editor sandbox"\naction = "block"\nstatus = 404\npath = "/api/*"\n'
+    acme_route
     edge_headers
   fi
 
@@ -295,6 +307,7 @@ render() {
     printf '\n[[site]]\nhosts = ["%s"]\nupstreams = ["%s"]\n' "$sfu" "$sfu_upstream"
     site_common
     printf '%s\nread_timeout_secs = 3600\nwrite_timeout_secs = 3600\n' "$body_off"
+    acme_route
     edge_headers sfu
   fi
 
@@ -305,6 +318,12 @@ render() {
   }
   [ -z "$turn" ] || relay_stream "$turn" "$turn_relay"
   [ -z "$sfu_turn" ] || relay_stream "$sfu_turn" "$sfu_turn_relay"
+
+  # Any other name, plain HTTP only: certbot's answers and nothing else
+  # (no TLS, no redirect; the webroot holds only challenge files).
+  if [ -n "${KORU_ACME_WEBROOT:-}" ]; then
+    printf '\n[[site]]\nhosts = ["*"]\nroot = "%s"\nmode = "off"\nhttps_redirect = false\n' "$KORU_ACME_WEBROOT"
+  fi
 }
 
 config=$(render)

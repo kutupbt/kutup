@@ -108,9 +108,19 @@ the `koru` container, restore the edge lines of `.env` from the backup, and
 
 - **Certificate renewal stopped with the switch.** It ran through
   `docker-compose.acme.yml` and nginx's ACME webroot, which Koru does not
-  serve. The certificate on kutup.dev is valid until 2027-01-20. Before
-  2026-12-15 Koru must take over ACME (`KORU_TLS=acme`), and Mail's
-  certificate, which Stalwart's setup copies from `nginx/certs/`, must follow.
+  serve. The certificate on kutup.dev is valid until 2027-01-20. The fix
+  keeps certbot rather than moving to Koru's own ACME, because three other
+  services read the same files: with Koru's ACME, coturn, LiveKit and
+  Stalwart would all have to read Koru's state volume, and Stalwart's setup
+  would have to change. Instead `docker-compose.koru-certbot.yml` runs the
+  same certbot (same account and volumes), Koru answers its HTTP-01
+  challenges from the shared webroot (on every site, since Let's Encrypt
+  follows Koru's redirect to HTTPS, and on a plain-HTTP catch-all for the
+  TURN names, which have no site), certbot writes the key owned by Koru's
+  user, and a systemd path unit reloads Koru and restarts the relays when
+  the certificate changes; Stalwart already watches the files. To do on
+  kutup.dev: add the file to `COMPOSE_FILE`, install the path unit, and run
+  `certbot renew --dry-run` against the staging service.
 - **Block mode** after some days in detect mode, once the events show only
   attacks. `/api/csp-report` bodies (URLs and script samples) are a likely
   false positive to check first.
