@@ -12,3 +12,5 @@ specs/70-public-links.spec.ts
 specs/71-drive-identity.spec.ts
 specs/226-drive-link-password.spec.ts
 specs/227-drive-version-history.spec.ts
+specs/228-drive-details.spec.ts
+specs/229-drive-search-filters.spec.ts

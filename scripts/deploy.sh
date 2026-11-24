@@ -353,7 +353,20 @@ if [ "$edge" = koru ]; then
   grep -E '^KUTUP_KORU_IMAGE(_ID)?=' .env
 fi
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-docker compose up -d --wait
+if [ "$edge" = koru ]; then
+  # Switching a running nginx edge: its container (its profile now off)
+  # keeps the edge ports, and acme (no longer in the compose files) is an
+  # orphan. Both go just before the start; nothing listens for those
+  # seconds. On later deploys there is nothing to remove.
+  docker compose rm -sf nginx >/dev/null
+  docker compose up -d --wait --remove-orphans || {
+    echo "deploy: the stack did not come up behind Koru, and the nginx edge is removed;" >&2
+    echo "deploy: read docker compose logs koru, or go back: docs/self-hosting.md, \"Back to nginx\"" >&2
+    exit 1
+  }
+else
+  docker compose up -d --wait
+fi
 if [ "$edge" = koru ]; then
   # Recreated by `up` for a new image or settings; a reload re-reads the
   # certificates and reopens the logs without dropping a connection.

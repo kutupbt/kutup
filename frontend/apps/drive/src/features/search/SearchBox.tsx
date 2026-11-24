@@ -35,7 +35,10 @@ export function SearchBox() {
     const query = value.trim()
     const timer = setTimeout(() => {
       if (query) {
-        const next = `${SEARCH_PATH}?${new URLSearchParams({ q: query }).toString()}`
+        // On the results page the filters stay as the query changes.
+        const search = new URLSearchParams(onSearch ? window.location.search : '')
+        search.set('q', query)
+        const next = `${SEARCH_PATH}?${search.toString()}`
         void navigate(next, { replace: onSearch })
       } else if (onSearch) {
         void navigate(origin.current, { replace: true })
