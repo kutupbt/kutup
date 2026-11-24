@@ -123,7 +123,8 @@
       "copyTo": "Kopyala…",
       "moveTo": "Taşı…",
       "quickLook": "Hızlı bakış",
-      "versionHistory": "Sürüm geçmişi"
+      "versionHistory": "Sürüm geçmişi",
+      "details": "Ayrıntılar"
     },
     "movedToTrash_one": "Çöp kutusuna taşındı",
     "movedToTrash_other": "{{count}} öğe çöp kutusuna taşındı",
@@ -377,7 +378,31 @@
     "results_other": "“{{query}}” için {{count}} sonuç",
     "noneTitle": "Bir şey bulunamadı",
     "none": "Adında “{{query}}” geçen dosya ya da klasör yok.",
-    "showInFolder": "Klasöründe göster"
+    "showInFolder": "Klasöründe göster",
+    "noneFiltered": "Bu süzgeçlerle adında “{{query}}” geçen dosya ya da klasör yok.",
+    "filters": {
+      "label": "Süzgeçler",
+      "any": "Hepsi",
+      "clear": "Süzgeçleri temizle",
+      "modified": "Değiştirilme",
+      "modifiedWithin": {
+        "today": "Bugün",
+        "week": "Son 7 gün",
+        "month": "Son 30 gün",
+        "year": "Son 12 ay"
+      },
+      "place": "Konum",
+      "places": {
+        "mine": "Dosyalarım",
+        "shared": "Benimle paylaşılanlar"
+      },
+      "createdBy": "Oluşturan",
+      "creators": {
+        "me": "Ben",
+        "others": "Başkaları"
+      },
+      "sharedByMe": "Paylaştıklarım"
+    }
   },
   "quickLook": {
     "loading": "Şifre çözülüyor…",
@@ -478,5 +503,71 @@
     "deleteSubmit": "Kalıcı olarak sil",
     "deleteFailed": "Sürüm silinemedi.",
     "deleted": "Sürüm silindi"
+  },
+  "details": {
+    "titleFile": "Dosya ayrıntıları",
+    "titleFolder": "Klasör ayrıntıları",
+    "titleItems": "Öge ayrıntıları",
+    "name": "Ad",
+    "location": "Konum",
+    "createdBy": "Oluşturan",
+    "lastUploadedBy": "Son yükleyen",
+    "uploaded": "Yüklenme",
+    "created": "Oluşturulma",
+    "modified": "Değiştirilme",
+    "sharedWithYou": "Sizinle paylaşılma",
+    "type": "Tür",
+    "mediaType": "Medya türü",
+    "size": "Boyut",
+    "sizeHint": "Şifrelenmiş veri, onu güvende tutan şifreleme ve imzalar nedeniyle dosyadan biraz daha büyüktür.",
+    "originalSize": "Özgün boyut",
+    "versions": "Sürümler",
+    "shared": "Paylaşım",
+    "notShared": "Yok",
+    "sharedPeople_one": "{{count}} kişiyle",
+    "sharedPeople_other": "{{count}} kişiyle",
+    "sharedLinks_one": "{{count}} herkese açık bağlantı",
+    "sharedLinks_other": "{{count}} herkese açık bağlantı",
+    "folderShared": "Bulunduğu klasör de paylaşılıyor.",
+    "access": "Erişiminiz",
+    "accessView": "Görüntüleyebilir",
+    "accessEdit": "Ekleyip düzenleyebilir",
+    "accessDelete": "Ekleyebilir, düzenleyebilir ve silebilir",
+    "unknownPerson": "Bilinmeyen kişi",
+    "advanced": "Gelişmiş ayrıntılar",
+    "sizeBytes": "Bayt olarak boyut",
+    "originalSizeBytes": "Bayt olarak özgün boyut",
+    "sha256": "SHA-256",
+    "id": "Kimlik",
+    "count": "Öge sayısı",
+    "countFiles_one": "{{count}} dosya",
+    "countFiles_other": "{{count}} dosya",
+    "countFolders_one": "{{count}} klasör",
+    "countFolders_other": "{{count}} klasör",
+    "totalSize": "Toplam boyut",
+    "totalSizeHint": "Seçili dosyaların boyutu. Klasörler ve notlar sayılmaz.",
+    "kinds": {
+      "folder": "Klasör",
+      "note": "Not",
+      "document": "Belge",
+      "spreadsheet": "Hesap tablosu",
+      "presentation": "Sunu",
+      "whiteboard": "Beyaz tahta",
+      "map": "Harita",
+      "pdf": "PDF",
+      "image": "Görsel",
+      "video": "Video",
+      "audio": "Ses",
+      "code": "Kod",
+      "archive": "Arşiv",
+      "other": "Diğer dosya"
+    },
+    "signature": {
+      "checking": "Dijital imza denetleniyor…",
+      "verified": "Dijital imza doğrulandı. Bu sürüm, onu yükleyen kişi tarafından imzalandı.",
+      "verifiedKey": "Dijital imza doğrulandı. Bu sürüm, bildiğiniz bir anahtarla imzalandı.",
+      "unknown": "Dijital imza denetlenemedi: imzalayan kişiyle daha önce karşılaşmadınız ya da anahtarlarına ulaşılamadı.",
+      "failed": "Dijital imza denetlenemedi."
+    }
   }
 }

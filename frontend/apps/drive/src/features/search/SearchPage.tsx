@@ -1,4 +1,4 @@
-import { Download, ExternalLink, FolderOpen } from 'lucide-react'
+import { Download, ExternalLink, FolderOpen, Info } from 'lucide-react'
 import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -17,6 +17,11 @@ import { Toolbar } from '../explorer/Toolbar'
 import { FileThumbnail } from '../thumbnails/FileThumbnail'
 import { matches, terms } from '@kutup/editors/search'
 import { useDriveIndex } from '@kutup/editors/driveIndex'
+import { sharedByMeRowOf, useSharedByMeRows } from '@kutup/drive-core/sharedByMe'
+import { useRequiredSession } from '@kutup/session/store'
+import { DetailsDialog } from '../details/DetailsDialog'
+import { FilterBar } from './FilterBar'
+import { activeFilters, filtersFromParams, passesFilters, withFilters, type FilterSubject } from './filters'
 
 type Hit = { folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile }
 
@@ -40,19 +45,42 @@ function trail(index: FolderIndex, folder: Folder, myFiles: string): string {
 export function SearchPage() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const query = params.get('q') ?? ''
+  const filters = useMemo(() => filtersFromParams(params), [params])
+  const filtering = activeFilters(filters) > 0
+  const session = useRequiredSession()
+  const me = session.accountId
   const { index, files, loading } = useDriveIndex(true)
+  // What this account shares, for the "Shared by me" filter.
+  const sharing = useSharedByMeRows()
   const [prefs, updatePrefs] = useExplorerPrefs()
   const [selection, setSelection] = useState<Set<string>>(new Set())
+  const [details, setDetails] = useState<Hit | null>(null)
 
   const { items, hits } = useMemo(() => {
     const hits = new Map<string, Hit>()
     const items: ExplorerItem[] = []
     if (!index) return { items, hits }
+    const now = new Date()
+    const rows = sharing.data
+    // A folder's creator is its owner; a file's, its uploader (on this server: another server's ids are its own).
+    const folderSubject = (folder: Folder): FilterSubject => ({
+      modifiedAt: folder.updatedAt,
+      owned: folder.source === 'owned',
+      createdByMe: folder.source !== 'remote' && folder.ownerAccountId === me,
+      sharedByMe: folder.source === 'owned' && Boolean(sharedByMeRowOf(rows, folder.id)),
+    })
+    const fileSubject = (folder: Folder, file: DriveFile): FilterSubject => ({
+      modifiedAt: file.updatedAt,
+      owned: folder.source === 'owned',
+      createdByMe: folder.source !== 'remote' && file.uploaderAccountId === me,
+      sharedByMe: folder.source === 'owned' && Boolean(sharedByMeRowOf(rows, folder.id, file.id)),
+    })
     const q = terms(query)
     for (const folder of index.all) {
       if (folder.isRoot || !folder.name || !matches(folder.name, q)) continue
+      if (!passesFilters(folderSubject(folder), filters, now)) continue
       const item: ExplorerItem = {
         type: 'folder',
         id: folder.remoteShareId ?? folder.id,
@@ -67,6 +95,7 @@ export function SearchPage() {
     }
     for (const { folder, file } of files) {
       if (!matches(file.name!, q)) continue
+      if (!passesFilters(fileSubject(folder, file), filters, now)) continue
       const item: ExplorerItem = {
         type: 'file',
         id: file.id,
@@ -79,7 +108,7 @@ export function SearchPage() {
       hits.set(itemKey(item), { folder, file })
     }
     return { items, hits }
-  }, [index, files, query])
+  }, [index, files, query, filters, sharing.data, me])
 
   const shown = useMemo(
     () => sortItems(filterItems(items, prefs.kinds), prefs.sort, i18n.language),
@@ -138,6 +167,7 @@ export function SearchPage() {
       icon: <Download />,
       onSelect: () => void save(hit),
     })
+    actions.push({ id: 'details', label: t('drive.actions.details'), icon: <Info />, onSelect: () => setDetails(hit), separated: true })
     return actions
   }
 
@@ -149,11 +179,15 @@ export function SearchPage() {
         </h1>
         <Toolbar prefs={prefs} update={updatePrefs} />
       </div>
+      <FilterBar
+        filters={filters}
+        onChange={(next) => setParams(withFilters(params, next), { replace: true })}
+      />
       {shown.length === 0 ? (
-        loading ? (
+        loading || (filters.sharedByMe && sharing.isPending) ? (
           <LoadingPanel label={t('search.searching', { query })} />
         ) : (
-          <EmptyState title={t('search.noneTitle')} description={t('search.none', { query })} />
+          <EmptyState title={t('search.noneTitle')} description={filtering ? t('search.noneFiltered', { query }) : t('search.none', { query })} />
         )
       ) : (
         <Explorer
@@ -186,6 +220,7 @@ export function SearchPage() {
           }}
         />
       )}
+      {index ? <DetailsDialog targets={details ? [details] : null} index={index} onClose={() => setDetails(null)} /> : null}
     </div>
   )
 }

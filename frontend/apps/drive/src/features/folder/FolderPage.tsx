@@ -1,4 +1,4 @@
-import { CheckCheck, Copy, Download, ExternalLink, Eye, FolderInput, History, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
+import { CheckCheck, Copy, Download, ExternalLink, Eye, FolderInput, History, Info, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
 import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
 import { useCallback, useMemo, useState, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -47,6 +47,7 @@ import { QuickLook, type QuickLookTarget } from '../quicklook/QuickLook'
 import { FileThumbnail } from '../thumbnails/FileThumbnail'
 import { useUploadActions } from '../uploads/useUploadActions'
 import { VersionHistoryDialog } from '../versions/VersionHistoryDialog'
+import { DetailsDialog } from '../details/DetailsDialog'
 
 type Target = { folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile }
 type Dialog =
@@ -57,6 +58,8 @@ type Dialog =
   | { kind: 'shareFile'; key: string }
   /** By key too: a restore or delete changes the file, the list refreshes it. */
   | { kind: 'history'; key: string }
+  /** By keys too: the dialog follows the items as the list refreshes them. */
+  | { kind: 'details'; keys: string[] }
   | { kind: 'link'; url: string }
   | { kind: 'invite'; url: string; account: string }
   | { kind: 'copy'; targets: Target[] }
@@ -317,6 +320,7 @@ export function FolderPage() {
         if (container.canUpload && folderLocation(container).kind === 'local') {
           actions.push({ id: 'history', label: t('drive.actions.versionHistory'), icon: <History />, onSelect: () => setDialog({ kind: 'history', key: itemKey(item) }), separated: true })
         }
+        actions.push({ id: 'details', label: t('drive.actions.details'), icon: <Info />, onSelect: () => setDialog({ kind: 'details', keys: [itemKey(item)] }), separated: true })
         if (mayChangeFile(container, file) && container.source !== 'remote') {
           actions.push({ id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setDialog({ kind: 'rename', target }), separated: true })
         }
@@ -333,6 +337,7 @@ export function FolderPage() {
       if (mayMove(target)) {
         actions.push({ id: 'move', label: t('drive.actions.moveTo'), icon: <FolderInput />, onSelect: () => setDialog({ kind: 'move', targets: [target] }) })
       }
+      actions.push({ id: 'details', label: t('drive.actions.details'), icon: <Info />, onSelect: () => setDialog({ kind: 'details', keys: [itemKey(item)] }), separated: !f.canManage })
       if (f.canManage) {
         actions.push(
           { id: 'share', label: t('drive.actions.share'), icon: <UserPlus />, onSelect: () => setDialog({ kind: 'share', folder: f }), separated: true },
@@ -385,6 +390,13 @@ export function FolderPage() {
     if (targets.every(mayMove)) {
       actions.push({ id: 'move', label: t('drive.actions.moveTo'), icon: <FolderInput />, onSelect: () => setDialog({ kind: 'move', targets }) })
     }
+    actions.push({
+      id: 'details',
+      label: t('drive.actions.details'),
+      icon: <Info />,
+      onSelect: () => setDialog({ kind: 'details', keys: targets.map((target) => itemKey(target.file ? { type: 'file', id: target.file.id } : { type: 'folder', id: target.folder.id })) }),
+      separated: true,
+    })
     if (trashable.length === targets.length) {
       actions.push({ id: 'trash', label: t('drive.actions.trash'), icon: <Trash2 />, onSelect: () => void moveToTrash(targets), destructive: true, separated: true })
     }
@@ -661,6 +673,19 @@ export function FolderPage() {
             if (!(error instanceof DOMException && error.name === 'AbortError')) toast.error(t('versions.downloadFailed'))
           })
         }}
+      />
+      <DetailsDialog
+        targets={(() => {
+          if (dialog?.kind !== 'details') return null
+          const targets = dialog.keys.flatMap((key) => {
+            const target = lookup.get(key)
+            return target ? [target] : []
+          })
+          // Gone from the list (trashed, moved by someone): nothing to show.
+          return targets.length > 0 ? targets : null
+        })()}
+        index={index}
+        onClose={() => setDialog(null)}
       />
       <VersionHistoryDialog
         target={(() => {

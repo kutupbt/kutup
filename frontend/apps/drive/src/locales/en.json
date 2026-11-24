@@ -123,7 +123,8 @@
       "copyTo": "Copy to…",
       "moveTo": "Move to…",
       "quickLook": "Quick look",
-      "versionHistory": "Version history"
+      "versionHistory": "Version history",
+      "details": "Details"
     },
     "movedToTrash_one": "Moved to trash",
     "movedToTrash_other": "{{count}} items moved to trash",
@@ -377,7 +378,31 @@
     "results_other": "{{count}} results for “{{query}}”",
     "noneTitle": "Nothing found",
     "none": "No file or folder name contains “{{query}}”.",
-    "showInFolder": "Show in folder"
+    "showInFolder": "Show in folder",
+    "noneFiltered": "No file or folder name contains “{{query}}” with these filters.",
+    "filters": {
+      "label": "Filters",
+      "any": "Any",
+      "clear": "Clear filters",
+      "modified": "Modified",
+      "modifiedWithin": {
+        "today": "Today",
+        "week": "Last 7 days",
+        "month": "Last 30 days",
+        "year": "Last 12 months"
+      },
+      "place": "Location",
+      "places": {
+        "mine": "My files",
+        "shared": "Shared with me"
+      },
+      "createdBy": "Created by",
+      "creators": {
+        "me": "Me",
+        "others": "Others"
+      },
+      "sharedByMe": "Shared by me"
+    }
   },
   "quickLook": {
     "loading": "Decrypting…",
@@ -478,5 +503,71 @@
     "deleteSubmit": "Delete permanently",
     "deleteFailed": "The version could not be deleted.",
     "deleted": "Version deleted"
+  },
+  "details": {
+    "titleFile": "File details",
+    "titleFolder": "Folder details",
+    "titleItems": "Item details",
+    "name": "Name",
+    "location": "Location",
+    "createdBy": "Created by",
+    "lastUploadedBy": "Last uploaded by",
+    "uploaded": "Uploaded",
+    "created": "Created",
+    "modified": "Modified",
+    "sharedWithYou": "Shared with you",
+    "type": "Type",
+    "mediaType": "Media type",
+    "size": "Size",
+    "sizeHint": "The encrypted data is slightly larger than the file, because of the encryption and signatures that keep it safe.",
+    "originalSize": "Original size",
+    "versions": "Versions",
+    "shared": "Shared",
+    "notShared": "No",
+    "sharedPeople_one": "With {{count}} person",
+    "sharedPeople_other": "With {{count}} people",
+    "sharedLinks_one": "{{count}} public link",
+    "sharedLinks_other": "{{count}} public links",
+    "folderShared": "Its folder is shared too.",
+    "access": "Your access",
+    "accessView": "Can view",
+    "accessEdit": "Can add and edit",
+    "accessDelete": "Can add, edit and delete",
+    "unknownPerson": "Unknown person",
+    "advanced": "Advanced details",
+    "sizeBytes": "Size in bytes",
+    "originalSizeBytes": "Original size in bytes",
+    "sha256": "SHA-256",
+    "id": "ID",
+    "count": "Number of items",
+    "countFiles_one": "{{count}} file",
+    "countFiles_other": "{{count}} files",
+    "countFolders_one": "{{count}} folder",
+    "countFolders_other": "{{count}} folders",
+    "totalSize": "Total size",
+    "totalSizeHint": "The size of the selected files. Folders and notes are not counted.",
+    "kinds": {
+      "folder": "Folder",
+      "note": "Note",
+      "document": "Document",
+      "spreadsheet": "Spreadsheet",
+      "presentation": "Presentation",
+      "whiteboard": "Whiteboard",
+      "map": "Map",
+      "pdf": "PDF",
+      "image": "Image",
+      "video": "Video",
+      "audio": "Audio",
+      "code": "Code",
+      "archive": "Archive",
+      "other": "Other file"
+    },
+    "signature": {
+      "checking": "Checking the digital signature…",
+      "verified": "Digital signature verified. This version was signed by the person who uploaded it.",
+      "verifiedKey": "Digital signature verified. This version was signed with a key you know.",
+      "unknown": "The digital signature could not be checked: you have not met the person who signed it, or their keys could not be looked up.",
+      "failed": "The digital signature could not be checked."
+    }
   }
 }
