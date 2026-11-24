@@ -8,7 +8,7 @@
 // reaches the server; the events open in WASM.
 
 import { calendarEventKeyId, calendarLinkAccessProof, openCalendarLink, type SealedEvent, type SealedMetadata, type UnlockedCalendar } from '@kutup/crypto/calendar'
-import { timesOf, type CalendarEvent } from '@kutup/calendar-core/api'
+import { plainEventParts, timesOf, type CalendarEvent } from '@kutup/calendar-core/api'
 import { resolveApiBase } from '@kutup/session/apiBase'
 
 /** One key generation as a full link's page serves it: that generation's passphrase sealed under the link's secret. */
@@ -168,7 +168,7 @@ export async function loadPublicEvents(linkId: string, calendar: PublicCalendar,
         if (!key) throw new Error('no key of its generation')
         const opened = key.openEvent(row.event, [])
         const times = await timesOf(opened.fields)
-        events.push({ id: row.id, calendarId: calendar.calendarId, fields: opened.fields, ...times, revision: 0, reminders: null, verified: false })
+        events.push({ id: row.id, calendarId: calendar.calendarId, fields: opened.fields, ...times, revision: 0, reminders: null, verified: false, ...plainEventParts(row.id, row.event) })
       } catch {
         unreadable++
       }

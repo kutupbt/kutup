@@ -1342,6 +1342,23 @@ fn build_router(state: AppState) -> Router {
             post(handlers::calendar::sync),
         )
         .route(
+            "/api/v1/calendar/calendars/:id/events/adopt",
+            post(handlers::calendar_invitations::adopt),
+        )
+        .route(
+            "/api/v1/calendar/shared-events/:id/attendees/:token",
+            put(handlers::calendar_invitations::answer),
+        )
+        .route(
+            "/api/v1/calendar/invitations/events",
+            get(handlers::calendar_invitations::invitations),
+        )
+        .route(
+            "/api/v1/calendar/settings/invitations",
+            get(handlers::calendar_invitations::settings)
+                .put(handlers::calendar_invitations::update_settings),
+        )
+        .route(
             "/api/v1/calendar/alarms",
             get(handlers::calendar_reminders::alarms),
         )

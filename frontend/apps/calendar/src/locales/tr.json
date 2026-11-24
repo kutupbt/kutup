@@ -616,5 +616,50 @@
       "retry": "Yeniden dene",
       "failed": "Takvim dışa aktarılamadı."
     }
+  },
+  "invitations": {
+    "field": "Katılımcılar",
+    "addPlaceholder": "Katılımcı ekleyin",
+    "add": "Ekle",
+    "invalidAddress": "Bir e-posta adresi girin.",
+    "selfInvitation": "Kendinizi davet edemezsiniz",
+    "already": "Bu katılımcı zaten eklendi.",
+    "tooMany": "Bir etkinlik en çok {{count}} kişiyi davet eder.",
+    "optional": "İsteğe bağlı",
+    "makeOptional": "Bu katılımcıyı isteğe bağlı yap",
+    "makeRequired": "Bu katılımcıyı zorunlu yap",
+    "remove": "{{email}} kişisini kaldır",
+    "showBusy": "Meşgul zamanları göster",
+    "hideBusy": "Meşgul zamanları gizle",
+    "availabilityUnknown": "Uygunluk bilinmiyor",
+    "busyThen": "Bu saatte meşgul",
+    "freeThen": "Bu saatte boş",
+    "busyAllDay": "Tüm gün meşgul",
+    "notOrganizer": "Bu etkinliğe davet edildiniz: onu yalnızca düzenleyeni değiştirir. Etkinlik görünümünden yanıtlayın.",
+    "notOwnCalendar": "Davetler yalnızca kendi takvimlerinizden gönderilir.",
+    "refused": {
+      "inviteeUnknown": "Bir katılımcının adresi bu sunucuda artık bilinmiyor. Onu kaldırıp yeniden ekleyin.",
+      "tooManyAttendees": "Bu etkinlik sunucunun izin verdiğinden fazla kişiyi davet ediyor.",
+      "selfInvitation": "Kendinizi davet edemezsiniz"
+    },
+    "notSent": "Etkinlik kaydedildi, ancak davet şu adreslere gönderilemedi: {{addresses}}",
+    "sendAgain": "Yeniden gönder",
+    "sent": "Davetler gönderildi",
+    "deleteDescription": "Etkinlik kalıcı olarak silinir ve katılımcılarına bildirilir.",
+    "partstat": {
+      "needs-action": "Henüz yanıtlanmadı",
+      "accepted": "Katılıyor",
+      "tentative": "Belki katılıyor",
+      "declined": "Katılmıyor"
+    },
+    "settings": {
+      "sendIn": "Gönderim dili",
+      "appLanguage": "Uygulamanın dili",
+      "sendInHint": "Etkinlik davetleri ve yanıtları bu dilde gönderilir.",
+      "autoAdd": "Takvime ekle ve bekliyor olarak işaretle",
+      "autoAddHint": "Aldığınız davetler hemen takviminize eklenir. Düzenleyenin yanıtınızı görmesi için yine de yanıt vermeniz gerekir.",
+      "saved": "Tercih kaydedildi",
+      "failed": "Tercih kaydedilemedi."
+    }
   }
 }

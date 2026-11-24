@@ -1,6 +1,6 @@
 //! iCalendar files as others write and read them (docs/plans/calendar.md,
 //! E2 §5–6): the one place Kutup reads and writes outside `.ics` text, so
-//! the import, the export, invitations (E4, docs/plans/calendar-e4.md §2)
+//! the import, the export, invitations ([`itip`], E4, docs/plans/calendar-e4.md §2)
 //! and calendars added from a URL (E5) read alike.
 //!
 //! - [`reader`]: the lenient reader, repairing what Proton's `icsSurgery`
@@ -18,6 +18,7 @@
 
 pub mod export;
 pub mod import;
+pub mod itip;
 pub mod reader;
 pub mod value;
 mod zone_names;

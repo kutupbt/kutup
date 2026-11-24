@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@kutup/calendar-core": "workspace:*",
+    "@kutup/contacts-core": "workspace:*",
     "@kutup/crypto": "workspace:*",
     "@kutup/drive-ui": "workspace:*",
     "@kutup/drive-core": "workspace:*",

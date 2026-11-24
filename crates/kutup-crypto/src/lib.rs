@@ -57,6 +57,8 @@ pub mod calendar_event;
 #[cfg(feature = "calendar-format")]
 pub mod calendar_ics;
 #[cfg(feature = "calendar")]
+pub mod calendar_invitation;
+#[cfg(feature = "calendar")]
 pub mod calendar_link;
 #[cfg(feature = "calendar-format")]
 pub mod calendar_recurrence;

@@ -142,7 +142,7 @@ pub enum ImportOutcomeV1 {
 }
 
 /// Proton's methods (`ICAL_METHOD`); none written is `PUBLISH`.
-const METHODS: [&str; 8] = [
+pub(super) const METHODS: [&str; 8] = [
     "PUBLISH",
     "REQUEST",
     "REPLY",
@@ -221,6 +221,7 @@ pub fn import(text: &str, options: &ImportOptionsV1) -> crate::error::Result<Imp
     let context = Context {
         publish: method == "PUBLISH",
         reply: method == "REPLY",
+        keep_uid: false,
         has_x_wr: x_wr.is_some(),
         calendar_zone: x_wr.as_deref().and_then(supported_time_zone),
         guess_zone,
@@ -341,19 +342,23 @@ pub fn import(text: &str, options: &ImportOptionsV1) -> crate::error::Result<Imp
     Ok(ImportOutcomeV1::Read(result))
 }
 
-struct Context {
-    publish: bool,
-    reply: bool,
-    has_x_wr: bool,
+pub(super) struct Context {
+    pub(super) publish: bool,
+    pub(super) reply: bool,
+    /// An invitation read for itself (`super::itip`): its UID is kept, as
+    /// the organizer's series is named by it, instead of hashed as an
+    /// import of one is.
+    pub(super) keep_uid: bool,
+    pub(super) has_x_wr: bool,
     /// `X-WR-TIMEZONE`'s zone, when it names one.
-    calendar_zone: Option<String>,
-    guess_zone: String,
-    now: Timestamp,
-    max_count: u16,
-    max_reminders: usize,
+    pub(super) calendar_zone: Option<String>,
+    pub(super) guess_zone: String,
+    pub(super) now: Timestamp,
+    pub(super) max_count: u16,
+    pub(super) max_reminders: usize,
 }
 
-enum Refusal {
+pub(super) enum Refusal {
     Shown(ErrorKind),
     /// No occurrence left: dropped without a word (Proton's hidden error).
     Hidden,
@@ -365,8 +370,8 @@ impl From<ErrorKind> for Refusal {
     }
 }
 
-struct Candidate {
-    fields: EventFieldsV1,
+pub(super) struct Candidate {
+    pub(super) fields: EventFieldsV1,
     reminders: Vec<ReminderV1>,
     id: String,
     start: EventTime,
@@ -483,7 +488,7 @@ fn keep_end(text: &str, max: usize) -> &str {
 /// characters the parts refuse; none when empty (Proton's
 /// getSupportedStringValue).
 #[inline(never)]
-fn supported_text(prop: Option<&Property>, max: usize) -> Option<String> {
+pub(super) fn supported_text(prop: Option<&Property>, max: usize) -> Option<String> {
     let text = value::text(&prop?.value)
         .replace("\r\n", "\n")
         .replace('\r', "\n");
@@ -631,7 +636,7 @@ fn supported_sequence(prop: Option<&Property>) -> u32 {
     }
 }
 
-fn event(component: &Component, context: &Context) -> Result<Candidate, Refusal> {
+pub(super) fn event(component: &Component, context: &Context) -> Result<Candidate, Refusal> {
     let id = identifier(component);
     let start_prop = component
         .property("DTSTART")
@@ -651,7 +656,7 @@ fn event(component: &Component, context: &Context) -> Result<Candidate, Refusal>
                 .to_owned()
         })
         .filter(|uid| !uid.is_empty());
-    let hashed = read_uid.is_none() || !context.publish;
+    let hashed = read_uid.is_none() || !(context.publish || context.keep_uid);
     let uid = match (&read_uid, hashed) {
         (Some(uid), false) => keep_end(uid, MAX_UID_LEN).to_owned(),
         (uid, _) => hash_uid(&component.digest, uid.as_deref()),

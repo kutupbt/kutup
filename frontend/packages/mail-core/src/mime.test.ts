@@ -78,6 +78,15 @@ describe('mime', () => {
     const part = attachmentPart({ name: 'şirket raporu.pdf', type: 'application/pdf', bytes: new Uint8Array(1000) })
     expect(describePart(part)).toEqual({ name: 'şirket raporu.pdf', type: 'application/pdf', size: 1000 })
   })
+
+  it('keeps a type with parameters, as an invitation is sent', () => {
+    const part = attachmentPart({ name: 'invite.ics', type: 'text/calendar; method=REQUEST; charset=utf-8', bytes: new Uint8Array(10) })
+    expect(new TextDecoder().decode(part)).toContain('Content-Type: text/calendar; method=REQUEST; charset=utf-8; name="invite.ics"\r\n')
+    expect(describePart(part).type).toBe('text/calendar')
+    // Anything else in a parameter is no type at all.
+    const odd = attachmentPart({ name: 'x', type: 'text/calendar; method="a\r\nB: c"', bytes: new Uint8Array(1) })
+    expect(new TextDecoder().decode(odd)).toContain('Content-Type: application/octet-stream;')
+  })
 })
 
 describe('auto-replies', () => {

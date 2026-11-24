@@ -1860,7 +1860,12 @@ pub async fn busy(
             "busyWindowTooLong",
         ));
     }
-    let nothing = || Ok(Json(BusyList { busy: Vec::new() }));
+    let nothing = || {
+        Ok(Json(BusyList {
+            busy: Vec::new(),
+            accessible: false,
+        }))
+    };
     let address = query.address.trim();
     if address.is_empty() || address.len() > 320 {
         return nothing();
@@ -1899,9 +1904,15 @@ pub async fn busy(
     .bind(person)
     .fetch_all(&state.pool)
     .await?;
+    if calendars.is_empty() {
+        return nothing();
+    }
     let busy: Vec<BusyBlock> =
         crate::calendar_busy::blocks(&state.pool, &calendars, start, end).await?;
-    Ok(Json(BusyList { busy }))
+    Ok(Json(BusyList {
+        busy,
+        accessible: true,
+    }))
 }
 
 // ----- compaction -----

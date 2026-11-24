@@ -752,6 +752,18 @@ async fn calendar_settings(
         sync_batch: CALENDAR_SYNC_BATCH.load(pool).await?,
         max_count: CALENDAR_MAX_COUNT.load(pool).await?,
         reminders_per_event: CALENDAR_REMINDERS_PER_EVENT.load(pool).await?,
+        attendees_per_event: crate::site_settings::CALENDAR_ATTENDEES_PER_EVENT
+            .load(pool)
+            .await?,
+        invitation_count_max: crate::site_settings::CALENDAR_INVITATION_COUNT_MAX
+            .load(pool)
+            .await?,
+        busy_shown_max: crate::site_settings::CALENDAR_BUSY_SHOWN_MAX
+            .load(pool)
+            .await?,
+        invitation_ics_max_bytes: crate::site_settings::CALENDAR_INVITATION_ICS_MAX_BYTES
+            .load(pool)
+            .await?,
     })
 }
 

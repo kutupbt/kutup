@@ -6,6 +6,8 @@
 mod blocks;
 #[cfg(feature = "calendar")]
 mod calendar;
+#[cfg(feature = "calendar")]
+mod calendar_invitation;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;

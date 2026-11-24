@@ -393,7 +393,13 @@ pub async fn busy(
         ));
     }
     let busy = crate::calendar_busy::blocks(&state.pool, &[link.calendar], start, end).await?;
-    Ok(no_store(Json(BusyList { busy }).into_response()))
+    Ok(no_store(
+        Json(BusyList {
+            busy,
+            accessible: true,
+        })
+        .into_response(),
+    ))
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]

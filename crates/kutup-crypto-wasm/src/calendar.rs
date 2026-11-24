@@ -20,21 +20,24 @@ use wasm_bindgen::prelude::*;
 
 use crate::{account_keys, decode_canonical_base64, js_error, open_mail_secret};
 
-fn crypto_error(error: kutup_crypto::error::CryptoError) -> JsValue {
+pub(crate) fn crypto_error(error: kutup_crypto::error::CryptoError) -> JsValue {
     js_error(&error.to_string())
 }
 
-fn from_js<T: for<'de> Deserialize<'de>>(value: JsValue, what: &str) -> Result<T, JsValue> {
+pub(crate) fn from_js<T: for<'de> Deserialize<'de>>(
+    value: JsValue,
+    what: &str,
+) -> Result<T, JsValue> {
     serde_wasm_bindgen::from_value(value).map_err(|error| js_error(&format!("{what}: {error}")))
 }
 
-fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
+pub(crate) fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
     value
         .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
         .map_err(|error| js_error(&error.to_string()))
 }
 
-fn public_keys(keys: &[String]) -> Result<Vec<Vec<u8>>, JsValue> {
+pub(crate) fn public_keys(keys: &[String]) -> Result<Vec<Vec<u8>>, JsValue> {
     keys.iter()
         .map(|key| decode_canonical_base64(key, "public key"))
         .collect()
@@ -127,7 +130,7 @@ pub fn create_calendar(
 /// derived from its own secret, never to one the server lists.
 #[wasm_bindgen(js_name = UnlockedCalendar)]
 pub struct UnlockedCalendarJs {
-    key: UnlockedCalendarKey,
+    pub(crate) key: UnlockedCalendarKey,
 }
 
 /// Opens the account's own share of a calendar's passphrase (the calendar

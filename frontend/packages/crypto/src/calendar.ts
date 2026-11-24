@@ -10,7 +10,7 @@
 import type { IdentityRoot } from './accountRoots'
 import type { MasterKeys } from './masterKeys'
 import type { SealedMailKey } from './mailKey'
-import { getCryptoWasm } from './rustWasm'
+import { getCalendarCryptoWasm } from './rustWasm'
 
 /** A time as the Rust core writes it (`TimeV1`). */
 export type CalendarTime =
@@ -140,6 +140,100 @@ export interface UnlockedCalendar {
   sealLinkPurpose(...args: [...KeyArgs, calendarId: string, linkId: string, purpose: string]): SealedMetadata
   /** Refused unless the purpose names `calendarId` and `linkId`. */
   openLinkPurpose(sealed: SealedMetadata, calendarId: string, linkId: string, authorPublicKeys: string[]): { purpose: string; verified: boolean }
+  /**
+   * Seals an event the organizer invites people to (docs/plans/calendar-e4.md
+   * §3): under `previous`'s session keys when it is a change (its attendees'
+   * copies and tokens hold the shared one), the attendee part, each
+   * attendee's token, and the shared session key to each Kutup invitee's
+   * address key. No attendees: an ordinary event (`attendees` null).
+   */
+  sealInvitation(author: SealedMailKey, fields: EventFields, attendees: Attendee[], invitees: { address: string; publicKey: string }[], previous: SealedEvent | null): SealedInvitation
+  /** Opens an event and its attendee part: the shared parts against the organizer's keys, the calendar parts against their own author's. */
+  openEventWith(event: SealedEvent, attendees: EventPart | null, sharedAuthorKeys: string[], calendarAuthorKeys: string[]): OpenedInvitationEvent
+  /** Opens an event's answer rows: each answer if it opens for its row, and whether one of the keys signed it. */
+  openAnswers(event: SealedEvent, sharedEventId: string, rows: { token: string; answer: string | null }[], signerKeys: string[]): OpenedAnswer[]
+  /** Seals `email`'s answer on an event this calendar holds, signed by `signer`. */
+  sealAnswer(signer: SealedMailKey, event: SealedEvent, sharedEventId: string, email: string, partstat: Partstat, note: string | null, updatedAt: string): SealedAnswer
+  free(): void
+}
+
+/** One invited person as the organizer lists them (`AttendeeV1`). */
+export interface Attendee {
+  email: string
+  name?: string | null
+  optional?: boolean
+}
+
+/** An answer (`AnswerV1`). */
+export type Partstat = 'needs-action' | 'accepted' | 'tentative' | 'declined'
+
+export interface Answer {
+  v: number
+  sharedEventId: string
+  token: string
+  partstat: Partstat
+  note?: string
+  updatedAt: string
+}
+
+export interface OpenedAnswer {
+  token: string
+  answer: Answer | null
+  verified: boolean
+}
+
+export interface SealedAnswer {
+  token: string
+  answer: string
+}
+
+export interface AttendeeToken {
+  email: string
+  token: string
+}
+
+export interface SealedInvitation {
+  event: SealedEvent
+  attendees: EventPart | null
+  tokens: AttendeeToken[]
+  invitees: { address: string; keyPacket: string }[]
+}
+
+export interface OpenedInvitationEvent {
+  fields: EventFields
+  verified: boolean
+  attendees: Attendee[] | null
+  attendeesVerified: boolean
+  tokens: AttendeeToken[]
+}
+
+/** What an attendee's own copy says (its calendar parts). */
+export interface OwnParts {
+  dtstamp: string
+  status?: 'tentative' | 'confirmed' | 'cancelled' | null
+  transp?: 'opaque' | 'transparent' | null
+  exdates?: CalendarTime[]
+  comment?: string | null
+}
+
+/** An adopted copy's row, for `POST …/events/adopt`. */
+export interface AdoptedRow {
+  sharedKeyPacket: string
+  calendarKeyPacket: string
+  calendarSigned: EventPart
+  calendarEncrypted: EventPart | null
+}
+
+/**
+ * An invitation a Kutup attendee opened with their address key (§6): its
+ * shared session key stays in WASM; `free()` it when done.
+ */
+export interface OpenedInvitation {
+  readonly view: { fields: EventFields; verified: boolean; attendees: Attendee[]; attendeesVerified: boolean; tokens: AttendeeToken[] }
+  tokenFor(email: string): string
+  sealAnswer(signer: SealedMailKey, sharedEventId: string, email: string, partstat: Partstat, note: string | null, updatedAt: string): SealedAnswer
+  openAnswers(sharedEventId: string, rows: { token: string; answer: string | null }[], signerKeys: string[]): OpenedAnswer[]
+  adopt(calendar: UnlockedCalendar, adopter: SealedMailKey, own: OwnParts): AdoptedRow
   free(): void
 }
 
@@ -263,11 +357,12 @@ interface CalendarWasm {
   calendarSupportedUntil(start: CalendarTime, date: string): CalendarTime
   calendarOccurrences(fields: EventFields, from: string, to: string, max: number): Occurrence[]
   calendarRangeEnd(fields: EventFields): string | null | undefined
+  openInvitation(addressKey: SealedMailKey, keyPacket: string, shared: { sharedSigned: EventPart; sharedEncrypted: EventPart; attendees: EventPart | null }, organizerKeys: string[]): OpenedInvitation
 }
 
 /** The loaded runtime's calendar functions; an app that loaded `crypto` has none. */
 async function wasm(): Promise<CalendarWasm> {
-  const module = (await getCryptoWasm()) as unknown as Partial<CalendarWasm>
+  const module = (await getCalendarCryptoWasm()) as unknown as Partial<CalendarWasm>
   if (typeof module.unlockCalendar !== 'function') {
     throw new Error('this app loads the crypto runtime without calendars (use crypto-calendar)')
   }
@@ -457,4 +552,18 @@ export interface LinkKeyLock {
  */
 export async function openCalendarLink(urlSecret: string, calendarId: string, linkId: string, lock: LinkKeyLock): Promise<UnlockedCalendar> {
   return (await wasm()).openCalendarLink(urlSecret, calendarId, linkId, lock.keyGeneration, lock.sealedPassphrase, lock.lockedSecretKey)
+}
+
+/**
+ * Opens an invitation from a Kutup organizer on this server
+ * (docs/plans/calendar-e4.md §6): its key packet with the attendee's address
+ * key, its shared parts checked against the organizer's keys.
+ */
+export async function openInvitation(
+  addressKey: SealedMailKey,
+  keyPacket: string,
+  shared: { sharedSigned: EventPart; sharedEncrypted: EventPart; attendees: EventPart | null },
+  organizerKeys: string[],
+): Promise<OpenedInvitation> {
+  return (await wasm()).openInvitation(addressKey, keyPacket, shared, organizerKeys)
 }

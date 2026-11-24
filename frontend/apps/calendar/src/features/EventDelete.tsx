@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { EventRefusedError, PERMISSION, deleteEvent, loadSeries, useCalendarMutation, useCalendars } from '@kutup/calendar-core/api'
-import { useMailAccount } from '@kutup/mail-core/api'
+import { answerFromCopy, attendeeAnswers, cancelMessage, loadInviteSettings, sendLanguage, sendMessages } from '@kutup/calendar-core/invitations'
+import { useMailAccount, usePinnedKeys } from '@kutup/mail-core/api'
 import { useRequiredSession } from '@kutup/session/store'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
@@ -18,7 +19,8 @@ import { planOf, runPlan, type Plan } from './recurrence/run'
 
 /** The confirmations a delete goes through; rendered once in the app's frame. */
 export function EventDeleteFlow() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const pinned = usePinnedKeys()
   const request = useDeleteRequest()
   const session = useRequiredSession()
   const account = useMailAccount()
@@ -50,7 +52,9 @@ export function EventDeleteFlow() {
   // Proton's: every event of the series read first, then the choice.
   const ask = useCalendarMutation(async (target: DeleteRequest) => {
     if (!account.data || !calendar) throw new Error('no calendar')
-    if (!isRecurring(target.event)) return null
+    // An invitation goes as a whole: its participants are told
+    // (docs/plans/calendar-e4.md, as built).
+    if (!isRecurring(target.event) || target.event.attendees?.length) return null
     const context = await seriesContext(await loadSeries(account.data, calendar, target.event.fields.uid), target.event, target.instance)
     return context ? { types: await choicesFor(context), context } : null
   })
@@ -71,7 +75,23 @@ export function EventDeleteFlow() {
 
   const remove = useCalendarMutation(async () => {
     if (!account.data || !calendar || !event) throw new Error('no calendar')
-    await deleteEvent(session, account.data, calendar, event)
+    const me = account.data
+    const lng = sendLanguage(await loadInviteSettings().catch(() => undefined), i18n.language)
+    const organizer = event.fields.organizer?.replace(/^mailto:/i, '') ?? null
+    // An attendee deleting an invitation declines it (Proton's), unless
+    // they declined already; the organizer's delete cancels it for everyone.
+    if (organizer && !me.isOwnAddress(organizer) && event.attendees?.some((a) => me.isOwnAddress(a.email))) {
+      const mine = (await attendeeAnswers(me, calendar, event).catch(() => [])).find((a) => me.isOwnAddress(a.email))
+      if (mine?.partstat !== 'declined') {
+        await answerFromCopy({ account: me, pinned: pinned ?? (() => undefined), calendar, event, partstat: 'declined', note: null, lng })
+      }
+    }
+    const cancel = cancelMessage(me, event, lng)
+    await deleteEvent(session, me, calendar, event)
+    if (cancel) {
+      const failures = await sendMessages(me, pinned ?? (() => undefined), [cancel])
+      if (failures.length) toast.error(t('invitations.notSent', { addresses: failures.map((f) => f.address).join(', ') }))
+    }
   })
   const run = useCalendarMutation(async (type: RecurringType) => {
     if (!account.data || !calendar || !series) throw new Error('no calendar')
@@ -98,7 +118,7 @@ export function EventDeleteFlow() {
           open={confirming}
           onOpenChange={(open) => (open ? setConfirming(true) : cancel())}
           title={t('events.deleteTitle', { name: event.fields.summary ?? t('events.untitled') })}
-          description={t('events.deleteDescription')}
+          description={event.attendees?.length ? t('invitations.deleteDescription') : t('events.deleteDescription')}
           submit={t('events.delete')}
           pending={remove.isPending}
           error={remove.error}

@@ -95,6 +95,10 @@ pub const CALENDAR_LINK_SECRET_HPKE_V1: &[u8] = b"kutup/calendar/link-secret-hpk
 /// `kutup-crypto/src/calendar_link.rs`: HKDF family for a keyed link's
 /// access proof, which its page shows the server (the server keeps its hash)
 pub const CALENDAR_LINK_ACCESS_V1: &[u8] = b"kutup/calendar/link-access/v1\0";
+/// `kutup-crypto/src/calendar_invitation.rs`: HKDF family for the key, under
+/// an event's shared session key, that names each attendee's answer row
+/// (docs/plans/calendar-e4.md §3, Q-5)
+pub const CALENDAR_ATTENDEE_TOKEN_V1: &[u8] = b"kutup/calendar/attendee-token/v1\0";
 
 // --- calls -------------------------------------------------------------------
 

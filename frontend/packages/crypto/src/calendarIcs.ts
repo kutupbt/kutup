@@ -94,10 +94,67 @@ export interface IcsExport {
   events: { fields: EventFields; reminders: IcsReminder[] }[]
 }
 
+/** What reading an invitation takes (`InvitationOptionsV1`). */
+export interface InvitationOptions {
+  primaryZone: string
+  maxBytes: number
+  maxCount: number
+  maxAttendees: number
+  now: string
+  messageDate?: string | null
+  sender?: string | null
+}
+
+export type InvitationPartstat = 'needs-action' | 'accepted' | 'tentative' | 'declined' | 'delegated'
+
+export interface InvitationPerson {
+  email: string
+  name?: string | null
+}
+
+export interface InvitationAttendee extends InvitationPerson {
+  partstat: InvitationPartstat
+  optional: boolean
+  rsvp: boolean
+}
+
+/** An invitation read (`InvitationV1`). */
+export interface Invitation {
+  method: 'PUBLISH' | 'REQUEST' | 'REPLY' | 'CANCEL' | 'COUNTER'
+  fields: EventFields
+  organizer: InvitationPerson | null
+  attendees: InvitationAttendee[]
+  note: string | null
+  prodid: string | null
+  kutupReply: boolean
+  moreEvents: boolean
+  dtstampGiven: boolean
+}
+
+/** Proton's `INVITATION_ERROR_TYPE`. */
+export type InvitationError = 'invitationInvalid' | 'invitationUnsupported' | 'invalidMethod' | 'noComponent' | 'noVevent' | 'parsingError'
+
+export type InvitationOutcome =
+  | { read: Invitation }
+  | { refused: { error: InvitationError; reason: string | null; method: string | null } }
+
+/** What `writeInvitation` writes (`WriteInvitationV1`). */
+export interface InvitationToWrite {
+  method: 'REQUEST' | 'REPLY' | 'CANCEL'
+  release: string
+  fields: EventFields
+  organizer: InvitationPerson
+  attendees: InvitationAttendee[]
+  note?: string | null
+  kutupReply?: boolean
+}
+
 interface CalendarIcsModule {
   default(input?: unknown): Promise<unknown>
   calendarImportIcs(text: string, options: IcsImportOptions): IcsImportOutcome
   calendarExportIcs(calendar: IcsExport): string
+  calendarReadInvitation(text: string, options: InvitationOptions): InvitationOutcome
+  calendarWriteInvitation(invitation: InvitationToWrite): string
 }
 
 let modulePromise: Promise<CalendarIcsModule> | null = null
@@ -126,4 +183,14 @@ export async function importIcs(text: string, options: IcsImportOptions): Promis
 /** Writes a calendar's opened events as one `.ics` file (E2 §6). */
 export async function exportIcs(calendar: IcsExport): Promise<string> {
   return (await runtime()).calendarExportIcs(calendar)
+}
+
+/** Reads an invitation (docs/plans/calendar-e4.md §2), as Proton's Mail reads one. */
+export async function readInvitation(text: string, options: InvitationOptions): Promise<InvitationOutcome> {
+  return (await runtime()).calendarReadInvitation(text, options)
+}
+
+/** Writes a REQUEST, REPLY or CANCEL. */
+export async function writeInvitation(invitation: InvitationToWrite): Promise<string> {
+  return (await runtime()).calendarWriteInvitation(invitation)
 }

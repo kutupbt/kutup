@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { EventRefusedError, PERMISSION, saveEvent, useCalendarMutation, useCalendars, type Calendar } from '@kutup/calendar-core/api'
 import { addDays } from '@kutup/calendar-core/time'
+import { InvitationPanel } from './invitations/InvitationPanel'
 import { useMailAccount } from '@kutup/mail-core/api'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
@@ -102,11 +103,14 @@ function EventPeek({ placed, calendars }: { placed: Placed; calendars: Calendar[
   })
   const reminders = event.reminders ?? (calendar ? (placed.allDay ? calendar.defaultReminders.allDay : calendar.defaultReminders.timed) : [])
   const organizer = fields.organizer?.replace(/^mailto:/i, '')
+  const account = useMailAccount()
+  // Someone else's invitation: answered here, changed by its organizer only.
+  const invitedCopy = !!organizer && !!account.data && !account.data.isOwnAddress(organizer)
 
   return (
     <div className="space-y-3" data-testid="event-popover">
       <div className="-mr-2 -mt-2 flex items-center justify-end gap-0.5">
-        {canWrite ? (
+        {canWrite && !invitedCopy ? (
           <IconAction label={t('popover.edit')} testId="event-popover-edit" onClick={() => handOver(() => openEditor({ kind: 'edit', event, instance: placed.instance }))}>
             <Pencil />
           </IconAction>
@@ -170,6 +174,7 @@ function EventPeek({ placed, calendars }: { placed: Placed; calendars: Calendar[
         {organizer ? (
           <Row icon={<UserRound className="size-4" />} label={t('popover.participants')} testId="event-popover-organizer">
             {t('popover.organizer', { address: organizer })}
+            {calendar && event.attendees?.length ? <InvitationPanel calendar={calendar} event={event} canAnswer={invitedCopy && canWrite} /> : null}
           </Row>
         ) : null}
         <Row icon={<CalendarDays className="size-4" />} label={t('events.calendar')} testId="event-popover-calendar">
