@@ -2968,9 +2968,18 @@ occurrences, wherever they are (Proton's `queryEvents({ UID })`), which a
 client reads before it changes or deletes a series. Paged and answered as
 the window listing; a `uid` empty or longer than 255 characters is `400`.
 
+### GET /api/v1/calendar/calendars/{id}/events/all?afterId=&limit=
+
+Every event of the calendar whenever it is, ordered by id, at most
+`calendarEventsPage` a page: `{ events: [EventView], next }`, `next` the
+last event's id (send it back as `afterId`) or `null` on the last page.
+What an export opens and writes as one `.ics` file in the browser
+(docs/plans/calendar.md, E2 §6). A member who sees busy times only is
+`403`; a calendar the caller isn't a member of `404`.
+
 ### POST /api/v1/calendar/calendars/{id}/events/sync
 
-`{ addressId, changes: [{"create": {id, event}} | {"update": {id,
+`{ addressId, changes: [{"create": {id, event, reminders?, overwrite?}} | {"update": {id,
 baseRevision, event}} | {"delete": {id, baseRevision}}] }` (a create's `id`
 is drawn by the client, a UUID v4: a create sent again with the same id and
 parts answers the stored event, the id holding another is `409
@@ -2995,7 +3004,12 @@ series' (`409 sequenceBehind`). An update keeps the event's `RECURRENCE-ID`
 its changes as single events, which can still be changed. A window lists
 every event that meets it, and also those ending exactly at its start (a
 series' last occurrence of no length there). `409 uidTaken`
-for a UID already in the calendar, `409 eventLimit` at
+for a UID already in the calendar, unless the create says `overwrite: true`
+(an `.ics` import's, Proton's `Overwrite: 1`): the event of the calendar
+with the same UID and `RECURRENCE-ID` is then written over as an update
+from its stored revision, keeping its id and every member's reminders
+(the result names that id), and `409 sequenceBehind` when its `SEQUENCE`
+is ahead of the import's; `409 eventLimit` at
 `calendarEventsPerCalendar` (25,000). An update or a delete names
 the event's `revision` it was made from: another one is `409 revisionConflict` (with
 the stored `revision`), so a replayed or older change never overwrites a

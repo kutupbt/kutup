@@ -14,7 +14,7 @@ const FRONTEND = path.resolve(import.meta.dirname, '../..')
 const WASM_ROOT = path.join(FRONTEND, 'wasm')
 
 export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail' | 'pass' | 'calendar'
-export type WasmModule = 'crypto' | 'crypto-calendar' | 'chat' | 'pass' | 'mail-search'
+export type WasmModule = 'crypto' | 'crypto-calendar' | 'calendar-ics' | 'chat' | 'pass' | 'mail-search'
 
 /**
  * A WASM runtime's content hash (16 hex digits): its directory's files, in
@@ -236,6 +236,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
           __KUTUP_CHAT_WASM__: JSON.stringify(wasmHash('chat')),
           __KUTUP_PASS_WASM__: JSON.stringify(wasmHash('pass')),
           __KUTUP_MAIL_SEARCH_WASM__: JSON.stringify(wasmHash('mail-search')),
+          __KUTUP_CALENDAR_ICS_WASM__: JSON.stringify(wasmHash('calendar-ics')),
         },
       }
     },

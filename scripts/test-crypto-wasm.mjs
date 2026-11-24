@@ -1736,4 +1736,8 @@ const c0Digest = (digest) => {
   assert.throws(() => crypto.profileLookup('AA=='))
 }
 
+// `.ics` files are the calendar-ics runtime's (scripts/test-calendar-ics-wasm.mjs),
+// in neither crypto runtime (docs/plans/calendar.md, E2c).
+for (const name of ['calendarImportIcs', 'calendarExportIcs']) assert.equal(crypto[name], undefined, `${name} is in the ${build} build`)
+
 console.log(`${build} WASM canonical vectors passed`)

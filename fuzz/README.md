@@ -28,6 +28,10 @@ The targets are:
   expansion must end (docs/plans/calendar.md). Its seed corpus, from the
   recurrence and calendar vectors, is checked in under
   `seeds/calendar_parsers/`;
+- `calendar_ics`: `.ics` files as others write them, through the lenient
+  reader, the import's rebuild and the export of what it kept (docs/plans/
+  calendar.md, E2 §5–6). Its seeds, the Google, Outlook and Apple exports of
+  `crates/kutup-crypto/tests/ics/`, are checked in under `seeds/calendar_ics/`;
 - `block_object_parsers`: the block format (docs/plans/drive-block-format.md)
   of Drive, Chat media and backup media: headers, trailers, the server's
   structure check, manifest and whole-object opens, and V2 file metadata with
@@ -52,6 +56,7 @@ cargo +nightly fuzz run profile_envelope_parser -- -max_len=1048576
 cargo +nightly fuzz run account_policy_parsers -- -max_len=2097152
 cargo +nightly fuzz run sealed_sender_parsers -- -max_len=1048576
 cargo +nightly fuzz run calendar_parsers corpus/calendar_parsers seeds/calendar_parsers -- -max_len=65536
+cargo +nightly fuzz run calendar_ics corpus/calendar_ics seeds/calendar_ics -- -max_len=65536
 cargo +nightly fuzz run block_object_parsers corpus/block_object_parsers seeds/block_object_parsers -- -max_len=65536
 cargo +nightly fuzz run mail_bridge_imap corpus/mail_bridge_imap seeds/mail_bridge_imap -- -max_len=65536
 ```

@@ -39,6 +39,7 @@
 //! - [`mail_forwarding`] — end-to-end mail forwarding (proxy re-encryption).
 //! - [`calendar`] — calendar keys, passphrases and session-key packets (rPGP).
 //! - [`calendar_recurrence`] — Proton's RRULE subset and the expansion of a series.
+//! - [`calendar_ics`] — `.ics` files others write: the lenient reader, the import and the export.
 //! - [`pass_vault`] — Kutup Pass vault secrets sealed under the master key.
 
 pub mod account_head;
@@ -51,11 +52,13 @@ pub mod asset;
 pub mod blocks;
 #[cfg(feature = "calendar")]
 pub mod calendar;
-#[cfg(feature = "calendar")]
+#[cfg(feature = "calendar-format")]
 pub mod calendar_event;
+#[cfg(feature = "calendar-format")]
+pub mod calendar_ics;
 #[cfg(feature = "calendar")]
 pub mod calendar_link;
-#[cfg(feature = "calendar")]
+#[cfg(feature = "calendar-format")]
 pub mod calendar_recurrence;
 pub mod calendar_settings;
 pub mod chat_attachment_ledger;

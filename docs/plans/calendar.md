@@ -862,3 +862,111 @@ which parts the editor sets and the core writes them.
 - The split series' UID writes the month as 01–12 (Proton's
   `getRecurrenceOffsetID` writes `getUTCMonth()`, 00–11); it is only a name.
 - No "keep this occurrence's changes" merge for attendees (E4: invitations).
+
+## E2c: `.ics` import and export (2026-11-24)
+
+Built from §5 and §6 above, following Proton's web client
+(`packages/shared/lib/calendar/import`, `icsSurgery/`, `export/`, and the
+import and export modals in `packages/components/containers/calendar`).
+
+**Rust core: `kutup_crypto::calendar_ics`** (feature `calendar-format`, in
+the `calendar-ics` WASM runtime as `calendarImportIcs` and
+`calendarExportIcs`, below). One
+module for every outside `.ics` Kutup reads or writes, so E4's invitations
+(`calendar_itip`, docs/plans/calendar-e4.md §2) and E5's feeds build on it:
+`reader` (the lenient reader: a tree of components and properties, values
+as written, parameters unquoted), `value` (dates, times, durations and text,
+read leniently), `zones` (a `TZID` to an IANA zone), `import` (Proton's
+whitelist rebuild and per-event reasons) and `export` (one `VCALENDAR` in
+one form). Kutup's own event parts keep their strict canonical form
+(`calendar_event`); nothing here reads them.
+
+**As Proton's:**
+- Files: `.ics`, `.ical`, `.icalendar`, `.ifb`; size and components as site
+  settings (`calendar.import_max_bytes`, 10 MB; `calendar.import_max_events`,
+  15,000; both per account, published in `/auth/settings` with the sync
+  batch, `COUNT` and reminder limits). Refusals and their texts: empty, not a
+  calendar, invalid method, no events, too many, too big, not an ICS file.
+- Repairs: line endings, folding without a space (`reformatLineBreaks`), a
+  missing `VCALENDAR` around the events (`reformatVcalEnclosing`), ISO and
+  incomplete date-times, fractions of a second, a repeated `Z`, a missing
+  `VALUE=DATE` (`reformatDateTimes`), an unreadable `TRIGGER` read as
+  `PT0S` (`replaceTrigger`), a component left open kept as an error while
+  the rest reads.
+- The rebuild (`getSupportedEvent`): UID (kept from its end; made from a
+  hash of the event's lines when missing or for an invitation, the original
+  kept in front, Proton's `original-uid-…`), DTSTAMP (`getSupportedDtstamp`),
+  DTSTART/DTEND (a zero-length end dropped, an all-day `DTEND` equal to its
+  start one day, `DURATION` made into `DTEND`), SEQUENCE (negative 0,
+  mod 2^31), SUMMARY/DESCRIPTION/LOCATION (trimmed, Proton's lengths),
+  RRULE in Proton's subset with `getSupportedUntil` and `COUNT` at most
+  `calendar.max_count` (49), EXDATE and RECURRENCE-ID in the start's form
+  (`getLinkedDateTimeProperty`), VALARMs (`getSupportedAlarm`: `AUDIO` as a
+  device reminder, relative to the start only, Proton's bounds, at most the
+  site's 10, deduplicated). ORGANIZER, ATTENDEE and every other property are
+  dropped; a non-`PUBLISH` file is imported as simple events after Proton's
+  warning, without reminders or RECURRENCE-IDs.
+- Time zones: `VTIMEZONE` ignored, reported only when its `TZID` maps to
+  nothing ("Custom time zone"); `getSupportedTimezone` (the name, an alias,
+  `(UTC+x) Name`, Proton's table of Windows and display names copied as
+  `zone_names.rs`, an IANA name inside the `TZID`); a floating time takes
+  `X-WR-TIMEZONE`, else the file's one `VTIMEZONE`, else the person's zone;
+  a single event's UTC time is put in `X-WR-TIMEZONE`'s zone (Google).
+- Per-event reasons: Proton's `IMPORT_EVENT_ERROR_TYPE` and texts; an event
+  with no occurrence left is dropped silently (Proton's hidden error).
+- Upload: every event sealed in the browser and sent in batches of
+  `calendar.sync_batch`, series before their changed occurrences, each with
+  its own reminders (no calendar defaults; an invitation file's take the
+  calendar's defaults, as Proton's), `overwrite` (Proton's
+  `Overwrite: 1`, Q-3): a UID already in the calendar is written over,
+  `sequenceBehind` when the stored one is ahead (listed). The rate limit is
+  waited out and the batch sent again (Proton's jails).
+- Export: `METHOD:PUBLISH`, `X-WR-CALNAME`, `X-WR-CALDESC`,
+  `X-WR-TIMEZONE`, the effective reminders as VALARMs with Proton's
+  mandatory fields (display: the title; email: title and the member's
+  address), no colour, the file `<name>-yyyy-MM-dd.ics`; events that don't
+  open are left out and listed.
+
+**Kutup's, and why:**
+- `STATUS` and `TRANSP` are kept (Proton drops them): Kutup's calendar part
+  carries them and busy times read `TRANSP`.
+- An `EXDATE` that isn't an occurrence is dropped (the server refuses one,
+  and it removes nothing); a changed occurrence whose series is in the file
+  is checked to be one of its occurrences and its `SEQUENCE` lifted to the
+  series' (the server refuses one behind).
+- A date `UNTIL` with a timed start ends on that date (Proton converts the
+  date's midnight UTC into the zone, a day early west of UTC).
+- The hash UID uses SHA-256 (`sha256-uid-`), not SHA-1.
+- Every zone of the bundled database is kept as it is (Proton maps some its
+  server lacks); the search inside a `TZID` takes names with a `/` only.
+- A line that isn't a content line continues a text value it was cut from
+  even when Proton's parser wouldn't have failed first (Kutup's reader is
+  its own, not ICAL.js plus retries).
+- `VTIMEZONE`s are built from the bundled tzdb's transitions over the years
+  the events span (Proton fetches them from its server).
+- Export lists every event through `GET …/events/all` (paged by id); events
+  that don't open are reported by start time.
+
+**WASM: a runtime of its own.** The `.ics` code first lived in
+`crypto-calendar`, which it took from 2,172,288 to 2,243,045 bytes gzipped,
+over its budget once master grew. Building `kutup-crypto` at
+`opt-level = "s"` was measured and not taken: it would have saved about
+124 KB, but sealing a 4 MiB Drive block took 210 ms instead of 172 (+22%)
+and opening one 156 ms instead of 117 (+33%), the AEAD and hashing code
+being compiled in `kutup-crypto` at its level. So the files have their own
+runtime, `calendar-ics` (`crates/kutup-calendar-ics-wasm`,
+`scripts/build-calendar-ics-wasm.sh`): `kutup-crypto` with the new
+`calendar-format` feature only (event text, recurrence, `calendar_ics` and
+the bundled time zone database; no keys, no OpenPGP), exporting
+`calendarImportIcs` and `calendarExportIcs`. The Calendar app loads it the
+first time a file is imported or exported (`@kutup/crypto/calendarIcs`),
+from its own origin under `/calendar-ics-wasm/<hash>/` like the other
+runtimes, so the apps' `script-src 'self' 'wasm-unsafe-eval'` takes it with
+no new origin. It holds no key: crypto-calendar seals what it reads and
+opens what it writes. Mail's invitations (E4, calendar-e4.md Q-4) load it
+the same way. Its budget in `frontend/wasm-budgets.json` is 342,000 bytes,
+about 110% of its first size (310,617); its checks are
+`scripts/test-calendar-ics-wasm.mjs`.
+
+An imported series is drawn at every occurrence and edited with the E2
+app's "this / this and following / all" (§9 above).

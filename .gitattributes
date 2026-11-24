@@ -1,0 +1,4 @@
+# Calendar files as others write them (Google, Outlook): CRLF line ends are
+# their format (RFC 5545), kept byte for byte, not whitespace to fix.
+crates/kutup-crypto/tests/ics/*.ics -text -whitespace
+fuzz/seeds/calendar_ics/* -text -whitespace

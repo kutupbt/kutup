@@ -86,7 +86,7 @@ impl EventTime {
         }
     }
 
-    fn write(&self, name: &str) -> String {
+    pub(crate) fn write(&self, name: &str) -> String {
         match self {
             EventTime::Date(date) => format!("{name};VALUE=DATE:{}", date.strftime("%Y%m%d")),
             EventTime::Zoned { local, tzid } => {
@@ -505,6 +505,14 @@ impl CalendarEncrypted {
     }
 }
 
+/// An event's parts, to seal (`crate::calendar` seals them).
+pub struct EventParts {
+    pub shared_signed: SharedSigned,
+    pub shared_encrypted: SharedEncrypted,
+    pub calendar_signed: CalendarSigned,
+    pub calendar_encrypted: Option<CalendarEncrypted>,
+}
+
 // ----- the fields a client edits -----
 
 /// A time as a client sends and reads it.
@@ -589,7 +597,7 @@ pub struct EventFieldsV1 {
 }
 
 impl EventFieldsV1 {
-    pub fn to_parts(&self) -> Result<crate::calendar::EventParts> {
+    pub fn to_parts(&self) -> Result<EventParts> {
         let stamp: Timestamp = self
             .dtstamp
             .parse()
@@ -608,7 +616,7 @@ impl EventFieldsV1 {
             .iter()
             .map(TimeV1::to_time)
             .collect::<Result<Vec<_>>>()?;
-        Ok(crate::calendar::EventParts {
+        Ok(EventParts {
             shared_signed: SharedSigned {
                 uid: self.uid.clone(),
                 dtstamp: stamp,
@@ -670,7 +678,7 @@ impl EventFieldsV1 {
         })
     }
 
-    pub fn of(parts: &crate::calendar::EventParts) -> Self {
+    pub fn of(parts: &EventParts) -> Self {
         let shared = &parts.shared_signed;
         let secret = &parts.shared_encrypted;
         let calendar = &parts.calendar_signed;
@@ -719,7 +727,8 @@ fn wrap(lines: &[String]) -> String {
 
 /// Folds a content line at 75 octets, never inside a character (RFC 5545
 /// §3.1): continuation lines start with one space.
-fn fold_into(out: &mut String, line: &str) {
+#[inline(never)]
+pub(crate) fn fold_into(out: &mut String, line: &str) {
     let mut width = 0;
     for ch in line.chars() {
         if width + ch.len_utf8() > FOLD_AT {
@@ -732,7 +741,7 @@ fn fold_into(out: &mut String, line: &str) {
     out.push_str("\r\n");
 }
 
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {
@@ -1112,7 +1121,7 @@ mod tests {
         let text = comment.build().unwrap();
         assert_eq!(CalendarEncrypted::parse(&text).unwrap(), comment);
         // Through the fields and back: nothing dropped.
-        let parts = crate::calendar::EventParts {
+        let parts = EventParts {
             shared_signed: parsed,
             shared_encrypted: SharedEncrypted {
                 uid: signed().uid,

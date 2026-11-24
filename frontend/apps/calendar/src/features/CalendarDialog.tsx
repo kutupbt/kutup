@@ -36,7 +36,18 @@ const MAX_DESCRIPTION = 255
 const MAX_DEFAULT_REMINDERS = 5
 
 /** Makes a calendar, or renames, recolours or deletes one. */
-export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean; onOpenChange: (open: boolean) => void; calendar?: Calendar }) {
+export function CalendarDialog({
+  open,
+  onOpenChange,
+  calendar,
+  onExport,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  calendar?: Calendar
+  /** Proton's calendar export: every event in one `.ics` file. */
+  onExport?: (calendar: Calendar) => void
+}) {
   const { t } = useTranslation()
   const session = useRequiredSession()
   const account = useMailAccount()
@@ -196,6 +207,15 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
                   </p>
                 ) : null}
               </>
+            ) : null}
+            {calendar && onExport && (calendar.permissions & PERMISSION.read) !== 0 ? (
+              <div className="space-y-1.5">
+                <Label>{t('ics.export.section')}</Label>
+                <p className="text-xs text-muted-foreground">{t('ics.export.sectionHint')}</p>
+                <Button type="button" size="sm" variant="outline" onClick={() => onExport(calendar)} data-testid="calendar-export">
+                  {t('ics.export.open')}
+                </Button>
+              </div>
             ) : null}
             <p className="text-xs text-muted-foreground">{t('calendars.encrypted')}</p>
             {calendar && !calendar.owned && calendar.owner ? (

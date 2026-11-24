@@ -865,7 +865,28 @@ pub const CALENDAR_KEY_GENERATIONS: NumericSetting = NumericSetting {
     unit: SettingUnit::Count,
     per_account: false,
 };
-pub const CALENDAR_SETTINGS: [NumericSetting; 23] = [
+/// An `.ics` import's largest file and most components (Proton's 10 MB and
+/// 15,000, `MAX_IMPORT_FILE_SIZE`, `MAX_IMPORT_EVENTS`): the browser reads
+/// and checks the file, then sends its events through the events sync.
+pub const CALENDAR_IMPORT_MAX_BYTES: NumericSetting = NumericSetting {
+    key: "calendar.import_max_bytes",
+    field: "calendarImportMaxBytes",
+    default: 10 * MIB,
+    min: 64 * 1024,
+    max: 100 * MIB,
+    unit: SettingUnit::Bytes,
+    per_account: true,
+};
+pub const CALENDAR_IMPORT_MAX_EVENTS: NumericSetting = NumericSetting {
+    key: "calendar.import_max_events",
+    field: "calendarImportMaxEvents",
+    default: 15_000,
+    min: 1,
+    max: 100_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+pub const CALENDAR_SETTINGS: [NumericSetting; 25] = [
     CALENDARS_PER_ACCOUNT,
     CALENDAR_EVENTS_PER_CALENDAR,
     CALENDAR_SYNC_BATCH,
@@ -889,6 +910,8 @@ pub const CALENDAR_SETTINGS: [NumericSetting; 23] = [
     CALENDAR_INVITATION_DAYS,
     CALENDAR_BUSY_WINDOW_DAYS,
     CALENDAR_KEY_GENERATIONS,
+    CALENDAR_IMPORT_MAX_BYTES,
+    CALENDAR_IMPORT_MAX_EVENTS,
 ];
 
 /// How long a Chat link token, and the provisioning socket of the device

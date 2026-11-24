@@ -241,14 +241,14 @@ $(headers '    ')
     # The Rust runtimes live in directories named for their content hash
     # (frontend/packages/config/vite.ts), which the bundle names: a new
     # build is a new URL, so they are cached for good, like /assets/.
-    location ~ "^/(crypto|crypto-calendar|chat|pass|mail-search)-wasm/[0-9a-f]{16}/" {
+    location ~ "^/(crypto|crypto-calendar|calendar-ics|chat|pass|mail-search)-wasm/[0-9a-f]{16}/" {
         try_files \$uri =404;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
 $(headers '        ')
     }
 
     # Anything else there (none is expected) is revalidated.
-    location ~ ^/(crypto|crypto-calendar|chat|pass|mail-search)-wasm/ {
+    location ~ ^/(crypto|crypto-calendar|calendar-ics|chat|pass|mail-search)-wasm/ {
         try_files \$uri =404;
         add_header Cache-Control "no-cache" always;
 $(headers '        ')

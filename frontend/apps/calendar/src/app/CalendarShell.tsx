@@ -1,6 +1,6 @@
 import { FeedbackButton } from '@kutup/ui/components/feedback'
 import { feedbackServices } from '@kutup/session/feedback'
-import { BookUser, CalendarDays, FileType, HardDrive, Images, KeyRound, Mail as MailIcon, Map as MapIcon, MessagesSquare, Pencil, Plus, Settings2, UserRound, Users } from 'lucide-react'
+import { BookUser, CalendarDays, FileType, FileUp, HardDrive, Images, KeyRound, Mail as MailIcon, Map as MapIcon, MessagesSquare, Pencil, Plus, Settings2, UserRound, Users } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
@@ -25,6 +25,8 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { CalendarDialog } from '../features/CalendarDialog'
 import { EventDeleteFlow } from '../features/EventDelete'
 import { EventDialog } from '../features/EventDialog'
+import { ExportDialog } from '../features/ics/ExportDialog'
+import { ImportDialog } from '../features/ics/ImportDialog'
 import { MiniCalendar } from '../features/MiniCalendar'
 import { AlarmWatcher } from '../features/reminders/AlarmWatcher'
 import { refreshPush } from '../features/reminders/push'
@@ -130,6 +132,8 @@ export function CalendarShell() {
   const [editing, setEditing] = useState<Calendar | 'new' | null>(null)
   const [settings, setSettings] = useState(false)
   const [sharing, setSharing] = useState<Calendar | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [exporting, setExporting] = useState<Calendar | null>(null)
 
   return (
     <AppShell
@@ -200,6 +204,18 @@ export function CalendarShell() {
               {t('calendars.new')}
             </button>
           </li>
+          <li>
+            <button
+              type="button"
+              onClick={() => setImporting(true)}
+              disabled={!calendars.data?.calendars.length}
+              className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-chrome-muted hover:bg-chrome-accent/60 hover:text-chrome-foreground disabled:opacity-50"
+              data-testid="calendar-import"
+            >
+              <FileUp className="size-4" aria-hidden />
+              {t('ics.import.open')}
+            </button>
+          </li>
           <SharedWithYou ownerChanged={calendars.data?.ownerChanged ?? []} />
           <li>
             <button
@@ -246,7 +262,13 @@ export function CalendarShell() {
         open={editing !== null}
         onOpenChange={(open) => !open && setEditing(null)}
         calendar={editing === 'new' || editing === null ? undefined : editing}
+        onExport={(calendar) => {
+          setEditing(null)
+          setExporting(calendar)
+        }}
       />
+      <ImportDialog open={importing} onOpenChange={setImporting} />
+      {exporting ? <ExportDialog calendar={exporting} onClose={() => setExporting(null)} /> : null}
       <SettingsDialog open={settings} onOpenChange={setSettings} />
       {sharing ? <ShareCalendarDialog calendar={sharing} open onOpenChange={(open) => !open && setSharing(null)} /> : null}
       {reviewing ? (

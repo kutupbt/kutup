@@ -1334,6 +1334,10 @@ fn build_router(state: AppState) -> Router {
             get(handlers::calendar::events_by_uid),
         )
         .route(
+            "/api/v1/calendar/calendars/:id/events/all",
+            get(handlers::calendar::all_events),
+        )
+        .route(
             "/api/v1/calendar/calendars/:id/events/sync",
             post(handlers::calendar::sync),
         )

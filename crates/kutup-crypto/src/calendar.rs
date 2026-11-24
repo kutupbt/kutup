@@ -812,13 +812,8 @@ pub struct SealedEvent {
     pub calendar_encrypted: Option<EventPart>,
 }
 
-/// An event's parts, to seal.
-pub struct EventParts {
-    pub shared_signed: SharedSigned,
-    pub shared_encrypted: SharedEncrypted,
-    pub calendar_signed: CalendarSigned,
-    pub calendar_encrypted: Option<CalendarEncrypted>,
-}
+/// An event's parts, to seal (defined with the parts' text).
+pub use crate::calendar_event::EventParts;
 
 /// Seals an event to `calendar_public_key`: only through
 /// [`UnlockedCalendarKey::seal_event`], whose key is derived from the secret.

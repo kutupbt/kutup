@@ -1112,6 +1112,70 @@ pub async fn events_by_uid(
     }))
 }
 
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[serde(rename_all = "camelCase")]
+pub struct AllEventsQuery {
+    /// The `next` of the previous page.
+    pub after_id: Option<Uuid>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AllEventsPage {
+    pub events: Vec<EventView>,
+    /// Pass as `afterId` for the next page; none when this was the last.
+    pub next: Option<Uuid>,
+}
+
+/// `GET /api/v1/calendar/calendars/{id}/events/all` — every event of a
+/// calendar, paged by id, whenever it is: what an export opens and writes
+/// (docs/plans/calendar.md, E2 §6).
+#[utoipa::path(
+    get,
+    path = "/api/v1/calendar/calendars/{id}/events/all",
+    tag = "calendar",
+    security(("BearerAuth" = [])),
+    params(("id" = Uuid, Path), AllEventsQuery),
+    responses((status = 200, body = AllEventsPage), (status = 403), (status = 404))
+)]
+pub async fn all_events(
+    State(state): State<AppState>,
+    user: AuthAccount,
+    Path(id): Path<Uuid>,
+    Query(query): Query<AllEventsQuery>,
+) -> AppResult<Json<AllEventsPage>> {
+    let user_id = trusted_uuid(&user.account_id)?;
+    let page = CALENDAR_EVENTS_PAGE.load(&state.pool).await?;
+    let limit = query.limit.unwrap_or(page).clamp(1, page);
+    let mut conn = state.pool.acquire().await?;
+    let permissions = member_permissions(&mut conn, user_id, id).await?;
+    if permissions & READ == 0 {
+        return Err(AppError::forbidden("this calendar shows busy times only"));
+    }
+    let mut rows: Vec<EventRow> = sqlx::query_as(&format!(
+        "{}
+          WHERE e.calendar_id = $1 AND ($2::uuid IS NULL OR e.id > $2)
+          ORDER BY e.id
+          LIMIT $3",
+        event_view_sql(4)
+    ))
+    .bind(id)
+    .bind(query.after_id)
+    .bind(limit + 1)
+    .bind(user_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let next = (rows.len() as i64 > limit).then(|| {
+        rows.truncate(limit as usize);
+        rows.last().map(|row| row.id)
+    });
+    Ok(Json(AllEventsPage {
+        events: rows.into_iter().map(event_view).collect(),
+        next: next.flatten(),
+    }))
+}
+
 /// `GET /api/v1/calendar/calendars/{id}/events/{eventId}`
 #[utoipa::path(
     get,
@@ -1160,6 +1224,11 @@ pub enum EventChange {
         /// The caller's own reminders for it; absent: their calendar's defaults.
         #[serde(default)]
         reminders: Option<Vec<crate::calendar_reminders::Reminder>>,
+        /// An import's (Proton's `Overwrite: 1`): an event of this calendar
+        /// with the same UID and RECURRENCE-ID is written over, keeping its
+        /// id, unless its SEQUENCE is ahead (`sequenceBehind`).
+        #[serde(default)]
+        overwrite: bool,
     },
     /// `base_revision`: the event's stored revision the change was made
     /// from; another is `409 revisionConflict`.
@@ -1627,7 +1696,12 @@ async fn apply(
         Some(_) => {}
     }
     let result = match change {
-        EventChange::Create { id, reminders, .. } => {
+        EventChange::Create {
+            id,
+            reminders,
+            overwrite,
+            ..
+        } => {
             let checked = checked.expect("checked above");
             check_reminders(reminders.as_deref(), &checked, most_reminders)?;
             // A create retried after it landed: the same id and parts are
@@ -1660,6 +1734,36 @@ async fn apply(
                     "eventIdTaken",
                 ));
             }
+            let change = match reminders {
+                Some(list) => RemindersChange::Own(list),
+                None => RemindersChange::Keep,
+            };
+            if *overwrite {
+                let same: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT e.id FROM calendar_events e
+                       JOIN calendar_shared_events se ON se.id = e.shared_event_id
+                      WHERE e.calendar_id = $1 AND se.home_calendar_id = $1 AND se.uid = $2
+                        AND se.recurrence_id IS NOT DISTINCT FROM $3",
+                )
+                .bind(calendar)
+                .bind(&checked.shared.uid)
+                .bind(checked.recurrence_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+                if let Some(same) = same {
+                    rewrite(
+                        &mut tx,
+                        (calendar, owner, user_id, address_id),
+                        same,
+                        None,
+                        &checked,
+                    )
+                    .await?;
+                    reminders_then_alarms(&mut tx, same, user_id, change).await?;
+                    tx.commit().await?;
+                    return Ok(Some(same));
+                }
+            }
             check_parent(&mut tx, calendar, &checked, false).await?;
             let count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM calendar_events WHERE calendar_id = $1")
@@ -1672,10 +1776,6 @@ async fn apply(
             }
             crate::storage_pool::charge_within_quota(&mut tx, owner, checked.bytes).await?;
             let id = insert(&mut tx, *id, calendar, user_id, address_id, &checked).await?;
-            let change = match reminders {
-                Some(list) => RemindersChange::Own(list),
-                None => RemindersChange::Keep,
-            };
             reminders_then_alarms(&mut tx, id, user_id, change).await?;
             series_alarms(&mut tx, calendar, &checked).await?;
             Some(id)
@@ -1692,100 +1792,14 @@ async fn apply(
                 &checked,
                 most_reminders,
             )?;
-            type Current = (
-                Uuid,
-                String,
-                i64,
-                time::OffsetDateTime,
-                i64,
-                i32,
-                Option<time::OffsetDateTime>,
-            );
-            // Only an event this calendar is home to is changed here (E1/E2:
-            // every event is; an attendee's copy comes with E4).
-            let current: Option<Current> = sqlx::query_as(
-                "SELECT se.id, se.uid, (e.bytes + se.bytes)::bigint, e.created_at, e.revision,
-                        se.sequence, se.recurrence_id
-                   FROM calendar_events e JOIN calendar_shared_events se ON se.id = e.shared_event_id
-                  WHERE e.id = $1 AND e.calendar_id = $2 AND se.home_calendar_id = $2
-                  FOR UPDATE OF e, se",
-            )
-            .bind(id)
-            .bind(calendar)
-            .fetch_optional(&mut *tx)
-            .await?;
-            let Some((shared_id, uid, old_bytes, created_at, revision, sequence, recurrence_id)) =
-                current
-            else {
-                return Err(AppError::not_found("not found"));
-            };
-            if uid != checked.shared.uid {
-                return Err(AppError::bad_request("an event keeps its UID"));
-            }
-            // A series stays a series and a changed occurrence the one it
-            // changes (Proton's): never one turned into the other.
-            if recurrence_id != checked.recurrence_id {
-                return Err(coded(
-                    AppError::bad_request("an event keeps its RECURRENCE-ID"),
-                    "recurrenceIdChanged",
-                ));
-            }
-            // A changed occurrence whose series is gone stays a single
-            // event, and can still be changed.
-            check_parent(&mut tx, calendar, &checked, true).await?;
-            // Made from the stored version, never an older one replayed nor
-            // over another device's newer save.
-            if revision != *base_revision {
-                return Err(revisions::conflict(
-                    "this event was changed elsewhere",
-                    revision,
-                ));
-            }
-            if i64::from(checked.shared.sequence) < i64::from(sequence) {
-                return Err(AppError::conflict("an event's SEQUENCE never goes down")
-                    .with_details(serde_json::json!({ "code": "sequenceBehind" })));
-            }
-            crate::storage_pool::charge_within_quota(&mut tx, owner, checked.bytes - old_bytes)
-                .await?;
-            // Every member's own reminders outlive the rewrite below.
-            let kept: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
-                "SELECT account_id, reminders FROM calendar_event_reminders WHERE event_id = $1",
-            )
-            .bind(id)
-            .fetch_all(&mut *tx)
-            .await?;
-            // The shared row goes, and the calendar's row with it.
-            sqlx::query("DELETE FROM calendar_shared_events WHERE id = $1")
-                .bind(shared_id)
-                .execute(&mut *tx)
-                .await?;
-            // Written again whole (its columns all come from the new
-            // parts), keeping its ids and when it was made.
-            insert_as(
+            rewrite(
                 &mut tx,
-                Kept {
-                    id: *id,
-                    shared_id,
-                    created_at,
-                    revision: revision + 1,
-                },
-                calendar,
-                user_id,
-                address_id,
+                (calendar, owner, user_id, address_id),
+                *id,
+                Some(*base_revision),
                 &checked,
             )
             .await?;
-            for (member, list) in kept {
-                sqlx::query(
-                    "INSERT INTO calendar_event_reminders (event_id, account_id, reminders)
-                     VALUES ($1, $2, $3)",
-                )
-                .bind(id)
-                .bind(member)
-                .bind(list)
-                .execute(&mut *tx)
-                .await?;
-            }
             let change = match reminders {
                 None => RemindersChange::Keep,
                 Some(None) => RemindersChange::Defaults,
@@ -1851,6 +1865,112 @@ async fn apply(
     };
     tx.commit().await?;
     Ok(result)
+}
+
+/// Writes a checked event over the stored event `id` this calendar is home
+/// to, keeping its ids, creation time and every member's reminders: an
+/// update made from `base_revision`, or (none) an import overwriting the
+/// event with its UID (Proton's `Overwrite`).
+async fn rewrite(
+    tx: &mut Transaction<'_, Postgres>,
+    (calendar, owner, user_id, address_id): (Uuid, Uuid, Uuid, Uuid),
+    id: Uuid,
+    base_revision: Option<i64>,
+    checked: &Checked,
+) -> AppResult<()> {
+    type Current = (
+        Uuid,
+        String,
+        i64,
+        time::OffsetDateTime,
+        i64,
+        i32,
+        Option<time::OffsetDateTime>,
+    );
+    // Only an event this calendar is home to is changed here (E1/E2:
+    // every event is; an attendee's copy comes with E4).
+    let current: Option<Current> = sqlx::query_as(
+        "SELECT se.id, se.uid, (e.bytes + se.bytes)::bigint, e.created_at, e.revision,
+                se.sequence, se.recurrence_id
+           FROM calendar_events e JOIN calendar_shared_events se ON se.id = e.shared_event_id
+          WHERE e.id = $1 AND e.calendar_id = $2 AND se.home_calendar_id = $2
+          FOR UPDATE OF e, se",
+    )
+    .bind(id)
+    .bind(calendar)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((shared_id, uid, old_bytes, created_at, revision, sequence, recurrence_id)) = current
+    else {
+        return Err(AppError::not_found("not found"));
+    };
+    if uid != checked.shared.uid {
+        return Err(AppError::bad_request("an event keeps its UID"));
+    }
+    // A series stays a series and a changed occurrence the one it
+    // changes (Proton's): never one turned into the other.
+    if recurrence_id != checked.recurrence_id {
+        return Err(coded(
+            AppError::bad_request("an event keeps its RECURRENCE-ID"),
+            "recurrenceIdChanged",
+        ));
+    }
+    // A changed occurrence whose series is gone stays a single
+    // event, and can still be changed.
+    check_parent(tx, calendar, checked, true).await?;
+    // Made from the stored version, never an older one replayed nor
+    // over another device's newer save.
+    if base_revision.is_some_and(|base| base != revision) {
+        return Err(revisions::conflict(
+            "this event was changed elsewhere",
+            revision,
+        ));
+    }
+    if i64::from(checked.shared.sequence) < i64::from(sequence) {
+        return Err(AppError::conflict("an event's SEQUENCE never goes down")
+            .with_details(serde_json::json!({ "code": "sequenceBehind" })));
+    }
+    crate::storage_pool::charge_within_quota(tx, owner, checked.bytes - old_bytes).await?;
+    // Every member's own reminders outlive the rewrite below.
+    let kept: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
+        "SELECT account_id, reminders FROM calendar_event_reminders WHERE event_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&mut **tx)
+    .await?;
+    // The shared row goes, and the calendar's row with it.
+    sqlx::query("DELETE FROM calendar_shared_events WHERE id = $1")
+        .bind(shared_id)
+        .execute(&mut **tx)
+        .await?;
+    // Written again whole (its columns all come from the new
+    // parts), keeping its ids and when it was made.
+    insert_as(
+        tx,
+        Kept {
+            id,
+            shared_id,
+            created_at,
+            revision: revision + 1,
+        },
+        calendar,
+        user_id,
+        address_id,
+        checked,
+    )
+    .await?;
+    for (member, list) in kept {
+        sqlx::query(
+            "INSERT INTO calendar_event_reminders (event_id, account_id, reminders)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(id)
+        .bind(member)
+        .bind(list)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
 }
 
 /// A changed occurrence (Proton's single edit) belongs to a series in the
