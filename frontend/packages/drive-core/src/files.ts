@@ -67,6 +67,8 @@ export function toDriveFile(
     fileKey: result?.fileKey ?? null,
     fileKeyEnvelope: row.fileKeyEnvelope,
     originalKeyGeneration: row.originalKeyGeneration,
+    originalSizeBytes: row.encryptedSizeBytes,
+    originalPruned: row.originalPruned ?? false,
     contentKeyGeneration: row.contentKeyGeneration,
     keyHistory: row.keyHistory ?? [],
     kind: name ? fileKind(name, result?.metadata.mimeType) : 'other',

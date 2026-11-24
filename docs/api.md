@@ -3930,7 +3930,10 @@ changed` (reload the folder and retry).
 `thumbnails.{sm,lg}KeyGeneration`; version rows carry `keyGeneration`; an
 asset download carries `X-Kutup-Key-Generation`. Each object opens with the
 file key of its own generation, reached from the current key through
-`keyHistory` wherever the file is.
+`keyHistory` wherever the file is. `originalPruned: true` says the original
+upload is gone (deleted from the version history, or pruned by retention):
+`GET …/original` answers 404 and the history has no first upload to list;
+the field is absent while it is kept.
 
 ### Sharing a single file
 

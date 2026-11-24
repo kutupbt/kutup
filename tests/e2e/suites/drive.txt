@@ -11,3 +11,4 @@ specs/53-delete-versions.spec.ts
 specs/70-public-links.spec.ts
 specs/71-drive-identity.spec.ts
 specs/226-drive-link-password.spec.ts
+specs/227-drive-version-history.spec.ts

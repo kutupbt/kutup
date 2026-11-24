@@ -424,6 +424,11 @@ pub struct FileRow {
     pub name_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// The original upload is gone (deleted from the version history, or
+    /// pruned by retention): `GET …/original` answers 404, and the history
+    /// lists no first upload. Absent while it is kept.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub original_pruned: bool,
 }
 
 /// Generation `generation`'s record: the key of `generation − 1` sealed under

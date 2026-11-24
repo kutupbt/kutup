@@ -66,6 +66,8 @@ export interface FileRow {
   /** Its name's and content's hashes in its folder (docs/plans/drive-unique-names.md); absent until known. */
   nameHash?: string
   contentHash?: string
+  /** The original upload is gone (deleted from the history, or pruned by retention); absent while kept. */
+  originalPruned?: boolean
 }
 
 export type SuspendedReason = 'admin' | 'operatorOrder' | 'security'
