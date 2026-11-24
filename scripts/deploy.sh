@@ -141,8 +141,12 @@ fi
 # The server's output, kept to see that its script ran to the end.
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
-ssh "${ssh_opts[@]}" "$host" bash -s -- "$dir" "$tag" "$sha" "$wipe" "$dry" "$has_check_config" "${KUTUP_DEPLOY_HOSTS:-}" \
-  "$koru_image" "$koru_id" "$koru_commit" <<'REMOTE' | tee "$log"
+# ssh joins its arguments into one command line that the server's shell
+# splits again: an empty argument (no KUTUP_DEPLOY_HOSTS, no Koru) would
+# vanish and shift every later one, so each is quoted for that shell.
+remote_args="$(printf '%q ' "$dir" "$tag" "$sha" "$wipe" "$dry" "$has_check_config" "${KUTUP_DEPLOY_HOSTS:-}" \
+  "$koru_image" "$koru_id" "$koru_commit")"
+ssh "${ssh_opts[@]}" "$host" "bash -s -- $remote_args" <<'REMOTE' | tee "$log"
 set -euo pipefail
 # bash -s reads this script from stdin as it runs, and a command that reads
 # stdin (docker compose run or exec) would swallow the rest of it, ending the
