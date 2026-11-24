@@ -160,3 +160,65 @@ export async function readFile(folder: Folder, file: DriveFile, signal?: AbortSi
   }
   return new Blob(parts, { type: file.mimeType })
 }
+
+/** One revision from a file's history (`history.ts`): a version by id, or `original`. */
+export interface RevisionToRead {
+  id: string
+  kind: 'file' | 'yjs'
+  keyGeneration: number
+  revisionContentEnvelope: string | null
+  authorAccountId?: string | null
+}
+
+/**
+ * What a history entry holds, decrypted: a whole file as it was stored, a
+ * saved Yjs state as the text (or place list) it reads as. `onPlain` gets
+ * each decrypted part as it streams; the parts are also returned as a Blob
+ * (which the browser may keep on disk) unless `keep` is false.
+ */
+export async function readRevision(
+  file: DriveFile,
+  revision: RevisionToRead,
+  opts: { signal?: AbortSignal; onPlain?: (plain: Uint8Array) => Promise<void> | void; keep?: boolean } = {},
+): Promise<Blob> {
+  if (!file.fileKey) throw new Error('file is not open')
+  const keep = opts.keep ?? true
+  const parts: BlobPart[] = []
+  const take = async (plain: Uint8Array) => {
+    await opts.onPlain?.(plain)
+    if (keep) parts.push(new Blob([plain as BlobPart]))
+  }
+  if (revision.kind === 'yjs') {
+    const { data } = await api.get<ArrayBuffer>(`/drive/files/${file.id}/versions/${revision.id}/download`, {
+      responseType: 'arraybuffer',
+      signal: opts.signal,
+    })
+    const opened = await versionContentOf(file, { ...revision, authorAccountId: revision.authorAccountId ?? null })
+    const state = await openDriveObject(new Uint8Array(data), opened.fileKey, opened.expected)
+    await take(await stateAsBytes(file, state))
+  } else {
+    const base = await resolveApiBase()
+    const original = revision.id === 'original'
+    const url = original ? `${base}/drive/files/${file.id}/original` : `${base}/drive/files/${file.id}/versions/${revision.id}/download`
+    const opened = original
+      ? await originalContentOf(file)
+      : await versionContentOf(file, { ...revision, authorAccountId: revision.authorAccountId ?? null })
+    for await (const { plain } of fetchDecryptedChunks(url, opened.fileKey, opened.expected, await freshAccessToken(), opts.signal)) {
+      await take(plain)
+    }
+  }
+  return new Blob(parts, { type: file.mimeType })
+}
+
+/** A saved Yjs state as the file it reads as: a place list's JSON, a note's or code file's text. */
+async function stateAsBytes(file: DriveFile, state: Uint8Array): Promise<Uint8Array> {
+  if (isListName(file.name)) return stateToListJson(state)
+  const Y = await import('yjs')
+  const doc = new Y.Doc()
+  try {
+    Y.applyUpdateV2(doc, state)
+    return new TextEncoder().encode(doc.getText('content').toJSON())
+  } finally {
+    doc.destroy()
+  }
+}

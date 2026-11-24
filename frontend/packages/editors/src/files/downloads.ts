@@ -4,7 +4,7 @@ import { openDownloadSink } from '@kutup/files/download/streamDownload'
 import { downloadAsZip, FsaRequiredError, type ZipFile } from '@kutup/files/zipDownload'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { freshAccessToken } from '@kutup/session/client'
-import { currentContent, readFile, versionToOpen } from '../content'
+import { currentContent, readFile, readRevision, versionToOpen, type RevisionToRead } from '../content'
 import { embeddingKind, exportEmbedded, type ExportedFile } from './embedded'
 import { loadFolderFiles } from '@kutup/drive-core/files'
 import { currentContentOf } from '@kutup/drive-core/keyring'
@@ -173,4 +173,24 @@ export async function downloadSelectionZip(
   if (entries.length === 0) return 'empty'
   await downloadAsZip(entries, archive, await freshAccessToken(), (done, total) => onProgress(done, total))
   return 'done'
+}
+
+/**
+ * Save one revision from a file's history under the file's name, decrypted
+ * as it streams (straight to disk where the browser allows).
+ */
+export async function downloadRevision(file: DriveFile, revision: RevisionToRead): Promise<void> {
+  if (!file.fileKey || !file.name) throw new Error('file is not open')
+  const sink = await openDownloadSink({
+    filename: file.name,
+    mimeType: file.mimeType,
+    blobFallbackMaxBytes: async () => (await driveStreamLimits()).blobFallbackMaxBytes,
+  })
+  try {
+    await readRevision(file, revision, { onPlain: (plain) => sink.write(plain), keep: false })
+    await sink.finalize()
+  } catch (err) {
+    await sink.abort().catch(() => {})
+    throw err
+  }
 }
