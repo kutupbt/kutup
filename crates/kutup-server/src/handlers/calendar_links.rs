@@ -315,12 +315,12 @@ pub async fn events(
     let limit = CALENDAR_EVENTS_PAGE.load(&state.pool).await?;
     let rows: Vec<crate::handlers::calendar::EventRow> = sqlx::query_as(&format!(
         "{}
-          WHERE e.calendar_id = $1 AND se.start_utc < $3
-            AND COALESCE(se.range_end_utc, 'infinity'::timestamptz) >= $2
+          WHERE e.calendar_id = $1 AND {}
             AND ($4::timestamptz IS NULL OR (se.start_utc, e.id) > ($4, $5))
           ORDER BY se.start_utc, e.id
           LIMIT $6",
-        event_view_sql(7)
+        event_view_sql(7),
+        crate::handlers::calendar::MEETS_WINDOW
     ))
     .bind(link.calendar)
     .bind(start)

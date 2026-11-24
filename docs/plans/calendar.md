@@ -743,3 +743,70 @@ with a reminder at its start fires an in-tab notification (Playwright's
 Notification stub), the editor shows and saves reminders, a calendar's
 defaults apply to a new event. Push is covered by the server's live test
 and a unit test of the service worker's handlers.
+
+## E2 §9: repeating events in the app (2026-11-24)
+
+Read from Proton's web client (`applications/calendar`:
+`components/eventModal/inputs/FrequencyInput.tsx`, `CustomFrequencyModal`,
+`rows/RepeatEveryRow`, `rows/EndsRow`, `eventForm/modelToFrequencyProperties`,
+`propertiesToFrequencyModel`, `getFrequencyModelChange`;
+`containers/calendar/recurrence/*`, `eventActions/getSaveRecurringEventActions`,
+`getDeleteRecurringEventActions`, `getRecurringUpdateAllPossibilities`,
+`recurringHelper`, `sequence.ts`; `confirmationModals/*Recurring*`). The
+rule's format stays the Rust core's (`calendar_recurrence.rs`); the app says
+which parts the editor sets and the core writes them.
+
+**Built, as Proton's:**
+- **Repeat** in the editor: does not repeat, every day, every weekday (five
+  days from the week's first, shown only on one of them), every week on the
+  start's day, every month on the day / on the nth weekday (never a fifth) /
+  on the last weekday (only on the last), every year, custom (every N days,
+  weeks on chosen weekdays, months by day or weekday, years; ends never, on a
+  date, after N events up to the server's `calendarMaxCount`, now also in
+  `/auth/settings` as `calendar.maxCount`). The weekly day and the monthly
+  choice follow the start; an end before the start moves to it. A rule the
+  editor doesn't make (an import's) is kept as it is unless another is
+  picked.
+- **Every occurrence drawn** in the day, week and month views and on a full
+  link's page: each series expanded by the core for the shown days only
+  (`occurrences_between` now walks from the window for a series without
+  COUNT), less the occurrences a changed one replaces. The window listing
+  includes a changed occurrence wherever it was moved, so the series is never
+  drawn where it no longer occurs.
+- **This event / This and future events / All events** for a change (also
+  one made by dragging or resizing an occurrence: the editor opens, Save
+  asks) and for a delete, with Proton's texts and warnings ("Previous
+  modifications on this series will be lost.", "Frequency modifications will
+  be lost."). The first occurrence offers no "this and future"; a series of
+  one occurrence offers "all" only. Before asking, every event of the UID is
+  read (`GET …/events/by-uid`, Proton's `getAllEventsByUID`); a changed
+  occurrence whose series is gone is a single event.
+  - This event: a changed occurrence (same UID, `RECURRENCE-ID` the
+    occurrence's start in the series' form, no rule), or the one there
+    changed again; deleted, an `EXDATE` on the series and the change deleted.
+  - This and future: the later changes deleted, the series cut (COUNT down,
+    or UNTIL the previous day's end in its zone; the EXDATEs after it
+    dropped), a new series `<uid>_R<yyyymmdd>[T<hhmmss>]@…` with SEQUENCE 0
+    (a COUNT left as it was counts on from the occurrence; an UNTIL the new
+    start passed moves to it); deleted, the cut alone.
+  - All: the same day with a new time moves the series' start to that time;
+    another day or a new rule starts the series where the form says; either
+    drops the changed and deleted occurrences. All deleted: the changes
+    first, then the series.
+  - SEQUENCE as `sequence.ts`: up by one when times or the rule change,
+    never behind the series' for a change.
+- **Reminders per occurrence**: the server's alarms for a series skip the
+  occurrences changed ones replace (each change reminds of itself), and are
+  recomputed when a change is made, moved or deleted.
+- Each plan is sent one change at a time and kept: Save again after a
+  failure sends only what hasn't landed (a create carries its drawn id, a
+  delete of an event gone is done, an update that landed is read back).
+
+**Deviations:**
+- "All events" with times and rule unchanged keeps the series' changed and
+  deleted occurrences and carries the new title, place and description into
+  them: Proton does this for organizers only and drops them for a personal
+  event; Kutup does it for every series.
+- The split series' UID writes the month as 01–12 (Proton's
+  `getRecurrenceOffsetID` writes `getUTCMonth()`, 00–11); it is only a name.
+- No "keep this occurrence's changes" merge for attendees (E4: invitations).

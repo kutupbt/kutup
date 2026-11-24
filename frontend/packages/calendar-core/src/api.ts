@@ -14,6 +14,7 @@ import {
   calendarEventKeyId,
   createCalendar as makeCalendar,
   localToUtc,
+  rangeEnd,
   sealCalendarEvent,
   sealCalendarMetadata,
   unlockCalendar,
@@ -672,7 +673,11 @@ export async function openEvent(account: MailAccount, calendar: Calendar, row: E
   const times = await timesOf(opened.fields)
   // Signed by the address the server names as the author, with its checked keys.
   const knownAuthor = signers.length > 0
-  const asServed = sameInstant(times.startUtc, row.startUtc) && sameInstant(times.endUtc, row.endUtc) && times.fullDay === row.fullDay
+  // A series' last end as this client expands it, against the server's
+  // (which places it in the window query): docs/plans/calendar.md, E2 §3.
+  const sameRangeEnd = await rangeEndMatches(opened.fields, row.rangeEndUtc)
+  const asServed =
+    sameInstant(times.startUtc, row.startUtc) && sameInstant(times.endUtc, row.endUtc) && times.fullDay === row.fullDay && sameRangeEnd
   return {
     id: row.id,
     calendarId: row.calendarId,
@@ -681,6 +686,17 @@ export async function openEvent(account: MailAccount, calendar: Calendar, row: E
     revision: row.revision,
     reminders: row.reminders ?? null,
     verified: opened.verified && knownAuthor && asServed,
+  }
+}
+
+/** Whether the server's range end is the one the signed fields give (a series' last end, null without end). */
+async function rangeEndMatches(fields: EventFields, served: string | null | undefined): Promise<boolean> {
+  if (!fields.rrule) return true
+  try {
+    const own = await rangeEnd(fields)
+    return own === null ? served == null : served != null && sameInstant(own, served)
+  } catch {
+    return false
   }
 }
 
@@ -736,6 +752,32 @@ export async function loadEvents(
 }
 
 /**
+ * Every event of `calendar` with one UID, opened: a series and its changed
+ * occurrences wherever they are (Proton's `getAllEventsByUID`), read before a
+ * series is changed or deleted. One that doesn't open is refused: a change
+ * planned without it could lose it.
+ */
+export async function loadSeries(account: MailAccount, calendar: Calendar, uid: string): Promise<CalendarEvent[]> {
+  const events: CalendarEvent[] = []
+  for (let after: EventCursor | null = null, pages = 1; ; pages++) {
+    const response: { data: { events: EventRow[]; next: EventCursor | null } } = await api.get(
+      `/calendar/calendars/${encodeURIComponent(calendar.id)}/events/by-uid`,
+      { params: { uid, ...after } },
+    )
+    for (const row of response.data.events) {
+      if (row.uid !== uid) throw new Error('the server listed another series')
+      events.push(await openEvent(account, calendar, row))
+    }
+    const next = response.data.next
+    if (!next) break
+    if (pages >= MAX_EVENT_PAGES) throw new Error('the server never ends this listing')
+    if (after && !cursorAfter(next, after)) throw new Error('the server repeats a page')
+    after = next
+  }
+  return events
+}
+
+/**
  * One change refused by an events sync, with its code (`uidTaken`,
  * `eventLimit`, `revisionConflict` when another device saved first,
  * `sequenceBehind`…).
@@ -786,6 +828,8 @@ export async function saveEvent(
   fields: EventFields,
   existing?: Pick<CalendarEvent, 'id' | 'revision'>,
   reminders?: Reminder[] | null,
+  /** A new event's id, drawn by the caller so a create sent again is the stored one (a planned series change). */
+  newId: string = crypto.randomUUID(),
 ): Promise<string> {
   await beforeEventWrite(session)
   const addressId = await activeAddressId(account)
@@ -796,7 +840,7 @@ export async function saveEvent(
     // A new event's id is drawn here, so a create sent again is the stored one, never a second.
     existing
       ? { update: { id: existing.id, baseRevision: existing.revision, event, ...(reminders !== undefined ? { reminders } : {}) } }
-      : { create: { id: crypto.randomUUID(), event, ...(reminders ? { reminders } : {}) } },
+      : { create: { id: newId, event, ...(reminders ? { reminders } : {}) } },
   )
   return stored?.id ?? existing?.id ?? ''
 }
