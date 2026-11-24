@@ -82,6 +82,11 @@ test('calendar invitations: a Kutup attendee gets the event at once, answers it,
     await openWeek(bea.page)
     await expect(eventsToday(bea.page).filter({ hasText: 'Plan the trip, v2' })).toBeVisible({ timeout: 5_000 })
   }).toPass({ timeout: 90_000 })
+  // A new title moved nothing: Bea's answer stands (only a new time asks again).
+  await openWeek(ada.page)
+  const renamed = await openPopover(ada.page, 'Plan the trip, v2')
+  await expect(renamed.getByTestId('event-attendee').filter({ hasText: bea.account.address })).toHaveAttribute('data-partstat', 'accepted', { timeout: 30_000 })
+  await ada.page.keyboard.press('Escape')
   await openWhenArrived(mail, /Update for an event starting on/)
   await expect(mail.getByTestId('invitation-widget').getByTestId('invitation-title')).toHaveText('Plan the trip, v2', { timeout: 60_000 })
 

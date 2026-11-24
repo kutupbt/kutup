@@ -579,6 +579,23 @@ settings.
 - The **ICS** never carries a token, a key or anyone else's answer; names
   and notes are written without line breaks or quotes (no property
   injection).
+- **What a mail may change.** The widget applies updates and cancellations
+  of an outside invitation when it is shown, as Proton's (`ExtraEvent`
+  calls `updateEventInvitation` on load), but only to a stored event whose
+  ORGANIZER is the one the mail names, never to one this account organizes
+  or one without an organizer (Proton matches by UID; Kutup is stricter, so
+  an attendee who knows a meeting's UID can't rewrite or cancel the
+  organizer's own event by mailing them). A Kutup invitation is taken only
+  when its signed organizer is the mail's, and the widget then shows what
+  the organizer signed, not the mail's copy. An outside sender can still
+  update or cancel the copy of their own invitation, as at Proton: the mail
+  names them as its organizer, and nothing else authenticates an outside
+  ICS.
+- **Auto-add.** "Add to calendar and mark as pending" is on by default:
+  the approved §6 puts Kutup invitations in the calendar at once (Proton's
+  own default for `AutoImportInvite` is off). With it on, an outside
+  invitation goes in as pending when Mail shows it (never for a message in
+  Spam); the account can turn it off.
 
 ### What the server sees (§7, as built)
 
