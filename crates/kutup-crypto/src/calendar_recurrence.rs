@@ -604,15 +604,30 @@ impl Series {
     }
 
     /// The occurrences meeting the half-open window `[from, to)`, at most
-    /// `max` (the events query's window and page).
+    /// `max` (the events query's window and page). A series without `COUNT`
+    /// starts its walk about one occurrence's length before `from` (what a
+    /// view draws costs the window, not the years since `DTSTART`); its
+    /// occurrences there carry `number` 0 unless the walk began at
+    /// `DTSTART`.
     pub fn occurrences_between(
         &self,
         from: Timestamp,
         to: Timestamp,
         max: usize,
     ) -> Result<Vec<Occurrence>> {
+        let walk: Box<dyn Iterator<Item = Result<Occurrence>> + '_> = if self.skips() {
+            // Back by the longest an occurrence lasts, so one that began
+            // before the window and runs into it is met.
+            let length = match self.length {
+                Length::Days(days) => i64::from(days) * 24 * 60 * 60,
+                Length::Time(length) => length.as_secs(),
+            };
+            Box::new(self.occurrences_from(from.as_second().saturating_sub(length)))
+        } else {
+            Box::new(self.occurrences())
+        };
         let mut found = Vec::new();
-        for occurrence in self.occurrences() {
+        for occurrence in walk {
             let occurrence = occurrence?;
             if occurrence.start_utc >= to {
                 break;
@@ -1604,5 +1619,67 @@ mod tests {
         assert_eq!(series.occurrence_at(&at).unwrap().unwrap().number, 4);
         let not = zoned("2026-11-05T09:00:00", "Europe/Istanbul");
         assert!(series.occurrence_at(&not).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_window_walks_from_itself_and_meets_what_runs_into_it() {
+        // A three-day all-day event every week since 1990, and a daily one:
+        // a window in 2030 finds what the whole walk finds there, including
+        // the one that began before it and runs into it.
+        let instant = |text: &str| -> Timestamp { text.parse().unwrap() };
+        let cases = [
+            (
+                EventTime::Date("1990-01-01".parse().unwrap()),
+                EventTime::Date("1990-01-04".parse().unwrap()),
+                "FREQ=WEEKLY",
+            ),
+            (
+                zoned("1990-01-01T23:00:00", "America/New_York"),
+                zoned("1990-01-02T01:00:00", "America/New_York"),
+                "FREQ=DAILY",
+            ),
+        ];
+        for (start, end, rule) in cases {
+            let rule = Rule::parse(rule).unwrap();
+            let series = Series::new(&start, Some(&end), Some(&rule), &[]).unwrap();
+            let (from, to) = (
+                instant("2030-06-02T00:00:00Z"),
+                instant("2030-06-09T00:00:00Z"),
+            );
+            let windowed: Vec<Timestamp> = series
+                .occurrences_between(from, to, 100)
+                .unwrap()
+                .iter()
+                .map(|o| o.start_utc)
+                .collect();
+            let whole: Vec<Timestamp> = series
+                .occurrences()
+                .map(Result::unwrap)
+                .take_while(|o| o.start_utc < to)
+                .filter(|o| o.end_utc > from)
+                .map(|o| o.start_utc)
+                .collect();
+            assert_eq!(windowed, whole);
+            // Not counted from DTSTART: no COUNT to keep.
+            assert!(series
+                .occurrences_between(from, to, 100)
+                .unwrap()
+                .iter()
+                .all(|o| o.number == 0));
+        }
+        // 31 May 2030 is a Friday: the weekly all-day one began then and
+        // runs into the window.
+        let start = EventTime::Date("1990-01-05".parse().unwrap());
+        let end = EventTime::Date("1990-01-08".parse().unwrap());
+        let rule = Rule::parse("FREQ=WEEKLY").unwrap();
+        let series = Series::new(&start, Some(&end), Some(&rule), &[]).unwrap();
+        let first = &series
+            .occurrences_between(
+                instant("2030-06-02T00:00:00Z"),
+                instant("2030-06-03T00:00:00Z"),
+                10,
+            )
+            .unwrap()[0];
+        assert_eq!(first.start, EventTime::Date("2030-05-31".parse().unwrap()));
     }
 }

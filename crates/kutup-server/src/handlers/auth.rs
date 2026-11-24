@@ -742,6 +742,7 @@ async fn calendar_settings(
         key_generations: crate::site_settings::CALENDAR_KEY_GENERATIONS
             .load(pool)
             .await?,
+        max_count: crate::site_settings::CALENDAR_MAX_COUNT.load(pool).await?,
     })
 }
 

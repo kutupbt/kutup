@@ -65,18 +65,25 @@ fn reminder_start(start: &EventTime, start_utc: i64, zone: &str) -> anyhow::Resu
 /// The first firing of a reminder `minutes` from each occurrence's start
 /// at or after `from` (Unix seconds): the occurrence's start and the fire
 /// time. The walk starts about where that occurrence is (a series without
-/// `COUNT` skips the years before it).
+/// `COUNT` skips the years before it). An occurrence another event
+/// changed (its `RECURRENCE-ID`'s instant in `changed`, Unix seconds) is
+/// that event's to remind of, never the series' (Proton's: the changed
+/// occurrence replaces it).
 pub fn next_fire(
     series: &Series,
     zone: &str,
     minutes: i64,
     from: i64,
+    changed: &[i64],
 ) -> anyhow::Result<Option<(i64, i64)>> {
     // An occurrence firing at `from` starts `minutes` from it; a day more
     // for an all-day start in the member's zone.
     let earliest = from - minutes * 60 - 2 * 24 * 60 * 60;
     for occurrence in series.occurrences_from(earliest) {
         let occurrence = occurrence?;
+        if changed.contains(&occurrence.start_utc.as_second()) {
+            continue;
+        }
         let start = reminder_start(&occurrence.start, occurrence.start_utc.as_second(), zone)?;
         let fire = start + minutes * 60;
         if fire >= from {
@@ -84,6 +91,45 @@ pub fn next_fire(
         }
     }
     Ok(None)
+}
+
+/// The instants a series' changed occurrences replace (their
+/// `RECURRENCE-ID`s in the event's calendar), as a column of a query over
+/// `e` (the event) and `se` (its shared row): none for an event that is not
+/// a series.
+const CHANGED: &str = "ARRAY(SELECT cs.recurrence_id FROM calendar_events ce
+           JOIN calendar_shared_events cs ON cs.id = ce.shared_event_id
+          WHERE ce.calendar_id = e.calendar_id AND cs.uid = se.uid
+            AND cs.recurrence_id IS NOT NULL AND se.recurrence_id IS NULL
+            AND se.rrule IS NOT NULL) AS changed";
+
+fn seconds(times: &[time::OffsetDateTime]) -> Vec<i64> {
+    times.iter().map(|at| at.unix_timestamp()).collect()
+}
+
+/// [`recompute`] for the series `uid` in `calendar` (its event without a
+/// `RECURRENCE-ID`), after one of its changed occurrences was made,
+/// changed or deleted: the occurrence it replaces reminds again, or no
+/// longer does.
+pub async fn recompute_series(
+    conn: &mut PgConnection,
+    calendar: Uuid,
+    uid: &str,
+) -> anyhow::Result<()> {
+    let series: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT e.id FROM calendar_events e
+           JOIN calendar_shared_events se ON se.id = e.shared_event_id
+          WHERE e.calendar_id = $1 AND se.uid = $2 AND se.recurrence_id IS NULL
+            AND se.rrule IS NOT NULL",
+    )
+    .bind(calendar)
+    .bind(uid)
+    .fetch_all(&mut *conn)
+    .await?;
+    for event in series {
+        recompute(&mut *conn, event).await?;
+    }
+    Ok(())
 }
 
 fn at(seconds: i64) -> anyhow::Result<time::OffsetDateTime> {
@@ -112,17 +158,20 @@ async fn recompute_for(
     .bind(only)
     .execute(&mut *conn)
     .await?;
-    let event: Option<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT e.calendar_id, se.shared_signed, e.calendar_signed FROM calendar_events e
+    let event: Option<(Uuid, String, String, Vec<time::OffsetDateTime>)> =
+        sqlx::query_as(&format!(
+            "SELECT e.calendar_id, se.shared_signed, e.calendar_signed, {CHANGED}
+           FROM calendar_events e
            JOIN calendar_shared_events se ON se.id = e.shared_event_id
-          WHERE e.id = $1",
-    )
-    .bind(event_id)
-    .fetch_optional(&mut *conn)
-    .await?;
-    let Some((calendar, shared, own)) = event else {
+          WHERE e.id = $1"
+        ))
+        .bind(event_id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    let Some((calendar, shared, own, changed)) = event else {
         return Ok(());
     };
+    let changed = seconds(&changed);
     // A series that doesn't read has no alarms; the caller goes on.
     let (series, all_day) = match series_of(&shared, &own) {
         Ok(read) => read,
@@ -177,7 +226,8 @@ async fn recompute_for(
             else {
                 continue;
             };
-            let Ok(Some((occurrence, fire))) = next_fire(&series, &zone, minutes, now) else {
+            let Ok(Some((occurrence, fire))) = next_fire(&series, &zone, minutes, now, &changed)
+            else {
                 continue;
             };
             let (Ok(occurrence), Ok(fire)) = (at(occurrence), at(fire)) else {
@@ -331,14 +381,17 @@ async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> any
         serde_json::Value,
         Option<serde_json::Value>,
         Option<String>,
+        Vec<time::OffsetDateTime>,
     );
     // The earliest first, with what moving each on reads. Due ones: at most
     // `per_account` of one account's, so one account's many never make the
     // others' late. The outer `fire_at` bounds hold for the version locked:
     // a row another server moved on meanwhile is skipped, never sent again.
-    let columns = "a.account_id, a.event_id, a.reminder, a.action, a.occurrence_start, a.fire_at,
+    let columns = format!(
+        "a.account_id, a.event_id, a.reminder, a.action, a.occurrence_start, a.fire_at,
                 se.shared_signed, e.calendar_signed, m.default_reminders_timed,
-                m.default_reminders_all_day, r.reminders, s.zone";
+                m.default_reminders_all_day, r.reminders, s.zone, {CHANGED}"
+    );
     let joins = "JOIN calendar_events e ON e.id = a.event_id
            JOIN calendar_shared_events se ON se.id = e.shared_event_id
            JOIN calendar_members m ON m.calendar_id = e.calendar_id AND m.account_id = a.account_id
@@ -392,6 +445,7 @@ async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> any
         full_day,
         mine,
         zone,
+        changed,
     ) in rows
     {
         // Moved on meanwhile (another server's): not this one's to fire.
@@ -439,7 +493,13 @@ async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> any
                     .and_then(|minutes| {
                         // One alarm that can't be moved on ends, alone: the
                         // batch goes on.
-                        next_fire(series, zone.as_deref().unwrap_or("UTC"), minutes, from)
+                        next_fire(
+                            series,
+                            zone.as_deref().unwrap_or("UTC"),
+                            minutes,
+                            from,
+                            &seconds(&changed),
+                        )
                             .map_err(|error| {
                                 tracing::warn!(%event, %error, "calendar: an alarm can't move on; it ends")
                             })
@@ -716,13 +776,16 @@ mod tests {
         // 19 Oct 09:00 CEST is 07:00Z; 15 minutes before is 06:45Z.
         let first = utc("2026-10-19T06:45:00Z");
         assert_eq!(
-            next_fire(&series, "UTC", -15, first).unwrap().unwrap().1,
+            next_fire(&series, "UTC", -15, first, &[])
+                .unwrap()
+                .unwrap()
+                .1,
             first
         );
         // Just past it: the next week, after the DST change (08:00Z start).
         let second = utc("2026-10-26T07:45:00Z");
         assert_eq!(
-            next_fire(&series, "UTC", -15, first + 1)
+            next_fire(&series, "UTC", -15, first + 1, &[])
                 .unwrap()
                 .unwrap()
                 .1,
@@ -730,7 +793,37 @@ mod tests {
         );
         // Past the last: none.
         let after = utc("2026-11-03T00:00:00Z");
-        assert!(next_fire(&series, "UTC", -15, after).unwrap().is_none());
+        assert!(next_fire(&series, "UTC", -15, after, &[])
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn a_changed_occurrence_is_skipped_for_the_series() {
+        let start = TimeV1::Zoned {
+            local: "2026-10-19T09:00:00".into(),
+            tzid: "Europe/Berlin".into(),
+        }
+        .to_time()
+        .unwrap();
+        let end = TimeV1::Zoned {
+            local: "2026-10-19T10:00:00".into(),
+            tzid: "Europe/Berlin".into(),
+        }
+        .to_time()
+        .unwrap();
+        let rule = Rule::parse("FREQ=WEEKLY;COUNT=3").unwrap();
+        let series = Series::new(&start, Some(&end), Some(&rule), &[]).unwrap();
+        // The second occurrence (26 Oct 08:00Z) was changed: the series'
+        // reminder goes from the first to the third.
+        let first = utc("2026-10-19T06:45:00Z");
+        let changed = [utc("2026-10-26T08:00:00Z")];
+        assert_eq!(
+            next_fire(&series, "UTC", -15, first + 1, &changed)
+                .unwrap()
+                .unwrap(),
+            (utc("2026-11-02T08:00:00Z"), utc("2026-11-02T07:45:00Z"))
+        );
     }
 
     /// The vector the calendar's service worker checks too
@@ -777,12 +870,15 @@ mod tests {
         let day = TimeV1::Date("2026-10-29".into()).to_time().unwrap();
         let series = Series::new(&day, None, None, &[]).unwrap();
         // 15 hours before Istanbul's midnight (21:00Z on the 28th): 06:00Z.
-        let fire = next_fire(&series, "Europe/Istanbul", -15 * 60, 0)
+        let fire = next_fire(&series, "Europe/Istanbul", -15 * 60, 0, &[])
             .unwrap()
             .unwrap()
             .1;
         assert_eq!(fire, utc("2026-10-28T06:00:00Z"));
-        let in_utc = next_fire(&series, "UTC", -15 * 60, 0).unwrap().unwrap().1;
+        let in_utc = next_fire(&series, "UTC", -15 * 60, 0, &[])
+            .unwrap()
+            .unwrap()
+            .1;
         assert_eq!(in_utc, utc("2026-10-28T09:00:00Z"));
     }
 }

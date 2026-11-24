@@ -152,7 +152,7 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
           setGhost(null)
           if (g?.kind === 'times' && (g.start !== p.start || g.end !== p.end)) void openTimes(p, g.start, g.end, prefs.zone)
         },
-        click: () => openEditor({ kind: 'edit', event: p.event }),
+        click: () => openEditor({ kind: 'edit', event: p.event, instance: p.instance }),
         cancel: () => setGhost(null),
       },
       scroller.current,
@@ -268,7 +268,7 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
             <div className="mt-1 space-y-0.5">
               {allDay(day).map((p) => (
                 <EventChip
-                  key={p.event.id}
+                  key={p.key}
                   placed={p}
                   showTime={false}
                   faded={moving === p}
@@ -347,7 +347,7 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
                 ) : null}
                 {columns(segments).map((s) => (
                   <div
-                    key={s.placed.event.id}
+                    key={s.placed.key}
                     className="absolute px-0.5"
                     style={{
                       top: (s.top / 60) * HOUR_PX,
@@ -424,7 +424,7 @@ function TimedBlock({
       onClick={(e) => {
         e.stopPropagation()
         // A pointer's click is the grid's press; a key's opens the event.
-        if (e.detail === 0) openEditor({ kind: 'edit', event: placed.event })
+        if (e.detail === 0) openEditor({ kind: 'edit', event: placed.event, instance: placed.instance })
       }}
       aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight Alt+Shift+ArrowUp Alt+Shift+ArrowDown"
       className={cn(

@@ -94,6 +94,9 @@ pub struct CalendarPublicSettings {
     /// The key generations one calendar keeps: the owner's app compacts a
     /// calendar nearing it.
     pub key_generations: i64,
+    /// The largest `COUNT` a repeating event takes (the editor's "after N
+    /// times", Proton's `FREQUENCY_COUNT_MAX`).
+    pub max_count: i64,
 }
 
 /// The weakest key derivation Kutup Pass sets a vault to (administrators'

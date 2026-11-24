@@ -17,7 +17,7 @@ import { openEditor } from './editorState'
 import { formatDayNumber, formatTitle, formatWeekday } from './format'
 import { newEventStart } from './gridInteraction'
 import { openMoved, openNew } from './moves'
-import { covers, place, type Placed } from './placement'
+import { covers, placeAll, type Placed } from './placement'
 import { holdTouches, pressActive } from './press'
 import { useCalendarPrefs } from './prefs'
 import { TimeGrid } from './TimeGrid'
@@ -58,8 +58,9 @@ export function CalendarPage() {
   const colors = useMemo(() => new Map((calendars.data?.calendars ?? []).map((c: Calendar) => [c.id, c.color])), [calendars.data])
   const placed = useQuery({
     queryKey: ['calendar', 'placed', prefs.zone, events.dataUpdatedAt],
-    enabled: !!events.data,
-    queryFn: () => Promise.all(events.data!.events.map((event) => place(event, colors.get(event.calendarId) ?? '#8080ff', prefs.zone))),
+    enabled: !!events.data && !!range.data,
+    // Repeating events drawn occurrence by occurrence in the shown days.
+    queryFn: () => placeAll(events.data!.events, (event) => colors.get(event.calendarId) ?? '#8080ff', prefs.zone, range.data!.start, range.data!.end),
   })
 
   // Proton's shortcuts: ← → through time, T today, 1 2 3 the views, N a new event.
@@ -181,7 +182,7 @@ function MonthView({ days, month, today, placed }: { days: CivilDate[]; month: s
             </div>
             {here.slice(0, shown).map((p) => (
               <EventChip
-                key={p.event.id}
+                key={p.key}
                 placed={p}
                 showTime
                 faded={ghost?.kind === 'shift' && ghost.placed === p}
