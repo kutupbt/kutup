@@ -1,0 +1,40 @@
+# With docker-compose.koru.yml: certbot keeps renewing nginx/certs/, as with
+# the nginx edge (docker-compose.acme.yml, which this replaces; leave that
+# one out). Koru answers its HTTP-01 challenges from the shared webroot (Let's
+# Encrypt follows the plain-HTTP redirect to HTTPS; names with no site, the
+# TURN names, get them over plain HTTP) and the key is written owned by
+# Koru's user. When the certificate changes, scripts/reload-certificate-users.sh
+# (run by the kutup-certificates.path unit, docs/self-hosting.md) reloads Koru
+# and restarts the TURN relays; Stalwart watches the files itself.
+services:
+  acme:
+    image: certbot/certbot:v5.8.0
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/acme.sh"]
+    environment:
+      KUTUP_BASE_DOMAIN: ${KUTUP_BASE_DOMAIN:-}
+      KUTUP_ACME_DOMAINS: ${KUTUP_ACME_DOMAINS:-}
+      KUTUP_ACME_EXTRA_DOMAINS: ${KUTUP_ACME_EXTRA_DOMAINS:-}
+      KUTUP_ACME_EMAIL: ${KUTUP_ACME_EMAIL:-}
+      KUTUP_ACME_STAGING: ${KUTUP_ACME_STAGING:-0}
+      KUTUP_CERTS_OWNER: "65532:65532"
+    volumes:
+      - ./nginx/acme.sh:/acme.sh:ro
+      - ./nginx/certs:/certs
+      - acme_state:/etc/letsencrypt
+      - acme_webroot:/var/www/acme
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /certs/fullchain.pem && test -s /certs/privkey.pem"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  koru:
+    environment:
+      KORU_ACME_WEBROOT: /var/www/acme
+    volumes:
+      - acme_webroot:/var/www/acme:ro
+
+volumes:
+  acme_state:
+  acme_webroot:

@@ -133,6 +133,21 @@ def main() -> None:
     check("staging" in acme["server"]["acme"]["directory"], "acme: staging")
     check(all(s["mode"] == "block" for s in acme["site"]), "KORU_MODE=block")
 
+    # certbot renewing the files (docker-compose.koru-certbot.yml): its HTTP-01 answers on every
+    # site, and on a plain-HTTP catch-all for names with no site (the TURN names).
+    plain = config()
+    check(all(r["path"] != "/.well-known/acme-challenge/*" for s in plain["site"] for r in s.get("route", [])),
+          "no ACME route without KORU_ACME_WEBROOT")
+    webroot = config(KORU_ACME_WEBROOT="/var/www/acme")
+    named_sites = [s for s in webroot["site"] if s["hosts"] != ["*"]]
+    check(all(any(r["path"] == "/.well-known/acme-challenge/*" and r.get("root") == "/var/www/acme"
+                  and r.get("mode") == "off" for r in s.get("route", [])) for s in named_sites),
+          "every site answers ACME challenges from the webroot, uninspected")
+    catch_all = [s for s in webroot["site"] if s["hosts"] == ["*"]]
+    check(len(catch_all) == 1 and catch_all[0].get("root") == "/var/www/acme"
+          and catch_all[0].get("https_redirect") is False and "tls" not in catch_all[0]
+          and "upstreams" not in catch_all[0], "a plain-HTTP catch-all serves only the webroot")
+
     # The names nginx's certificate covers instead of the apps' (KUTUP_ACME_DOMAINS) are served too.
     named = config(KUTUP_ACME_DOMAINS="kutup.example.org,turn.example.org")
     check("kutup.example.org" in named["site"][0]["hosts"], "KUTUP_ACME_DOMAINS names are sites")
