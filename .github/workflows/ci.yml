@@ -28,9 +28,6 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
-  # The test stacks' database log names each error's SQLSTATE, which the
-  # sanitized failure diagnostics keep (docker-compose.yml).
-  POSTGRES_LOG_LINE_PREFIX: "%m [%p] %e "
 
 jobs:
   format-and-fuzz:
@@ -210,6 +207,9 @@ jobs:
       # Numbers-only Chat diagnostics pass the sanitized reporter (spec 169's
       # restore facts: tests/e2e/safe-reporter.ts).
       KUTUP_E2E_CHAT_DIAGNOSTICS: "1"
+      # The stack with its database logging each error's SQLSTATE, for the
+      # sanitized failure diagnostics (docker-compose.ci-diagnostics.yml).
+      COMPOSE_FILE: docker-compose.yml:docker-compose.ci-diagnostics.yml
       POSTGRES_PASSWORD: chat-backup-ci-postgres
       JWT_SECRET: chat-backup-ci-jwt-secret-at-least-32-bytes
       OPAQUE_SETUP_KEYS: "1:0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dE="
@@ -336,6 +336,9 @@ jobs:
       # A stuck sign-in or registration step reports where it stood
       # (numbers only; tests/e2e/fixtures/apps.ts submitThroughRateLimit).
       KUTUP_E2E_ACCOUNT_DIAGNOSTICS: "1"
+      # The stack with its database logging each error's SQLSTATE, for the
+      # sanitized failure diagnostics (docker-compose.ci-diagnostics.yml).
+      COMPOSE_FILE: docker-compose.yml:docker-compose.ci-diagnostics.yml
       POSTGRES_PASSWORD: mail-browser-ci-postgres
       JWT_SECRET: mail-browser-ci-jwt-secret-at-least-32-bytes
       OPAQUE_SETUP_KEYS: "1:wsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsI="
@@ -493,6 +496,9 @@ jobs:
       KUTUP_E2E_DRIVE_DIAGNOSTICS: "1"
       # And the collaboration ones (spec 02's tabs when a sync check fails).
       KUTUP_E2E_COLLAB_DIAGNOSTICS: "1"
+      # The stack with its database logging each error's SQLSTATE, for the
+      # sanitized failure diagnostics (docker-compose.ci-diagnostics.yml).
+      COMPOSE_FILE: docker-compose.yml:docker-compose.ci-diagnostics.yml
       POSTGRES_PASSWORD: workspace-browser-ci-postgres
       JWT_SECRET: workspace-browser-ci-jwt-secret-at-least-32-bytes
       OPAQUE_SETUP_KEYS: "1:wsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsI="
