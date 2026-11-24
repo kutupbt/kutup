@@ -93,7 +93,7 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 | Signature check | `getEventInformation.ts` (verification status) | ✅ | "Not verified" on an event whose signature fails |
 | Start and end time zones apart | `rows/DateTimeRow.tsx` "Show time zones" | 🟡 | one zone for both start and end |
 | Repeat | `inputs/FrequencyInput.tsx`, `CustomFrequencyModal.tsx`, `rows/RepeatEveryRow.tsx`, `RepeatOnRow.tsx`, `EndsRow.tsx` | 🟡 | no control yet (the editor writes `rrule: null`); see Recurrence |
-| Participants | `rows/RowParticipants.tsx`, `inputs/ParticipantsInput.tsx` | ❌ | planned: E4c |
+| Participants | `rows/RowParticipants.tsx`, `inputs/ParticipantsInput.tsx` | ✅ | E4c: `features/invitations/ParticipantsRow.tsx` |
 | Colour per event | `inputs/EventColorSelect.tsx` "Custom event colors" | ❌ | events take their calendar's colour; not planned |
 | Links in the description and location clickable | `cal/hooks/useUrlifyString.tsx` | ✅ | `features/linkText.ts`: http, https and mailto only, written as text (never HTML), `rel="noopener noreferrer"` |
 
@@ -141,15 +141,15 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 | Key reset and reactivation after a password reset | `cal/containers/setup/CalendarResetSection.tsx`, `CalendarReactivateSection.tsx` | ➖ | not needed: the passphrase is on the account key (W4), which a recovery keeps |
 | Default calendar | `pcc/settings/MyCalendarsSection.tsx` "Default calendar updated" | ❌ | new events go to the first calendar; planned: E2 §7 |
 | Default event duration per calendar (30, 60, 90, 120) | `PersonalCalendarModal.tsx` "Event duration" | ❌ | fixed 30 minutes; planned: E2 (calendar.md E2 §4, `DefaultEventDuration`) |
-| The address a calendar sends invitations from | `PersonalCalendarModal.tsx` "Email address" | ❌ | comes with E4 (from the account's address or the calendar's shared mailbox) |
+| The address a calendar sends invitations from | `PersonalCalendarModal.tsx` "Email address" | 🟡 | E4: the account's own address; a shared mailbox's is on the roadmap |
 
 ## Settings
 
 | Feature | Proton | Kutup | Notes / where |
 |---|---|---|---|
 | Week start, clock (12/24 h) | `pcc/settings/WeekStartSelector.tsx`, account time format | 🟡 | `features/SettingsDialog.tsx`, kept on this device; planned: E2 §7 moves them to the account |
-| Invitation language ("Send in") | `pcc/settings/InviteLocaleSelector.tsx`, `CalendarInvitationsSection.tsx` | ❌ | E4 sends in the organizer's language, with no setting |
-| "Add to calendar and mark as pending" for received invitations | `CalendarInvitationsSection.tsx` | ❌ | E4 §6 adds Kutup invitations on this server at once, with no setting; outside invitations wait for an answer |
+| Invitation language ("Send in") | `pcc/settings/InviteLocaleSelector.tsx`, `CalendarInvitationsSection.tsx` | ✅ | E4: `features/invitations/InvitationSettings.tsx`, on the account (`calendar_invite_settings`) |
+| "Add to calendar and mark as pending" for received invitations | `CalendarInvitationsSection.tsx` | ✅ | E4: on the account, on by default; Kutup invitations adopted at once (`useAutoAdd`), outside ones added when Mail shows them |
 | Auto-add video links to invitations | `CalendarInvitationsSection.tsx` "Auto-add Meet links" | ❌ | with E5's Chat meetings |
 | "Show others when I'm busy" default for new calendars | `CalendarEventDefaultsSection.tsx` | ❌ | left out of E3 on purpose (roadmap); not planned |
 | Keyboard shortcuts on or off | `pcc/settings/CalendarOtherPreferencesSection.tsx` | ➖ | Kutup's are always on and never in a field or dialog (calendar.md UX parity) |
@@ -179,8 +179,8 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 |---|---|---|---|
 | "Show others when I'm busy" per calendar | `pcc/calendarModal/BusySlotsCheckbox.tsx` | ✅ | `busy.share` (E3e) |
 | Only the organization may ask; times only | `busy-schedule` API | ✅ | `crates/kutup-server/src/calendar_busy.rs` |
-| Others' busy times beside an event's participants | `cal/components/eventModal/rows/BusyParticipantRow.tsx`, `cal/hooks/useBusySlots.ts` | ❌ | planned: E4c (calendar-e3.md Q-4) |
-| Their busy blocks drawn on the grid while planning | `cal/store/busySlots` | ❌ | planned: E4c |
+| Others' busy times beside an event's participants | `cal/components/eventModal/rows/BusyParticipantRow.tsx`, `cal/hooks/useBusySlots.ts` | ✅ | E4c: "Show busy times" per participant, "Availability unknown" (`accessible`), at most `calendar.busy_shown_max` |
+| Their busy blocks drawn on the grid while planning | `cal/store/busySlots` | ❌ | shown as a line under each participant instead; on the roadmap |
 
 ## Invitations
 
@@ -188,16 +188,16 @@ All planned in E4 (`calendar-e4.md`, slices E4a–E4e) unless said.
 
 | Feature | Proton | Kutup | Notes / where |
 |---|---|---|---|
-| Participants from Contacts, optional or required | `rows/RowParticipants.tsx`, `ParticipantRow.tsx` | ❌ | E4c |
-| Invitations, updates and cancellations by mail (iMIP REQUEST, CANCEL) | `psl/calendar/mailIntegration/invite.ts`, `useSendIcs.ts` | ❌ | E4c, through Mail's `sendDraft` |
-| Send failures listed with "Send again" | `confirmationModals/SendWithErrorsConfirmationModal.tsx` | ❌ | E4c |
-| The organizer sees each answer | `cal/components/events/AttendeeStatusIcon.tsx`, `ParticipantDropdown.tsx` | ❌ | E4c, answers sealed (beyond Proton) |
-| The Mail widget: Yes / Maybe / No, a note, change the answer, its states | `applications/mail/.../extrasHeader/components/ExtraEvents.tsx`, `pcc/RsvpSection/` | ❌ | E4d |
-| Outside replies applied; "not in the participants list" with Add | `ExtraEvents.tsx` | ❌ | E4d |
-| "Add to Calendar" for a published event (PUBLISH) in Mail | `ExtraEvents.tsx` | ❌ | E4d |
-| Kutup attendees get the event at once, and its updates | `AddedProtonAttendees` | ❌ | E4e (the shared-event split is in the wipe-2 schema) |
-| Answer from Calendar's event view | `cal/components/events/RsvpSection.tsx` | ❌ | E4e (an invitation shown in the calendar, answered there) |
-| An attendee deleting the event declines it | `eventActions/getAttendeeDeleteSingleEditActions.ts`, `getDeleteEventActions.ts` | ❌ | not in E4's text |
+| Participants from Contacts, optional or required | `rows/RowParticipants.tsx`, `ParticipantRow.tsx` | ✅ | E4c |
+| Invitations, updates and cancellations by mail (iMIP REQUEST, CANCEL) | `psl/calendar/mailIntegration/invite.ts`, `useSendIcs.ts` | ✅ | E4c, through Mail's `sendDraft` (`calendar-core/invitationMail.ts`) |
+| Send failures listed with "Send again" | `confirmationModals/SendWithErrorsConfirmationModal.tsx` | ✅ | E4c: in the event editor |
+| The organizer sees each answer | `cal/components/events/AttendeeStatusIcon.tsx`, `ParticipantDropdown.tsx` | ✅ | E4c: the event view (`InvitationPanel`), answers sealed (beyond Proton) |
+| The Mail widget: Yes / Maybe / No, a note, change the answer, its states | `applications/mail/.../extrasHeader/components/ExtraEvents.tsx`, `pcc/RsvpSection/` | ✅ | E4d: `apps/mail/src/features/InvitationWidget.tsx` |
+| Outside replies applied; "not in the participants list" with Add | `ExtraEvents.tsx` | ✅ | E4d: applied when the reply is shown, its ATTENDEE the sender |
+| "Add to Calendar" for a published event (PUBLISH) in Mail | `ExtraEvents.tsx` | ✅ | E4d |
+| Kutup attendees get the event at once, and its updates | `AddedProtonAttendees` | ✅ | E4e |
+| Answer from Calendar's event view | `cal/components/events/RsvpSection.tsx` | ✅ | E4e |
+| An attendee deleting the event declines it | `eventActions/getAttendeeDeleteSingleEditActions.ts`, `getDeleteEventActions.ts` | ✅ | E4: `EventDelete.tsx` |
 | Counter-proposals | shown, "not supported for the moment" | ➖ | E4 Q-1: as Proton |
 
 ## Import, export and other calendars
@@ -240,7 +240,7 @@ All planned in E4 (`calendar-e4.md`, slices E4a–E4e) unless said.
 | Reminder and link pages only open Calendar's own pages | — | ✅ | the service worker's checks (calendar.md E2b-3) |
 | Narrow screens | "Week and month views only apply to desktop" (`CalendarLayoutSection.tsx`) | 🟡 | the sidebar becomes a sheet (`frontend/packages/ui/src/components/app-shell.tsx`); the week and month grids are not adapted |
 | Calendar beside Mail and Drive (side panel) | `cal/helpers/drawer.ts`, `VIEWS.MAIL`, `VIEWS.DRIVE` | ❌ | not planned |
-| Open an event from Mail | `cal/hooks/useOpenEventsFromMail.tsx` | ❌ | planned: E4d ("Open in Calendar") |
+| Open an event from Mail | `cal/hooks/useOpenEventsFromMail.tsx` | ✅ | E4d: "Open in Calendar" opens its day |
 | Offline | none | ➖ | as Proton; [`../research/16-browser-storage-architecture.md`](../research/16-browser-storage-architecture.md) if ever |
 | Native apps | iOS, Android | ➖ | deferred ([`../mobile-build.md`](../mobile-build.md)) |
 

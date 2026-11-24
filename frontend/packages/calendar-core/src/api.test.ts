@@ -20,6 +20,7 @@ const keyFor = (lock: { passphraseShare: string; keyGeneration: number }, owner?
     return { name: `name of ${calendarId}`, description: '', verified: metadata.signature === 'owner' && signers.length > 0 }
   },
   openEvent: (_event: unknown, signers: string[]) => ({ fields: {}, verified: signers.length > 0, generation: lock.keyGeneration }),
+  openEventWith: (_event: unknown, _attendees: unknown, signers: string[]) => ({ fields: {}, verified: signers.length > 0, generation: lock.keyGeneration, attendees: null, attendeesVerified: false, tokens: [] }),
   free: () => undefined,
 })
 vi.mock('@kutup/crypto/calendar', () => ({
@@ -341,7 +342,7 @@ function fields(start: EventFields['start'], end: EventFields['end']): EventFiel
 
 /** A calendar whose key opens every event as `opened`, signed. */
 function calendarOpening(opened: EventFields): Calendar {
-  return { id: 'c1', revision: 1, keyring: new Map(), unlocked: { openEvent: () => ({ fields: opened, verified: true }) } } as unknown as Calendar
+  return { id: 'c1', revision: 1, keyring: new Map(), unlocked: { openEventWith: () => ({ fields: opened, verified: true, attendees: null, attendeesVerified: false, tokens: [] }) } } as unknown as Calendar
 }
 
 function eventRow(startUtc: string, endUtc: string, fullDay: boolean): EventRow {
@@ -375,15 +376,16 @@ describe('opening events of a calendar with several key generations', () => {
   it('opens each with the generation its key packets name, and checks another author against their address keys', async () => {
     const make = (g: number) => ({
       keyId: `kid-${g}`,
-      openEvent: (_e: unknown, signers: string[]) => ({ fields: fields({ utc: '2026-10-29T09:00:00Z' }, { utc: '2026-10-29T10:00:00Z' }), verified: signers.includes('bo@kutup.test-key'), generation: g }),
+      openEventWith: (_e: unknown, _a: unknown, signers: string[]) => ({ fields: fields({ utc: '2026-10-29T09:00:00Z' }, { utc: '2026-10-29T10:00:00Z' }), verified: signers.includes('bo@kutup.test-key'), generation: g, attendees: null, attendeesVerified: false, tokens: [] }),
     })
     const older = make(1)
     const newest = make(2)
     const calendar = { id: 'c1', revision: 1, keyring: new Map([['kid-1', older], ['kid-2', newest]]), unlocked: newest } as unknown as Calendar
-    const spy = vi.spyOn(older, 'openEvent')
+    const spy = vi.spyOn(older, 'openEventWith')
     const row = { ...eventRow('2026-10-29T09:00:00Z', '2026-10-29T10:00:00Z', false), authorAddress: 'bo@kutup.test', event: { kid: 'kid-1' } as unknown as EventRow['event'] }
     const opened = await openEvent(notOwner, calendar, row)
-    expect(spy).toHaveBeenCalledWith(row.event, ['bo@kutup.test-key'])
+    // Not an attendee's copy: both parts checked against the author's keys.
+    expect(spy).toHaveBeenCalledWith(row.event, null, ['bo@kutup.test-key'], ['bo@kutup.test-key'])
     expect(opened.verified).toBe(true)
     // No author named: never verified.
     expect((await openEvent(notOwner, calendar, { ...row, authorAddress: null })).verified).toBe(false)

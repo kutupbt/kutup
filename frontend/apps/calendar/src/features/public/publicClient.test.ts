@@ -23,6 +23,7 @@ vi.mock('@kutup/crypto/calendar', () => ({
 }))
 vi.mock('@kutup/calendar-core/api', () => ({
   timesOf: () => Promise.resolve({ startUtc: '2026-11-20T09:00:00Z', endUtc: '2026-11-20T10:00:00Z', fullDay: false }),
+  plainEventParts: (id: string) => ({ sharedEventId: id, home: true, organizer: null, attendees: null, attendeesVerified: false, tokens: [], attendeeRows: [], sequence: 0 }),
 }))
 vi.mock('@kutup/session/apiBase', () => ({ resolveApiBase: () => Promise.resolve('/api/v1') }))
 

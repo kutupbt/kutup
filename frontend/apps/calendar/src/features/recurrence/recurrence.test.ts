@@ -6,7 +6,7 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
   const [{ readFile }, module] = await Promise.all([import('node:fs/promises'), import('../../../../../wasm/crypto-calendar-wasm/kutup_crypto_wasm.js')])
   const wasm = await readFile(new URL('../../../../../wasm/crypto-calendar-wasm/kutup_crypto_wasm_bg.wasm', import.meta.url))
   await module.default({ module_or_path: wasm })
-  return { getCryptoWasm: () => Promise.resolve(module) }
+  return { getCryptoWasm: () => Promise.resolve(module), getCalendarCryptoWasm: () => Promise.resolve(module) }
 })
 
 const { followStart, modelOf, onceModel, pickPreset, presetOf, ruleOf } = await import('./frequency')
