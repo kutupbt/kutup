@@ -2554,7 +2554,10 @@ pub(crate) fn map_insert_conflict(err: sqlx::Error) -> AppError {
             return AppError::conflict("already registered");
         }
     }
-    AppError::internal(format!("register: {err}"))
+    AppError::internal(format!(
+        "register ({}): {err}",
+        crate::error::sql_failure(&err)
+    ))
 }
 
 /// `^[a-z0-9_-]{3,32}$` — mirrors `usernameRegexp`.

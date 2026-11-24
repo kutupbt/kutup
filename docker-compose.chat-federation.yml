@@ -8,6 +8,9 @@ services:
       POSTGRES_DB: kutup
       POSTGRES_USER: kutup
       POSTGRES_PASSWORD: federation_test_a
+    # Each log line names its SQLSTATE (%e): the sanitized diagnostics keep
+    # only that (scripts/collect-chat-e2e-diagnostics.sh).
+    command: ["postgres", "-c", "log_line_prefix=%m [%p] %e "]
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:
@@ -22,6 +25,9 @@ services:
       POSTGRES_DB: kutup
       POSTGRES_USER: kutup
       POSTGRES_PASSWORD: federation_test_b
+    # Each log line names its SQLSTATE (%e): the sanitized diagnostics keep
+    # only that (scripts/collect-chat-e2e-diagnostics.sh).
+    command: ["postgres", "-c", "log_line_prefix=%m [%p] %e "]
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:

@@ -184,8 +184,53 @@ impl From<sqlx::Error> for AppError {
                 return AppError::bad_request("a byte field is not canonical base64");
             }
         }
-        AppError::internal(format!("database error: {err}"))
+        AppError::internal(format!("database error ({}): {err}", sql_failure(&err)))
     }
+}
+
+/// What kind of database failure `err` is, as a fixed label for the log:
+/// the database's SQLSTATE (`sqlstate=23505`), or sqlx's own variant when the
+/// database said nothing (`sqlx=PoolTimedOut`). Never a message or a value,
+/// so the sanitized CI diagnostics can keep it
+/// (scripts/collect-chat-e2e-diagnostics.sh).
+pub fn sql_failure(err: &sqlx::Error) -> String {
+    use sqlx::Error as E;
+    let variant = match err {
+        E::Database(db) => {
+            return match db.code() {
+                Some(code)
+                    if code.len() == 5
+                        && code
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase()) =>
+                {
+                    format!("sqlstate={code}")
+                }
+                _ => "sqlx=Database".to_owned(),
+            }
+        }
+        E::Configuration(_) => "Configuration",
+        E::InvalidArgument(_) => "InvalidArgument",
+        E::Io(_) => "Io",
+        E::Tls(_) => "Tls",
+        E::Protocol(_) => "Protocol",
+        E::RowNotFound => "RowNotFound",
+        E::TypeNotFound { .. } => "TypeNotFound",
+        E::ColumnIndexOutOfBounds { .. } => "ColumnIndexOutOfBounds",
+        E::ColumnNotFound(_) => "ColumnNotFound",
+        E::ColumnDecode { .. } => "ColumnDecode",
+        E::Encode(_) => "Encode",
+        E::Decode(_) => "Decode",
+        E::AnyDriverError(_) => "AnyDriverError",
+        E::PoolTimedOut => "PoolTimedOut",
+        E::PoolClosed => "PoolClosed",
+        E::WorkerCrashed => "WorkerCrashed",
+        E::Migrate(_) => "Migrate",
+        E::InvalidSavePointStatement => "InvalidSavePointStatement",
+        E::BeginFailed => "BeginFailed",
+        _ => "Other",
+    };
+    format!("sqlx={variant}")
 }
 
 /// Handler result alias — `Ok` is any `IntoResponse`, `Err` is the JSON error above.
@@ -366,5 +411,52 @@ mod tests {
         let (status, body) = body_string(AppError::internal("secret db dsn leaked")).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(body, r#"{"error":"internal server error"}"#);
+    }
+
+    /// A database error as the driver gives one: a message (with data in
+    /// it) and a code.
+    #[derive(Debug)]
+    struct Refused(Option<&'static str>);
+    impl std::fmt::Display for Refused {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("value alice@example.org refused")
+        }
+    }
+    impl std::error::Error for Refused {}
+    impl sqlx::error::DatabaseError for Refused {
+        fn message(&self) -> &str {
+            "value alice@example.org refused"
+        }
+        fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
+            self.0.map(std::borrow::Cow::Borrowed)
+        }
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
+
+    #[test]
+    fn a_database_failure_is_labelled_by_its_sqlstate_or_variant_only() {
+        let refused = |code| sqlx::Error::Database(Box::new(Refused(code)));
+        assert_eq!(sql_failure(&refused(Some("0A000"))), "sqlstate=0A000");
+        assert_eq!(sql_failure(&refused(Some("not a code"))), "sqlx=Database");
+        assert_eq!(sql_failure(&refused(None)), "sqlx=Database");
+        assert_eq!(sql_failure(&sqlx::Error::PoolTimedOut), "sqlx=PoolTimedOut");
+        assert_eq!(sql_failure(&sqlx::Error::RowNotFound), "sqlx=RowNotFound");
+        // The 500 the log keeps names the label before the driver's text.
+        let error = AppError::from(refused(Some("23514")));
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(error
+            .message
+            .starts_with("database error (sqlstate=23514): "));
     }
 }
