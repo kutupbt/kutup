@@ -81,6 +81,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::calendar::update,
         crate::handlers::calendar::delete,
         crate::handlers::calendar::events,
+        crate::handlers::calendar::events_by_uid,
         crate::handlers::calendar::all_events,
         crate::handlers::calendar::event,
         crate::handlers::calendar::sync,

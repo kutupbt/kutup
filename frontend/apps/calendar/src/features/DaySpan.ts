@@ -67,7 +67,7 @@ export function pressShiftDays(
         show(null)
         if (days !== 0) moved(placed, days, 0)
       },
-      click: () => openEditor({ kind: 'edit', event: placed.event }),
+      click: () => openEditor({ kind: 'edit', event: placed.event, instance: placed.instance }),
       cancel: () => show(null),
     },
     scroller,

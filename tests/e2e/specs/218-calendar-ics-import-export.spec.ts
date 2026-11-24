@@ -114,8 +114,14 @@ test('calendar: an .ics import reports what it can’t take, the export reads ba
   const editor = page.getByRole('dialog', { name: 'Event' })
   await expect(editor.getByLabel('Location')).toHaveValue('Room 4, Floor 2')
   await editor.getByRole('button', { name: 'Cancel' }).click()
+  // Every occurrence of the series, week after week: the changed one in
+  // place of its own, and the last one (the third is excluded).
   await page.goto(appUrl('calendar', '/?view=week&date=2026-11-09'))
-  await expect(page.getByTestId('calendar-column-2026-11-09').getByTestId('calendar-event').filter({ hasText: 'Team sync (moved)' })).toContainText('14:00', {
+  const second = page.getByTestId('calendar-column-2026-11-09').getByTestId('calendar-event').filter({ hasText: 'Team sync' })
+  await expect(second.filter({ hasText: 'Team sync (moved)' })).toContainText('14:00', { timeout: 60_000 })
+  await expect(second).toHaveCount(1)
+  await page.goto(appUrl('calendar', '/?view=week&date=2026-11-23'))
+  await expect(page.getByTestId('calendar-column-2026-11-23').getByTestId('calendar-event').filter({ hasText: 'Team sync' })).toContainText('10:00', {
     timeout: 60_000,
   })
   await page.goto(appUrl('calendar', WEEK))
@@ -147,6 +153,9 @@ test('calendar: an .ics import reports what it can’t take, the export reads ba
   await again.getByTestId('import-close').click()
   await page.reload()
   await expect(monday.getByTestId('calendar-event').filter({ hasText: 'Team sync' })).toHaveCount(1, { timeout: 60_000 })
+  await page.goto(appUrl('calendar', '/?view=week&date=2026-11-23'))
+  await expect(page.getByTestId('calendar-column-2026-11-23').getByTestId('calendar-event').filter({ hasText: 'Team sync' })).toHaveCount(1, { timeout: 60_000 })
+  await page.goto(appUrl('calendar', WEEK))
   await expect(page.getByTestId('calendar-column-2026-11-04').getByTestId('calendar-event').filter({ hasText: 'Lunch with Deniz' })).toHaveCount(1)
   await context.close()
 })

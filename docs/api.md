@@ -2955,7 +2955,18 @@ calendarId, uid, authorAddress, event: SealedEventV1, startUtc, endUtc,
 fullDay, rangeEndUtc, sequence, revision, modifiedAt, reminders }` (`reminders`:
 the caller's own for it, null for their calendar's defaults); the times are what the server read from the shared signed
 part, which a client checks again when it opens the event. A calendar the
-caller isn't a member of is `404`. `GET …/events/{eventId}` answers one.
+caller isn't a member of is `404`. A changed occurrence of a series (an
+event with a `RECURRENCE-ID`) is listed in every window that the occurrence
+it replaces meets, wherever it was moved to, so a client drawing the
+series there leaves that occurrence out (the client keeps what meets the
+window). `GET …/events/{eventId}` answers one.
+
+### GET /api/v1/calendar/calendars/{id}/events/by-uid?uid=&afterStart=&afterId=
+
+Every event of the calendar with one UID: a series and its changed
+occurrences, wherever they are (Proton's `queryEvents({ UID })`), which a
+client reads before it changes or deletes a series. Paged and answered as
+the window listing; a `uid` empty or longer than 255 characters is `400`.
 
 ### GET /api/v1/calendar/calendars/{id}/events/all?afterId=&limit=
 

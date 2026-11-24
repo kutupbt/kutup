@@ -9,7 +9,7 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { formatLongDate, formatTime, formatTitle } from '../format'
-import { covers, place, type Placed } from '../placement'
+import { covers, placeAll, type Placed } from '../placement'
 import { closePublicCalendar, LinkKeyMissing, LinkNotFound, linkProof, loadBusyBlocks, loadPublicEvents, loadPublicLink, openPublicCalendar, type BusyBlock } from './publicClient'
 
 /** The viewer's own zone: a link has no account, so no calendar zone to read. */
@@ -33,11 +33,11 @@ async function placeBusy(block: BusyBlock, index: number): Promise<Placed> {
   if (block.fullDay) {
     const first = block.startUtc.slice(0, 10)
     const after = block.endUtc.slice(0, 10) > first ? block.endUtc.slice(0, 10) : addDays(first, 1)
-    return { event: { id: `busy-${index}` } as Placed['event'], color: '', allDay: true, start: first, end: after, firstDay: first, afterLastDay: after }
+    return { key: `busy-${index}`, event: { id: `busy-${index}` } as Placed['event'], instance: null, color: '', allDay: true, start: first, end: after, firstDay: first, afterLastDay: after }
   }
   const [start, end] = await Promise.all([utcToLocal(block.startUtc, ZONE), utcToLocal(block.endUtc, ZONE)])
   const lastDay = end.slice(11) === '00:00:00' && end > start ? addDays(end.slice(0, 10), -1) : end.slice(0, 10)
-  return { event: { id: `busy-${index}` } as Placed['event'], color: '', allDay: false, start, end, firstDay: start.slice(0, 10), afterLastDay: addDays(lastDay, 1) }
+  return { key: `busy-${index}`, event: { id: `busy-${index}` } as Placed['event'], instance: null, color: '', allDay: false, start, end, firstDay: start.slice(0, 10), afterLastDay: addDays(lastDay, 1) }
 }
 
 /**
@@ -87,7 +87,7 @@ export function PublicCalendarPage() {
         return { placed: await Promise.all(blocks.map(placeBusy)), unreadable: 0, busy: true }
       }
       const loaded = await loadPublicEvents(linkId, calendar.data!, start, end, (await linkProof(linkId, secret)) ?? '')
-      return { placed: await Promise.all(loaded.events.map((event) => place(event, '', ZONE))), unreadable: loaded.unreadable, busy: false }
+      return { placed: await placeAll(loaded.events, () => '', ZONE, start, end), unreadable: loaded.unreadable, busy: false }
     },
   })
 
@@ -118,7 +118,7 @@ export function PublicCalendarPage() {
     items: (items.data?.placed ?? [])
       .filter((p) => covers(p, day))
       .sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.localeCompare(b.start))
-      .map((p) => ({ key: `${p.event.id}-${day}`, allDay: p.allDay, start: p.start, end: p.end, title: items.data!.busy ? null : (p.event.fields.summary ?? null) })),
+      .map((p) => ({ key: `${p.key}-${day}`, allDay: p.allDay, start: p.start, end: p.end, title: items.data!.busy ? null : (p.event.fields.summary ?? null) })),
   }))
 
   return (

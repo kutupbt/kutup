@@ -34,7 +34,7 @@ export async function openNew(date: CivilDate, start: number, end: number, zone:
 /** Opens `placed` moved by days and minutes (an all-day event by days). */
 export async function openMoved(placed: Placed, days: number, minutes: number, viewZone: string): Promise<void> {
   if (placed.allDay) {
-    openEditor({ kind: 'edit', event: placed.event, moved: { start: addDays(placed.firstDay, days), end: addDays(placed.afterLastDay, days - 1) } })
+    openEditor({ kind: 'edit', event: placed.event, instance: placed.instance, moved: { start: addDays(placed.firstDay, days), end: addDays(placed.afterLastDay, days - 1) } })
     return
   }
   await openTimes(placed, shiftLocal(placed.start, days, minutes), shiftLocal(placed.end, days, minutes), viewZone)
@@ -44,5 +44,5 @@ export async function openMoved(placed: Placed, days: number, minutes: number, v
 export async function openTimes(placed: Placed, start: string, end: string, viewZone: string): Promise<void> {
   const zone = eventZone(placed.event)
   const [startThere, endThere] = await Promise.all([inZone(start, viewZone, zone), inZone(end, viewZone, zone)])
-  openEditor({ kind: 'edit', event: placed.event, moved: { start: startThere, end: endThere } })
+  openEditor({ kind: 'edit', event: placed.event, instance: placed.instance, moved: { start: startThere, end: endThere } })
 }

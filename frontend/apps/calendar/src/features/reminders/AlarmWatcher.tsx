@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { loadAlarms, loadEvent, useCalendars, type Alarm } from '@kutup/calendar-core/api'
+import { loadAlarms, loadEvent, useCalendars, type Alarm, type CalendarEvent } from '@kutup/calendar-core/api'
 import { utcToLocal } from '@kutup/crypto/calendar'
 import { useMailAccount } from '@kutup/mail-core/api'
 import { showNotification } from '@kutup/ui/lib/desktopNotifications'
 import { openEditor } from '../editorState'
+import { instancesOf } from '../placement'
 import { useCalendarPrefs } from '../prefs'
 import { alarmTag, LATE_MS, LOOK_AHEAD_MS, PADDING_MS, runAlarms } from './alarmChain'
 import { alarmText, alarmTitle } from './alarmText'
@@ -18,6 +19,14 @@ function instant(ms: number): string {
 
 /** A sleep longer than this (the clock jumped past a minute's tick) starts the chain again (Proton's useHasSuspendedCounter). */
 const SUSPENDED_MS = 90_000
+
+/** Opens a reminder's event at its occurrence (a repeating event's, not its first). */
+async function openAt(event: CalendarEvent, occurrenceStart: string): Promise<void> {
+  if (!event.fields.rrule) return openEditor({ kind: 'edit', event })
+  const at = Date.parse(occurrenceStart)
+  const found = await instancesOf(event, instant(at), instant(at + 1000), 4).catch(() => [])
+  openEditor({ kind: 'edit', event, instance: found.find((o) => Date.parse(o.startUtc) === at) ?? null })
+}
 
 /**
  * Proton's AlarmContainer and AlarmWatcher: while Calendar is open, the
@@ -91,7 +100,7 @@ export function AlarmWatcher() {
       const body = alarmText(t, { title, allDay: event.fullDay, start, now: nowLocal, locale: language, hour12 })
       const tag = alarmTag(alarm)
       await showReminder(t('reminders.title'), { body, tag, eventId: event.id }, () =>
-        showNotification(t('reminders.title'), { body, tag }, () => openEditor({ kind: 'edit', event })),
+        showNotification(t('reminders.title'), { body, tag }, () => void openAt(event, alarm.occurrenceStart)),
       )
     }
     return runAlarms(list, fired.current, fire)

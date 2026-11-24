@@ -1069,6 +1069,131 @@ fn repeating_events() {
     drop_calendars(&c, &base, &ada, &[&id, &other]);
 }
 
+/// A series' changed occurrences (Proton's single edits): listed by the
+/// series' UID wherever they are, in the window of the occurrence they
+/// replace even when moved out of it, and the series' alarms skip that
+/// occurrence until the change is deleted.
+#[test]
+fn changed_occurrences() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = crate::common::client();
+    let ada = owner(&c, &base);
+    let (id, key) = made_calendar(&c, &base, &ada, "Değişen");
+    let sealed = |fields: &EventFieldsV1| seal(fields, &key, &ada.secret_key);
+    let get = |path: &str| -> Value {
+        let r = bearer(c.get(format!("{base}{path}")), &ada.user.token)
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        r.json().unwrap()
+    };
+
+    // Mondays at 09:00 in Berlin from 4 January 2027 (08:00Z), no end.
+    let mut weekly = fields(
+        "changed@kutup.test",
+        "2027-01-04T09:00:00",
+        "2027-01-04T10:00:00",
+        "Weekly",
+    );
+    weekly.start = berlin("2027-01-04T09:00:00");
+    weekly.end = Some(berlin("2027-01-04T10:00:00"));
+    weekly.rrule = Some("FREQ=WEEKLY".into());
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&weekly))]));
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    let series_id = results[0]["event"]["id"].as_str().unwrap().to_owned();
+    let series_alarms = || -> Vec<String> {
+        get("/api/v1/calendar/alarms?start=2027-01-01T00:00:00Z&end=2027-02-01T00:00:00Z")["alarms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["eventId"] == series_id.as_str())
+            .map(|a| a["occurrenceStart"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // The defaults (device and email) remind of the first.
+    assert_eq!(
+        series_alarms(),
+        ["2027-01-04T08:00:00Z", "2027-01-04T08:00:00Z"]
+    );
+
+    // The first occurrence moved to March: the series reminds of the second.
+    let mut moved = weekly.clone();
+    moved.rrule = None;
+    moved.start = berlin("2027-03-10T15:00:00");
+    moved.end = Some(berlin("2027-03-10T16:00:00"));
+    moved.recurrence_id = Some(berlin("2027-01-04T09:00:00"));
+    moved.summary = Some("Moved".into());
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&moved))]));
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    let child = results[0]["event"].clone();
+    assert_eq!(
+        series_alarms(),
+        ["2027-01-11T08:00:00Z", "2027-01-11T08:00:00Z"]
+    );
+
+    // The window of 4 January lists the change too (its client hides the
+    // series' occurrence there); one in February doesn't.
+    let uids_at = |start: &str, end: &str| -> Vec<String> {
+        get(&format!(
+            "/api/v1/calendar/calendars/{id}/events?start={start}&end={end}"
+        ))["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let child_id = child["id"].as_str().unwrap().to_owned();
+    assert!(uids_at("2027-01-04T00:00:00Z", "2027-01-05T00:00:00Z").contains(&child_id));
+    assert!(!uids_at("2027-02-01T00:00:00Z", "2027-02-02T00:00:00Z").contains(&child_id));
+
+    // By the UID: the series and its change, oldest start first; another
+    // UID, nothing.
+    let listed = get(&format!(
+        "/api/v1/calendar/calendars/{id}/events/by-uid?uid=changed%40kutup.test"
+    ));
+    let ids: Vec<&str> = listed["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [series_id.as_str(), child_id.as_str()]);
+    assert!(listed["next"].is_null());
+    let none = get(&format!(
+        "/api/v1/calendar/calendars/{id}/events/by-uid?uid=nobody%40kutup.test"
+    ));
+    assert!(none["events"].as_array().unwrap().is_empty());
+    let r = bearer(
+        c.get(format!(
+            "{base}/api/v1/calendar/calendars/{id}/events/by-uid?uid="
+        )),
+        &ada.user.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+
+    // The change deleted: the series reminds of the first again.
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "delete": { "id": child_id, "baseRevision": child["revision"] } }]),
+    );
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    assert_eq!(
+        series_alarms(),
+        ["2027-01-04T08:00:00Z", "2027-01-04T08:00:00Z"]
+    );
+    drop_calendars(&c, &base, &ada, &[&id]);
+}
+
 /// Reminders (docs/plans/calendar.md, E2 §4): a member's own or their
 /// calendar's defaults, the alarms the server keeps for them (and moves
 /// with the event, the defaults and the zone), the browsers that take

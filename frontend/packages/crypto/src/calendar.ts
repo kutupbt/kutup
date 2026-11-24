@@ -47,6 +47,33 @@ export interface EventFields {
   commentOther?: string[]
 }
 
+/** A recurrence rule in Proton's subset, as the editor makes it (`RuleV1`). */
+export interface RuleFields {
+  frequency: 'daily' | 'weekly' | 'monthly' | 'yearly'
+  interval?: number
+  count?: number | null
+  /** A date for an all-day series, a UTC instant for a timed one (`supportedUntil` makes it). */
+  until?: CalendarTime | null
+  /** `MO` … `SU`. */
+  byDay?: string[]
+  byMonthDay?: number | null
+  byMonth?: number | null
+  /** 1 to 4, or -1 (the last). */
+  bySetPos?: number | null
+  byYearDay?: number | null
+  wkst?: string | null
+}
+
+/** One occurrence of an event (`OccurrenceV1`). */
+export interface Occurrence {
+  /** Its start in the form of the event's start: what a RECURRENCE-ID or an EXDATE naming it carries. */
+  start: CalendarTime
+  startUtc: string
+  endUtc: string
+  /** Its place in the series, 1 for the first; 0 when the walk skipped ahead (a series without COUNT). */
+  number: number
+}
+
 export interface EventPart {
   data: string
   signature: string
@@ -309,6 +336,11 @@ interface CalendarWasm {
   calendarUtcToLocal(instant: string, tzid: string): string
   calendarLocalToUtc(local: string, tzid: string): string
   calendarTimeZones(): string[]
+  calendarRuleText(rule: RuleFields): string
+  calendarReadRule(text: string): RuleFields
+  calendarSupportedUntil(start: CalendarTime, date: string): CalendarTime
+  calendarOccurrences(fields: EventFields, from: string, to: string, max: number): Occurrence[]
+  calendarRangeEnd(fields: EventFields): string | null | undefined
   calendarImportIcs(text: string, options: IcsImportOptions): IcsImportOutcome
   calendarExportIcs(calendar: IcsExport): string
 }
@@ -376,6 +408,35 @@ export async function utcToLocal(instant: string, tzid: string): Promise<string>
 /** A wall-clock time in `tzid` as a UTC instant (RFC 3339), as events convert theirs. */
 export async function localToUtc(local: string, tzid: string): Promise<string> {
   return (await wasm()).calendarLocalToUtc(local, tzid)
+}
+
+/** A rule as its canonical `RRULE` value; refused outside Proton's subset. */
+export async function ruleText(rule: RuleFields): Promise<string> {
+  return (await wasm()).calendarRuleText(rule)
+}
+
+/** An `RRULE` value as the editor shows it; refused outside Proton's subset. */
+export async function readRule(text: string): Promise<RuleFields> {
+  return (await wasm()).calendarReadRule(text)
+}
+
+/**
+ * The `UNTIL` for a series starting at `start` and ending on `date`
+ * (`yyyy-MM-dd`), as Proton's `getSupportedUntil`: a date, or the end of that
+ * day in the start's zone, as UTC.
+ */
+export async function supportedUntil(start: CalendarTime, date: string): Promise<CalendarTime> {
+  return (await wasm()).calendarSupportedUntil(start, date)
+}
+
+/** An event's occurrences meeting `[from, to)` (RFC 3339), at most `max`; refused as a server would refuse the event. */
+export async function occurrences(fields: EventFields, from: string, to: string, max: number): Promise<Occurrence[]> {
+  return (await wasm()).calendarOccurrences(fields, from, to, max)
+}
+
+/** When an event's last occurrence ends (RFC 3339), or null for a series without end. */
+export async function rangeEnd(fields: EventFields): Promise<string | null> {
+  return (await wasm()).calendarRangeEnd(fields) ?? null
 }
 
 /** The IANA time zones the bundled database knows. */

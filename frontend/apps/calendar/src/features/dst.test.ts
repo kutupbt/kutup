@@ -23,7 +23,9 @@ const BERLIN = 'Europe/Berlin'
 /** A timed event in Berlin, shown in `view`. */
 function berlinEvent(start: string, end: string): Placed {
   return {
+    key: start,
     event: { fields: { start: { zoned: { local: start, tzid: BERLIN } } } } as unknown as Placed['event'],
+    instance: null,
     color: '#000',
     allDay: false,
     start,
