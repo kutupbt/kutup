@@ -36,6 +36,10 @@ step() {
 static() {
   step "Compose S3 credential wiring"
   python3 scripts/test-compose-s3-credentials.py
+  # Koru itself is not in CI (scripts/test-koru-edge.sh runs it); the
+  # configuration Kutup writes for it is checked here.
+  step "Koru edge configuration (koru/render.sh against nginx's rules)"
+  python3 scripts/test-koru-config.py
   step "Restore drill script (offline dry runs)"
   scripts/test-restore-drill.sh
   step "Migrations (applied ones unchanged, new ones newer than the base)"
