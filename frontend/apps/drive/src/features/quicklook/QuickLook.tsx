@@ -5,7 +5,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@kutup/ui/components/dialog'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
-import { readFile } from '@kutup/editors/content'
+import { readFile, readRevision, type RevisionToRead } from '@kutup/editors/content'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { editorKindFor, extensionOf } from '@kutup/drive-core/editorKind'
 import { chooseViewer } from '@kutup/editors/viewers/dispatch'
@@ -23,6 +23,8 @@ const MAX_TEXT_BYTES = 512 * 1024
 export interface QuickLookTarget {
   folder: Folder
   file: DriveFile
+  /** An earlier revision from the file's history instead of its current content. */
+  revision?: RevisionToRead & { createdAt: string; sizeBytes: number }
 }
 
 type Loaded =
@@ -59,7 +61,7 @@ export function QuickLook({
 
   useEffect(() => {
     if (!target) return
-    const { folder, file: f } = target
+    const { folder, file: f, revision } = target
     let cancelled = false
     let url: string | null = null
     setLoaded(null)
@@ -67,9 +69,10 @@ export function QuickLook({
     const viewer = chooseViewer(name)
     const text = editorKindFor(name) === 'text'
     // No viewer, or too large to decrypt whole: its large thumbnail if it
-    // has one (cached blob: URLs are owned by the thumbnail store).
+    // has one (cached blob: URLs are owned by the thumbnail store). The
+    // thumbnail is of the current content: never shown for an earlier revision.
     const fallback = (reason: 'type' | 'size') =>
-      void thumbnailUrl(f, 'lg').then((picture) => {
+      void (revision ? Promise.resolve(null) : thumbnailUrl(f, 'lg')).then((picture) => {
         if (!cancelled) setLoaded(picture ? { kind: 'picture', url: picture, reason } : { kind: 'none', reason })
       })
     if (!viewer && !text) {
@@ -78,8 +81,9 @@ export function QuickLook({
         cancelled = true
       }
     }
-    // Video and audio play as they stream (docs/plans/drive-block-format.md §4).
-    if (viewer && (viewer.kind === 'video' || viewer.kind === 'audio')) {
+    // Video and audio play as they stream (docs/plans/drive-block-format.md §4);
+    // an earlier revision is read whole, like a picture.
+    if (!revision && viewer && (viewer.kind === 'video' || viewer.kind === 'audio')) {
       const controller = new AbortController()
       let close: (() => void) | null = null
       // A stream that fails before it plays is replaced by a whole download.
@@ -110,14 +114,15 @@ export function QuickLook({
         close?.()
       }
     }
-    if (f.size > MAX_PREVIEW_BYTES) {
+    if ((revision ? revision.sizeBytes : f.size) > MAX_PREVIEW_BYTES) {
       fallback('size')
       return () => {
         cancelled = true
       }
     }
     const controller = new AbortController()
-    readFile(folder, f, controller.signal)
+    const read = revision ? readRevision(f, revision, { signal: controller.signal }) : readFile(folder, f, controller.signal)
+    read
       .then(async (blob) => {
         if (cancelled) return
         if (viewer) {
@@ -187,10 +192,12 @@ export function QuickLook({
               <div className="min-w-0 flex-1">
                 <DialogTitle className="truncate text-sm font-medium">{file.name}</DialogTitle>
                 <DialogDescription className="truncate text-xs text-muted-foreground">
-                  {formatBytes(file.size, i18n.language)} · {formatInstant(file.updatedAt, i18n.language)}
+                  {target.revision
+                    ? t('versions.previewOf', { date: formatInstant(target.revision.createdAt, i18n.language) })
+                    : `${formatBytes(file.size, i18n.language)} · ${formatInstant(file.updatedAt, i18n.language)}`}
                 </DialogDescription>
               </div>
-              {target.folder.source !== 'remote' ? (
+              {target.folder.source !== 'remote' && !target.revision ? (
                 <Button size="sm" variant="outline" onClick={() => onOpen(target)}>
                   <ExternalLink />
                   <span className="hidden sm:inline">{t('drive.actions.open')}</span>
@@ -234,7 +241,7 @@ export function QuickLook({
                   <p className="max-w-sm text-sm text-muted-foreground">
                     {loaded.kind === 'none' ? t(`quickLook.none.${loaded.reason}`) : null}
                   </p>
-                  {target.folder.source !== 'remote' && loaded.kind === 'none' && loaded.reason === 'type' && editorKindFor(file.name ?? '') ? (
+                  {target.folder.source !== 'remote' && !target.revision && loaded.kind === 'none' && loaded.reason === 'type' && editorKindFor(file.name ?? '') ? (
                     <Button onClick={() => onOpen(target)}>
                       <ExternalLink />
                       {t('quickLook.openInEditor')}

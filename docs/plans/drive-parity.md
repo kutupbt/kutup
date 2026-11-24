@@ -93,7 +93,7 @@ Both are cheapest before the wipe.
 
 | Feature | Proton | Kutup |
 |---|---|---|
-| Version list for any file: preview, restore, download, delete, details | `modals/RevisionsModal/RevisionsModalView.tsx`, `revisions/ContextMenuButtons/` | 🟡 documents, whiteboards and notes in the editor (`editors/src/versions/VersionHistoryPanel.tsx`): open, restore, name, keep forever. Other files (photos, PDFs, archives) get versions when replaced but have no history in the website; `kutup versions` lists, downloads, restores and labels them. No delete of one version |
+| Version list for any file: preview, restore, download, delete, details | `modals/RevisionsModal/RevisionsModalView.tsx`, `revisions/ContextMenuButtons/` | ✅ Drive → a file's menu → Version history (`features/versions/VersionHistoryDialog.tsx`, `editors/src/history.ts`): current version, then earlier ones by day, week, month and year (Proton's grouping), with who saved each and its size; preview in Quick Look, download, restore (sealed again as the newest version, the rest kept), keep forever, delete (the owner, or whoever saved it), and the owner's retention with a link to change it. Notes, code files and place lists list their saved states and are restored in their editor (`VersionHistoryPanel.tsx`), which merges into the live document. No details dialog per version (gap 5) |
 | Retention setting | `packages/components/containers/drive/settings/RetentionDaysSection.tsx` | ✅ Drive → Settings: 1 week to 10 years (`settings/DriveSettingsPage.tsx`, `version_retention.rs`); Proton also offers "don't keep" |
 
 ## Trash
@@ -166,9 +166,8 @@ What people hit first, with whether the fix needs the server or the schema:
 2. **Public folder links with subfolders:** server (walk the tree under the
    link, keys of subfolders sealed to the link) and probably **schema**
    (link keys per subfolder, or a link-to-epoch table).
-3. **Version history for every file** in Drive (open, restore, download,
-   delete one): client plus a delete route; versions are already stored. No
-   schema.
+3. ~~**Version history for every file**~~ in Drive (open, restore,
+   download, delete one): built (`features/versions/VersionHistoryDialog.tsx`).
 4. **Large downloads in Firefox and Safari:** a service worker stream, as
    Proton's. Client only.
 5. **Details dialog** (size, type, dates, uploader, signer, location,

@@ -470,6 +470,22 @@ fn the_original_upload_is_deleted_by_its_owner_once_replaced() {
         .status()
     };
 
+    // The listing says whether the first upload is kept (the history lists
+    // it while it is): absent until it is gone.
+    let original_pruned = |token: &str| {
+        let files: Vec<Value> = bearer(c.get(format!("{base}/api/v1/drive/files")), token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        let row = files
+            .into_iter()
+            .find(|f| f["id"] == file_id.as_str())
+            .expect("the file is listed");
+        row.get("originalPruned").cloned()
+    };
+    assert_eq!(original_pruned(&token), None);
+
     // Still the current content: refused. Someone without the file: not found.
     assert_eq!(delete(&token), StatusCode::CONFLICT);
     let stranger = register(&c, &base);
@@ -499,6 +515,7 @@ fn the_original_upload_is_deleted_by_its_owner_once_replaced() {
     );
     assert_eq!(used(&c, &base, &token), before - size, "freed once");
     assert_eq!(delete(&token), StatusCode::NOT_FOUND);
+    assert_eq!(original_pruned(&token), Some(json!(true)));
 
     // Gone from reads; the current content is the version.
     let original = bearer(

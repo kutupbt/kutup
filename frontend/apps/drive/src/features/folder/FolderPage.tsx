@@ -1,4 +1,4 @@
-import { CheckCheck, Copy, Download, ExternalLink, Eye, FolderInput, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
+import { CheckCheck, Copy, Download, ExternalLink, Eye, FolderInput, History, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
 import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
 import { useCallback, useMemo, useState, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -24,12 +24,12 @@ import { canShareFile } from '@kutup/drive-core/fileShares'
 import { folderHex } from '../drive/colors'
 import { useDeclareCurrentFolder } from '../drive/currentFolderContext'
 import { isWithin } from '../drive/copy'
-import { downloadFile, downloadFolderZip, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
+import { downloadFile, downloadFolderZip, downloadRevision, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
 import { useFolderFiles } from '@kutup/drive-core/files'
 import { useRestore } from '@kutup/drive-core/trash'
 import { canonicalName } from '@kutup/drive-core/names'
 import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
-import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
 import { isTargetBlocked, sharingOffScope } from '@kutup/drive-core/publicSharing'
 import { folderPath, openFile } from '@kutup/editors/paths'
@@ -46,6 +46,7 @@ import { Toolbar } from '../explorer/Toolbar'
 import { QuickLook, type QuickLookTarget } from '../quicklook/QuickLook'
 import { FileThumbnail } from '../thumbnails/FileThumbnail'
 import { useUploadActions } from '../uploads/useUploadActions'
+import { VersionHistoryDialog } from '../versions/VersionHistoryDialog'
 
 type Target = { folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile }
 type Dialog =
@@ -54,6 +55,8 @@ type Dialog =
   | { kind: 'share'; folder: Folder }
   /** By key: the file's own key changes as people are removed, the list refreshes it. */
   | { kind: 'shareFile'; key: string }
+  /** By key too: a restore or delete changes the file, the list refreshes it. */
+  | { kind: 'history'; key: string }
   | { kind: 'link'; url: string }
   | { kind: 'invite'; url: string; account: string }
   | { kind: 'copy'; targets: Target[] }
@@ -309,6 +312,10 @@ export function FolderPage() {
         }
         if (canShareFile(container, file)) {
           actions.push({ id: 'share', label: t('drive.actions.share'), icon: <UserPlus />, onSelect: () => setDialog({ kind: 'shareFile', key: itemKey(item) }), separated: true })
+        }
+        // Editors see a file's history (as Proton's "See version history"); files on another server are not offered it.
+        if (container.canUpload && folderLocation(container).kind === 'local') {
+          actions.push({ id: 'history', label: t('drive.actions.versionHistory'), icon: <History />, onSelect: () => setDialog({ kind: 'history', key: itemKey(item) }), separated: true })
         }
         if (mayChangeFile(container, file) && container.source !== 'remote') {
           actions.push({ id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setDialog({ kind: 'rename', target }), separated: true })
@@ -632,7 +639,7 @@ export function FolderPage() {
         target={looking}
         onClose={() => setLooking(null)}
         onStep={
-          lookableFiles.length > 1
+          lookableFiles.length > 1 && !looking?.revision
             ? (direction) => {
                 if (!looking) return
                 const at = lookableFiles.findIndex((f) => f.file.id === looking.file.id)
@@ -648,7 +655,24 @@ export function FolderPage() {
           setLooking(null)
           openFile(navigate, target.folder, target.file)
         }}
-        onDownload={(target) => void download([target])}
+        onDownload={(target) => {
+          if (!target.revision) return void download([target])
+          downloadRevision(target.file, target.revision).catch((error: unknown) => {
+            if (!(error instanceof DOMException && error.name === 'AbortError')) toast.error(t('versions.downloadFailed'))
+          })
+        }}
+      />
+      <VersionHistoryDialog
+        target={(() => {
+          const target = dialog?.kind === 'history' ? lookup.get(dialog.key) : undefined
+          return target?.file ? { folder: target.folder, file: target.file } : null
+        })()}
+        onClose={() => setDialog(null)}
+        onPreview={setLooking}
+        onOpen={(target) => {
+          setDialog(null)
+          openFile(navigate, target.folder, target.file)
+        }}
       />
       <FolderPickerDialog
         open={copying !== null}
