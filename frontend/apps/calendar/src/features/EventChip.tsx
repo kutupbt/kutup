@@ -2,25 +2,28 @@ import { ShieldAlert } from 'lucide-react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@kutup/ui/lib/cn'
-import { openEditor } from './editorState'
+import { openPopover } from './popoverState'
 import { formatTime } from './format'
 import type { Placed } from './placement'
 import { useCalendarPrefs } from './prefs'
 
 /**
- * An event in a day grid (the all-day row, the month): opens on a click or
- * Enter; `onPointerDown` lets the grid drag it by days.
+ * An event in a day grid (the all-day row, the month, a day's list): its
+ * popover opens on a click or Enter (`onOpen` instead, when given);
+ * `onPointerDown` lets the grid drag it by days.
  */
 export function EventChip({
   placed,
   showTime,
   onPointerDown,
   faded = false,
+  onOpen,
 }: {
   placed: Placed
   showTime: boolean
   onPointerDown?: (event: ReactPointerEvent) => void
   faded?: boolean
+  onOpen?: () => void
 }) {
   const { t, i18n } = useTranslation()
   const prefs = useCalendarPrefs()
@@ -33,7 +36,8 @@ export function EventChip({
         e.stopPropagation()
         // A pointer's click is the grid's (a press that may have dragged); a key's is this button's.
         if (onPointerDown && e.detail > 0) return
-        openEditor({ kind: 'edit', event: placed.event, instance: placed.instance })
+        if (onOpen) onOpen()
+        else openPopover({ kind: 'event', placed }, e.currentTarget)
       }}
       className={cn('flex w-full min-w-0 touch-pan-y items-center gap-1 truncate rounded px-1.5 py-0.5 text-left text-xs hover:brightness-95', faded && 'opacity-40')}
       style={{ background: `${placed.color}26`, borderLeft: `3px solid ${placed.color}` }}

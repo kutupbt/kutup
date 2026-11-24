@@ -30,6 +30,7 @@ test('calendar: a weekly series across summer time, one occurrence changed, one 
 
   // Mondays at nine, from 19 October: Proton's "Every week on Monday".
   await page.getByTestId('calendar-slot-2026-10-19-18').click()
+  await page.getByTestId('create-popover-more').click()
   const editor = page.getByRole('dialog', { name: 'New event' })
   await editor.getByLabel('Title').fill('Weekly sync')
   await editor.getByTestId('event-repeat').click()
@@ -51,6 +52,8 @@ test('calendar: a weekly series across summer time, one occurrence changed, one 
   // One occurrence moved and renamed: "This event".
   await week(page, '2026-10-26')
   await eventsOn(page, '2026-10-26', 'Weekly sync').click()
+  await expect(page.getByTestId('event-popover-repeat')).toHaveText('Weekly on Monday')
+  await page.getByTestId('event-popover-edit').click()
   const edit = page.getByRole('dialog', { name: 'Event', exact: true })
   await expect(edit.getByLabel('Starts')).toHaveValue('2026-10-26')
   await expect(edit.getByTestId('event-repeat')).toContainText('Every week on Monday')
@@ -67,8 +70,9 @@ test('calendar: a weekly series across summer time, one occurrence changed, one 
 
   // One occurrence deleted: "This event" (an EXDATE on the series).
   await week(page, '2026-11-02')
+  // From its popover (Proton's Delete there asks the same).
   await eventsOn(page, '2026-11-02', 'Weekly sync').click()
-  await page.getByRole('dialog', { name: 'Event', exact: true }).getByTestId('event-delete').click()
+  await page.getByTestId('event-popover-delete').click()
   const remove = page.getByRole('dialog', { name: 'Delete recurring event' })
   await expect(remove.getByTestId('recurring-option-future')).toBeVisible()
   await remove.getByTestId('recurring-option-single').check()
@@ -79,6 +83,7 @@ test('calendar: a weekly series across summer time, one occurrence changed, one 
   // From 9 November on, renamed: "This and future events" splits the series.
   await week(page, '2026-11-09')
   await eventsOn(page, '2026-11-09', 'Weekly sync').click()
+  await page.getByTestId('event-popover-edit').click()
   const future = page.getByRole('dialog', { name: 'Event', exact: true })
   await future.getByLabel('Title').fill('Later sync')
   await future.getByRole('button', { name: 'Save' }).click()
@@ -98,6 +103,7 @@ test('calendar: a weekly series across summer time, one occurrence changed, one 
   // The first series deleted whole: "All events", its changed occurrence with it.
   await page.getByTestId('calendar-previous').click()
   await eventsOn(page, '2026-10-19', 'Weekly sync').click()
+  await page.getByTestId('event-popover-edit').click()
   await page.getByRole('dialog', { name: 'Event', exact: true }).getByTestId('event-delete').click()
   const all = page.getByRole('dialog', { name: 'Delete recurring event' })
   // The first occurrence: no "this and future".
@@ -113,7 +119,7 @@ test('calendar: a weekly series across summer time, one occurrence changed, one 
   await week(page, '2026-11-16')
   await expect(eventsOn(page, '2026-11-16', 'Later sync')).toBeVisible({ timeout: 120_000 })
   await eventsOn(page, '2026-11-16', 'Later sync').click()
-  await page.getByRole('dialog', { name: 'Event', exact: true }).getByTestId('event-delete').click()
+  await page.getByTestId('event-popover-delete').click()
   const rest = page.getByRole('dialog', { name: 'Delete recurring event' })
   await rest.getByTestId('recurring-option-all').check()
   await rest.getByRole('button', { name: 'Delete' }).click()

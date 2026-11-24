@@ -17,6 +17,12 @@ async function centre(locator: Locator): Promise<{ x: number; y: number }> {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
 }
 
+/** A point in a day of the all-day row under its header, which opens the day. */
+async function belowHeader(locator: Locator): Promise<{ x: number; y: number }> {
+  const box = (await locator.boundingBox())!
+  return { x: box.x + box.width / 2, y: box.y + box.height - 3 }
+}
+
 /** Presses at `from`, drags in steps to `to`, and lets go (unless `release` is false). */
 async function drag(page: Page, from: { x: number; y: number }, to: { x: number; y: number }, release = true) {
   await page.mouse.move(from.x, from.y)
@@ -52,6 +58,8 @@ test('calendar grid: drag to make, move and resize events; the all-day row; the 
   await page.goto(appUrl('calendar', WEEK))
   await expect(page.getByTestId('calendar-list-item').filter({ hasText: 'My calendar' })).toBeVisible({ timeout: 120_000 })
   const editor = page.getByRole('dialog', { name: 'New event' })
+  // A new event's quick-create popover opens first; "More options" opens the editor with it.
+  const more = () => page.getByTestId('create-popover-more').click()
   const times = async (dialog: Locator, start: string, end: string) => {
     await expect(dialog.getByTestId('event-start-time')).toHaveValue(start)
     await expect(dialog.getByTestId('event-end-time')).toHaveValue(end)
@@ -60,6 +68,7 @@ test('calendar grid: drag to make, move and resize events; the all-day row; the 
 
   // Down: from 10:00 to the 11:30 slot is 10:00–12:00, the editor filled in.
   await drag(page, await centre(slot(page, '2026-10-29', 20)), await centre(slot(page, '2026-10-29', 23)))
+  await more()
   await times(editor, '10:00', '12:00')
   await expect(editor.getByTestId('event-start-date')).toHaveValue('2026-10-29')
   await editor.getByTestId('event-title').fill('Planning')
@@ -71,6 +80,7 @@ test('calendar grid: drag to make, move and resize events; the all-day row; the 
 
   // Up: from the 15:00 slot to the 14:00 one is 14:00–15:00.
   await drag(page, await centre(slot(page, '2026-10-28', 30)), await centre(slot(page, '2026-10-28', 28)))
+  await more()
   await times(editor, '14:00', '15:00')
   await editor.getByRole('button', { name: 'Cancel' }).click()
   await expect(editor).toBeHidden()
@@ -81,10 +91,12 @@ test('calendar grid: drag to make, move and resize events; the all-day row; the 
   await page.keyboard.press('Escape')
   await page.mouse.up()
   await expect(page.getByTestId('calendar-ghost')).toHaveCount(0)
+  await expect(page.getByTestId('create-popover')).toHaveCount(0)
   await expect(editor).toBeHidden()
 
   // A click: 17:00, the default 30 minutes.
   await slot(page, '2026-10-30', 34).click()
+  await more()
   await times(editor, '17:00', '17:30')
   await editor.getByRole('button', { name: 'Cancel' }).click()
 
@@ -111,7 +123,9 @@ test('calendar grid: drag to make, move and resize events; the all-day row; the 
   await expect(onFriday).toContainText('11:00 – 14:30', { timeout: 30_000 })
 
   // The all-day row: Tuesday to Thursday, one event.
-  await drag(page, await centre(page.getByTestId('calendar-allday-2026-10-27')), await centre(page.getByTestId('calendar-allday-2026-10-29')))
+  // Below the day's header (a link to the day).
+  await drag(page, await belowHeader(page.getByTestId('calendar-allday-2026-10-27')), await belowHeader(page.getByTestId('calendar-allday-2026-10-29')))
+  await more()
   await expect(editor.getByTestId('event-all-day')).toBeChecked()
   await expect(editor.getByTestId('event-start-date')).toHaveValue('2026-10-27')
   await expect(editor.getByTestId('event-end-date')).toHaveValue('2026-10-29')
@@ -122,6 +136,7 @@ test('calendar grid: drag to make, move and resize events; the all-day row; the 
   for (let i = 0; i < 3; i++) await page.keyboard.press('Shift+ArrowDown')
   await expect(page.getByTestId('calendar-announce')).toContainText('09:00 to 11:00')
   await page.keyboard.press('Enter')
+  await more()
   await times(editor, '09:00', '11:00')
   await expect(editor.getByTestId('event-start-date')).toHaveValue('2026-10-26')
   await editor.getByRole('button', { name: 'Cancel' }).click()
