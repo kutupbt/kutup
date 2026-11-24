@@ -86,7 +86,7 @@ impl EventTime {
         }
     }
 
-    fn write(&self, name: &str) -> String {
+    pub(crate) fn write(&self, name: &str) -> String {
         match self {
             EventTime::Date(date) => format!("{name};VALUE=DATE:{}", date.strftime("%Y%m%d")),
             EventTime::Zoned { local, tzid } => {
@@ -719,7 +719,8 @@ fn wrap(lines: &[String]) -> String {
 
 /// Folds a content line at 75 octets, never inside a character (RFC 5545
 /// §3.1): continuation lines start with one space.
-fn fold_into(out: &mut String, line: &str) {
+#[inline(never)]
+pub(crate) fn fold_into(out: &mut String, line: &str) {
     let mut width = 0;
     for ch in line.chars() {
         if width + ch.len_utf8() > FOLD_AT {
@@ -732,7 +733,7 @@ fn fold_into(out: &mut String, line: &str) {
     out.push_str("\r\n");
 }
 
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {

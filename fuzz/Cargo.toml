@@ -69,6 +69,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "calendar_ics"
+path = "fuzz_targets/calendar_ics.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "block_object_parsers"
 path = "fuzz_targets/block_object_parsers.rs"
 test = false

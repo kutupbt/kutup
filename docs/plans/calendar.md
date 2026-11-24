@@ -743,3 +743,97 @@ with a reminder at its start fires an in-tab notification (Playwright's
 Notification stub), the editor shows and saves reminders, a calendar's
 defaults apply to a new event. Push is covered by the server's live test
 and a unit test of the service worker's handlers.
+
+## E2c: `.ics` import and export (2026-11-24)
+
+Built from §5 and §6 above, following Proton's web client
+(`packages/shared/lib/calendar/import`, `icsSurgery/`, `export/`, and the
+import and export modals in `packages/components/containers/calendar`).
+
+**Rust core: `kutup_crypto::calendar_ics`** (feature `calendar`, in the
+`crypto-calendar` WASM as `calendarImportIcs` and `calendarExportIcs`). One
+module for every outside `.ics` Kutup reads or writes, so E4's invitations
+(`calendar_itip`, docs/plans/calendar-e4.md §2) and E5's feeds build on it:
+`reader` (the lenient reader: a tree of components and properties, values
+as written, parameters unquoted), `value` (dates, times, durations and text,
+read leniently), `zones` (a `TZID` to an IANA zone), `import` (Proton's
+whitelist rebuild and per-event reasons) and `export` (one `VCALENDAR` in
+one form). Kutup's own event parts keep their strict canonical form
+(`calendar_event`); nothing here reads them.
+
+**As Proton's:**
+- Files: `.ics`, `.ical`, `.icalendar`, `.ifb`; size and components as site
+  settings (`calendar.import_max_bytes`, 10 MB; `calendar.import_max_events`,
+  15,000; both per account, published in `/auth/settings` with the sync
+  batch, `COUNT` and reminder limits). Refusals and their texts: empty, not a
+  calendar, invalid method, no events, too many, too big, not an ICS file.
+- Repairs: line endings, folding without a space (`reformatLineBreaks`), a
+  missing `VCALENDAR` around the events (`reformatVcalEnclosing`), ISO and
+  incomplete date-times, fractions of a second, a repeated `Z`, a missing
+  `VALUE=DATE` (`reformatDateTimes`), an unreadable `TRIGGER` read as
+  `PT0S` (`replaceTrigger`), a component left open kept as an error while
+  the rest reads.
+- The rebuild (`getSupportedEvent`): UID (kept from its end; made from a
+  hash of the event's lines when missing or for an invitation, the original
+  kept in front, Proton's `original-uid-…`), DTSTAMP (`getSupportedDtstamp`),
+  DTSTART/DTEND (a zero-length end dropped, an all-day `DTEND` equal to its
+  start one day, `DURATION` made into `DTEND`), SEQUENCE (negative 0,
+  mod 2^31), SUMMARY/DESCRIPTION/LOCATION (trimmed, Proton's lengths),
+  RRULE in Proton's subset with `getSupportedUntil` and `COUNT` at most
+  `calendar.max_count` (49), EXDATE and RECURRENCE-ID in the start's form
+  (`getLinkedDateTimeProperty`), VALARMs (`getSupportedAlarm`: `AUDIO` as a
+  device reminder, relative to the start only, Proton's bounds, at most the
+  site's 10, deduplicated). ORGANIZER, ATTENDEE and every other property are
+  dropped; a non-`PUBLISH` file is imported as simple events after Proton's
+  warning, without reminders or RECURRENCE-IDs.
+- Time zones: `VTIMEZONE` ignored, reported only when its `TZID` maps to
+  nothing ("Custom time zone"); `getSupportedTimezone` (the name, an alias,
+  `(UTC+x) Name`, Proton's table of Windows and display names copied as
+  `zone_names.rs`, an IANA name inside the `TZID`); a floating time takes
+  `X-WR-TIMEZONE`, else the file's one `VTIMEZONE`, else the person's zone;
+  a single event's UTC time is put in `X-WR-TIMEZONE`'s zone (Google).
+- Per-event reasons: Proton's `IMPORT_EVENT_ERROR_TYPE` and texts; an event
+  with no occurrence left is dropped silently (Proton's hidden error).
+- Upload: every event sealed in the browser and sent in batches of
+  `calendar.sync_batch`, series before their changed occurrences, each with
+  its own reminders (no calendar defaults; an invitation file's take the
+  calendar's defaults, as Proton's), `overwrite` (Proton's
+  `Overwrite: 1`, Q-3): a UID already in the calendar is written over,
+  `sequenceBehind` when the stored one is ahead (listed). The rate limit is
+  waited out and the batch sent again (Proton's jails).
+- Export: `METHOD:PUBLISH`, `X-WR-CALNAME`, `X-WR-CALDESC`,
+  `X-WR-TIMEZONE`, the effective reminders as VALARMs with Proton's
+  mandatory fields (display: the title; email: title and the member's
+  address), no colour, the file `<name>-yyyy-MM-dd.ics`; events that don't
+  open are left out and listed.
+
+**Kutup's, and why:**
+- `STATUS` and `TRANSP` are kept (Proton drops them): Kutup's calendar part
+  carries them and busy times read `TRANSP`.
+- An `EXDATE` that isn't an occurrence is dropped (the server refuses one,
+  and it removes nothing); a changed occurrence whose series is in the file
+  is checked to be one of its occurrences and its `SEQUENCE` lifted to the
+  series' (the server refuses one behind).
+- A date `UNTIL` with a timed start ends on that date (Proton converts the
+  date's midnight UTC into the zone, a day early west of UTC).
+- The hash UID uses SHA-256 (`sha256-uid-`), not SHA-1.
+- Every zone of the bundled database is kept as it is (Proton maps some its
+  server lacks); the search inside a `TZID` takes names with a `/` only.
+- A line that isn't a content line continues a text value it was cut from
+  even when Proton's parser wouldn't have failed first (Kutup's reader is
+  its own, not ICAL.js plus retries).
+- `VTIMEZONE`s are built from the bundled tzdb's transitions over the years
+  the events span (Proton fetches them from its server).
+- Export lists every event through `GET …/events/all` (paged by id); events
+  that don't open are reported by start time.
+
+**WASM:** `crypto-calendar` grows from 2,172,288 to 2,242,678 bytes gzipped
+(99.9% of its 2,245,000 budget, not raised). Building `kutup-crypto` at
+`opt-level = "s"` in the `wasm-release` profile brings it to 2,118,880
+(measured); that, or a lazily loaded runtime for files, is the next step
+before anything else grows it.
+
+**Not here:** drawing a series' occurrences and editing a series (the E2
+app, `feat/calendar-recurrence`): until it lands an imported series shows
+at its first occurrence, and the editor keeps a series' rule and
+exceptions when it saves one (the whole series).

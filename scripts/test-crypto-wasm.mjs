@@ -1404,7 +1404,7 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
 // the mail vectors' address key) open as the Rust vectors say; the refused
 // ones don't.
 if (build === 'crypto') {
-  for (const name of ['createCalendar', 'unlockCalendar', 'unlockSharedCalendar', 'rotateCalendar', 'createCalendarLink', 'openCalendarLink', 'calendarTimeZones', 'calendarOccurrences', 'calendarRuleText']) {
+  for (const name of ['createCalendar', 'unlockCalendar', 'unlockSharedCalendar', 'rotateCalendar', 'createCalendarLink', 'openCalendarLink', 'calendarTimeZones', 'calendarOccurrences', 'calendarRuleText', 'calendarImportIcs', 'calendarExportIcs']) {
     assert.equal(crypto[name], undefined, `${name} is in the plain crypto build`)
   }
 } else {
@@ -1734,6 +1734,38 @@ const c0Digest = (digest) => {
   assert.equal(first.revision, 1)
   assert.throws(() => crypto.accountProfileSeal(master, null, { displayName: '   ' }, v.account, v.binding))
   assert.throws(() => crypto.profileLookup('AA=='))
+}
+
+// `.ics` import and export (docs/plans/calendar.md, E2 §5–6): the Rust
+// core's reading of a Google export, its refusals, and an export that
+// reads back as it was.
+if (build === 'crypto-calendar') {
+  const google = await readFile(`${root}/crates/kutup-crypto/tests/ics/google.ics`, 'utf8')
+  const options = { primaryZone: 'Europe/Istanbul', maxBytes: 10 * 1024 * 1024, maxEvents: 15000, maxCount: 49, maxReminders: 10, now: '2026-11-24T10:00:00Z' }
+  const { read } = crypto.calendarImportIcs(google, options)
+  assert.equal(read.method, 'PUBLISH')
+  assert.equal(read.events.length, 4)
+  assert.deepEqual(read.errors.map((e) => e.kind), ['rruleUnsupported'])
+  const sync = read.events.find((e) => e.fields.summary === 'Team sync')
+  assert.equal(sync.fields.rrule, 'FREQ=WEEKLY;UNTIL=20261221T205959Z;BYDAY=MO')
+  assert.deepEqual(sync.reminders, [{ type: 'email', trigger: '-P1D' }, { type: 'device', trigger: '-PT10M' }])
+  assert.equal(read.events.at(-1).fields.recurrenceId.zoned.local, '2026-11-09T10:00:00')
+  assert.deepEqual(crypto.calendarImportIcs('', options), { refused: 'fileEmpty' })
+  assert.deepEqual(crypto.calendarImportIcs(google, { ...options, maxBytes: 10 }), { refused: 'fileTooBig' })
+  assert.throws(() => crypto.calendarImportIcs(google, { ...options, primaryZone: 'Nowhere/Else' }))
+  const text = crypto.calendarExportIcs({
+    name: 'Work',
+    description: null,
+    zone: 'Europe/Istanbul',
+    release: '0.0.0-dev',
+    untitled: '(no title)',
+    email: 'me@kutup.example',
+    events: read.events.map(({ fields, reminders }) => ({ fields, reminders })),
+  })
+  assert.ok(text.startsWith('BEGIN:VCALENDAR\r\nPRODID:-//Kutup//Calendar 0.0.0-dev//EN\r\n'))
+  const again = crypto.calendarImportIcs(text, options).read
+  assert.deepEqual(again.errors, [])
+  assert.deepEqual(again.events, read.events)
 }
 
 console.log(`${build} WASM canonical vectors passed`)

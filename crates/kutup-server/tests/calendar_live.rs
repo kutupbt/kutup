@@ -1429,3 +1429,129 @@ fn assert_status(
 fn decode(value: &str) -> Vec<u8> {
     b64_decode(value)
 }
+
+/// An `.ics` import (docs/plans/calendar.md, E2 §5, Q-3): a Google export
+/// read by the Rust core, sealed, and sent with `overwrite` (Proton's
+/// `Overwrite: 1`) lands once however often it is imported, keeping each
+/// event's id; one behind the stored SEQUENCE is refused; without
+/// `overwrite` a UID taken is refused. The export's listing pages every
+/// event by id.
+#[test]
+fn imports_overwrite_by_uid_and_the_export_lists_every_event() {
+    use kutup_crypto::calendar_ics::import::{import, ImportOptionsV1, ImportOutcomeV1};
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = crate::common::client();
+    let ada = owner(&c, &base);
+    let (id, key) = made_calendar(&c, &base, &ada, "İçe aktarılan");
+    let options = ImportOptionsV1 {
+        primary_zone: "Europe/Istanbul".into(),
+        max_bytes: 10 * 1024 * 1024,
+        max_events: 15_000,
+        max_count: 49,
+        max_reminders: 10,
+        now: "2026-11-24T10:00:00Z".into(),
+    };
+    let ImportOutcomeV1::Read(read) = import(
+        include_str!("../../kutup-crypto/tests/ics/google.ics"),
+        &options,
+    )
+    .unwrap() else {
+        panic!("refused")
+    };
+    assert_eq!(read.events.len(), 4);
+    let changes = |overwrite: bool| -> Value {
+        Value::Array(
+            read.events
+                .iter()
+                .map(|event| {
+                    json!({ "create": {
+                        "id": uuid::Uuid::new_v4().to_string(),
+                        "event": seal(&event.fields, &key, &ada.secret_key),
+                        "reminders": event.reminders,
+                        "overwrite": overwrite,
+                    } })
+                })
+                .collect(),
+        )
+    };
+    let all = |limit: usize| -> Vec<String> {
+        let mut ids = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let query = match &after {
+                Some(after) => format!("?limit={limit}&afterId={after}"),
+                None => format!("?limit={limit}"),
+            };
+            let page: Value = bearer(
+                c.get(format!(
+                    "{base}/api/v1/calendar/calendars/{id}/events/all{query}"
+                )),
+                &ada.user.token,
+            )
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+            for event in page["events"].as_array().unwrap() {
+                ids.push(event["id"].as_str().unwrap().to_owned());
+            }
+            match page["next"].as_str() {
+                Some(next) => after = Some(next.to_owned()),
+                None => return ids,
+            }
+        }
+    };
+    // The series first, then its changed occurrence (whose series must be
+    // in the calendar): each result 200.
+    let first = sync(&c, &base, &ada, &id, changes(true));
+    assert!(first.iter().all(|r| r["status"] == 200), "{first:?}");
+    let ids = all(2);
+    assert_eq!(ids.len(), 4);
+    let mut sorted = ids.clone();
+    sorted.sort();
+    assert_eq!(ids, sorted, "paged by id");
+    // The reminders came with them.
+    assert!(first.iter().any(|r| r["event"]["reminders"]
+        .as_array()
+        .is_some_and(|l| l.len() == 2)));
+
+    // Imported again: overwritten in place, the same ids.
+    let again = sync(&c, &base, &ada, &id, changes(true));
+    assert!(again.iter().all(|r| r["status"] == 200), "{again:?}");
+    let mut kept = all(10);
+    kept.sort();
+    assert_eq!(kept, sorted);
+    for (before, after) in first.iter().zip(&again) {
+        assert_eq!(before["event"]["id"], after["event"]["id"]);
+        assert_eq!(after["event"]["revision"], 2);
+    }
+
+    // A version behind the stored one is refused; without overwrite, the
+    // UID is taken.
+    let mut older = read.events[0].fields.clone();
+    older.sequence = 0;
+    let behind = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "create": { "id": uuid::Uuid::new_v4().to_string(), "event": seal(&older, &key, &ada.secret_key), "overwrite": true } }]),
+    );
+    assert_eq!(behind[0]["status"], 409);
+    assert_eq!(behind[0]["code"], "sequenceBehind");
+    let taken = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([create(seal(&read.events[1].fields, &key, &ada.secret_key))]),
+    );
+    assert_eq!(taken[0]["status"], 409);
+    assert_eq!(taken[0]["code"], "uidTaken");
+    assert_eq!(all(10).len(), 4);
+    drop_calendars(&c, &base, &ada, &[&id]);
+}

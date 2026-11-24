@@ -190,6 +190,84 @@ export interface NewCalendarLink {
   accessProof: string
 }
 
+/** A reminder as the server keeps it: on the device or by email, a trigger relative to the start. */
+export interface IcsReminder {
+  type: 'device' | 'email'
+  trigger: string
+}
+
+/** What an `.ics` import may take (`ImportOptionsV1`): the site's limits, the person's zone, and now. */
+export interface IcsImportOptions {
+  primaryZone: string
+  maxBytes: number
+  maxEvents: number
+  maxCount: number
+  maxReminders: number
+  now: string
+}
+
+/** Why a whole file is refused (Proton's `IMPORT_ERROR_TYPE`). */
+export type IcsFileError = 'fileEmpty' | 'fileTooBig' | 'invalidCalendar' | 'invalidMethod' | 'noEvents' | 'tooManyEvents'
+
+/** Why one component isn't imported (Proton's `IMPORT_EVENT_ERROR_TYPE`). */
+export type IcsErrorKind =
+  | 'wrongFormat'
+  | 'nonGregorian'
+  | 'todoFormat'
+  | 'journalFormat'
+  | 'freebusyFormat'
+  | 'timezoneFormat'
+  | 'unexpectedFloatingTime'
+  | 'alldayInconsistency'
+  | 'dtstartMissing'
+  | 'dtstartMalformed'
+  | 'dtstartOutOfBounds'
+  | 'dtendMalformed'
+  | 'dtendOutOfBounds'
+  | 'xWrTimezoneUnsupported'
+  | 'tzidUnsupported'
+  | 'rruleMalformed'
+  | 'rruleUnsupported'
+  | 'singleEditUnsupported'
+  | 'validationError'
+  | 'externalError'
+
+/** A component not imported: what it is (`vevent`, `vtodo`…), what names it, and why. */
+export interface IcsError {
+  component: string
+  id: string
+  kind: IcsErrorKind
+}
+
+export interface IcsImportedEvent {
+  fields: EventFields
+  reminders: IcsReminder[]
+  id: string
+}
+
+/** A file read: its method, the events (series first), what isn't imported, and the events with no occurrence left. */
+export interface IcsImport {
+  method: string
+  events: IcsImportedEvent[]
+  errors: IcsError[]
+  hidden: number
+}
+
+export type IcsImportOutcome = { read: IcsImport } | { refused: IcsFileError }
+
+/** What an export writes (`ExportCalendarV1`). */
+export interface IcsExport {
+  name: string
+  description: string | null
+  zone: string
+  release: string
+  /** What an untitled event's alarms show. */
+  untitled: string
+  /** The member's address, for email alarms. */
+  email: string | null
+  events: { fields: EventFields; reminders: IcsReminder[] }[]
+}
+
 interface CalendarWasm {
   createCalendar(
     ...args: [...KeyArgs, identityRoot: IdentityRoot, account: string, calendarId: string, metadata: CalendarMetadata, createdAtSecs: number]
@@ -231,6 +309,8 @@ interface CalendarWasm {
   calendarUtcToLocal(instant: string, tzid: string): string
   calendarLocalToUtc(local: string, tzid: string): string
   calendarTimeZones(): string[]
+  calendarImportIcs(text: string, options: IcsImportOptions): IcsImportOutcome
+  calendarExportIcs(calendar: IcsExport): string
 }
 
 /** The loaded runtime's calendar functions; an app that loaded `crypto` has none. */
@@ -396,4 +476,14 @@ export interface LinkKeyLock {
  */
 export async function openCalendarLink(urlSecret: string, calendarId: string, linkId: string, lock: LinkKeyLock): Promise<UnlockedCalendar> {
   return (await wasm()).openCalendarLink(urlSecret, calendarId, linkId, lock.keyGeneration, lock.sealedPassphrase, lock.lockedSecretKey)
+}
+
+/** Reads an `.ics` file for import, every event rebuilt as Proton's import does (docs/plans/calendar.md, E2 §5). */
+export async function importIcs(text: string, options: IcsImportOptions): Promise<IcsImportOutcome> {
+  return (await wasm()).calendarImportIcs(text, options)
+}
+
+/** Writes a calendar's opened events as one `.ics` file (E2 §6). */
+export async function exportIcs(calendar: IcsExport): Promise<string> {
+  return (await wasm()).calendarExportIcs(calendar)
 }

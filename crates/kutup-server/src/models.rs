@@ -94,6 +94,14 @@ pub struct CalendarPublicSettings {
     /// The key generations one calendar keeps: the owner's app compacts a
     /// calendar nearing it.
     pub key_generations: i64,
+    /// An `.ics` import's largest file (bytes) and most components.
+    pub import_max_bytes: i64,
+    pub import_max_events: i64,
+    /// The changes one events sync carries, the largest `COUNT`, and the
+    /// reminders one event takes: what an import holds its events to.
+    pub sync_batch: i64,
+    pub max_count: i64,
+    pub reminders_per_event: i64,
 }
 
 /// The weakest key derivation Kutup Pass sets a vault to (administrators'

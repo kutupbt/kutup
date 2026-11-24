@@ -123,9 +123,10 @@ function fieldsOf(draft: Draft, domain: string, existing?: CalendarEvent): Event
     created: before?.created ?? now,
     start: draft.allDay ? { date: draft.startDate } : { zoned: { local: `${draft.startDate}T${draft.startTime}:00`, tzid: draft.tzid } },
     end: draft.allDay ? { date: addDays(draft.endDate, 1) } : { zoned: { local: `${draft.endDate}T${draft.endTime}:00`, tzid: draft.tzid } },
-    recurrenceId: null,
-    rrule: null,
-    exdates: [],
+    // An imported series keeps its rule and exceptions, a changed occurrence the one it changes.
+    recurrenceId: before?.recurrenceId ?? null,
+    rrule: before?.rrule ?? null,
+    exdates: before?.exdates ?? [],
     organizer: null,
     sequence: before ? (before.sequence ?? 0) + 1 : 0,
     summary: draft.title.trim() || null,

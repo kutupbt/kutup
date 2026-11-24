@@ -770,7 +770,7 @@ async function syncOne(calendar: Calendar, addressId: string, change: unknown): 
  * The account head, verified, before an event write: a blocked app writes
  * nothing (the banner says why), as listed writes refuse.
  */
-async function beforeEventWrite(session: Session): Promise<void> {
+export async function beforeEventWrite(session: Session): Promise<void> {
   await (await accountHead(session)).verifiedHead()
 }
 

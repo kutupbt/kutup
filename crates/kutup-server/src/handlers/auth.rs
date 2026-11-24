@@ -716,22 +716,27 @@ async fn calendar_settings(
     user: &Option<AuthAccount>,
 ) -> AppResult<crate::models::CalendarPublicSettings> {
     use crate::site_settings::{
-        CALENDAR_BUSY_WINDOW_DAYS, CALENDAR_LINKS_PER_CALENDAR, CALENDAR_MEMBERS_PER_CALENDAR,
-        CALENDAR_QUERY_LINKS_ALLOWED,
+        CALENDAR_BUSY_WINDOW_DAYS, CALENDAR_IMPORT_MAX_BYTES, CALENDAR_IMPORT_MAX_EVENTS,
+        CALENDAR_LINKS_PER_CALENDAR, CALENDAR_MAX_COUNT, CALENDAR_MEMBERS_PER_CALENDAR,
+        CALENDAR_QUERY_LINKS_ALLOWED, CALENDAR_REMINDERS_PER_EVENT, CALENDAR_SYNC_BATCH,
     };
     let account = user
         .as_ref()
         .and_then(|user| uuid::Uuid::parse_str(&user.account_id).ok());
-    let (members, links) = match account {
+    let (members, links, import_bytes, import_events) = match account {
         Some(account) => (
             CALENDAR_MEMBERS_PER_CALENDAR
                 .load_for(pool, account)
                 .await?,
             CALENDAR_LINKS_PER_CALENDAR.load_for(pool, account).await?,
+            CALENDAR_IMPORT_MAX_BYTES.load_for(pool, account).await?,
+            CALENDAR_IMPORT_MAX_EVENTS.load_for(pool, account).await?,
         ),
         None => (
             CALENDAR_MEMBERS_PER_CALENDAR.load_site(pool).await?,
             CALENDAR_LINKS_PER_CALENDAR.load_site(pool).await?,
+            CALENDAR_IMPORT_MAX_BYTES.load_site(pool).await?,
+            CALENDAR_IMPORT_MAX_EVENTS.load_site(pool).await?,
         ),
     };
     Ok(crate::models::CalendarPublicSettings {
@@ -742,6 +747,11 @@ async fn calendar_settings(
         key_generations: crate::site_settings::CALENDAR_KEY_GENERATIONS
             .load(pool)
             .await?,
+        import_max_bytes: import_bytes,
+        import_max_events: import_events,
+        sync_batch: CALENDAR_SYNC_BATCH.load(pool).await?,
+        max_count: CALENDAR_MAX_COUNT.load(pool).await?,
+        reminders_per_event: CALENDAR_REMINDERS_PER_EVENT.load(pool).await?,
     })
 }
 
