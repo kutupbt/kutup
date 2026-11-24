@@ -1,11 +1,13 @@
 # Koru as the edge instead of nginx: a web application firewall and reverse
 # proxy in one (docs/self-hosting.md, "Koru edge (optional)"). Opt-in, for the
 # operator's own use: Koru has no licence yet and is not distributed with
-# Kutup. Build it from a checkout of Koru's sources (KORU_SRC) and add this
-# file to the others; leave docker-compose.acme.yml out (Koru gets its own
+# Kutup. Its image is built on a machine with a checkout of Koru's sources
+# (scripts/build-koru-image.sh) and copied to the server by
+# scripts/deploy.sh; it is never pulled from a registry. Add this file to
+# the others; leave docker-compose.acme.yml out (Koru gets its own
 # certificates with KORU_TLS=acme):
 #
-#   KORU_SRC=/path/to/koru docker compose -f docker-compose.yml -f docker-compose.koru.yml up -d --build --wait
+#   KUTUP_KORU_IMAGE=kutup-koru:<commit> docker compose -f docker-compose.yml -f docker-compose.koru.yml up -d --wait
 #
 # koru/render.sh writes Koru's configuration at every start from the same
 # settings as the apps (KUTUP_BASE_DOMAIN or KUTUP_<APP>_URL, MAIL_HOSTNAME,
@@ -18,11 +20,9 @@ services:
     profiles: ["nginx-edge"]
 
   koru:
-    image: kutup-koru:local
-    build:
-      context: ./koru
-      additional_contexts:
-        koru: ${KORU_SRC:-../../koru-ref}
+    image: ${KUTUP_KORU_IMAGE:?set KUTUP_KORU_IMAGE to kutup-koru:<commit> (scripts/build-koru-image.sh)}
+    # Built here or copied here, never fetched.
+    pull_policy: never
     restart: unless-stopped
     ports:
       - "${KUTUP_HTTP_PORT:-38080}:8080"
@@ -73,8 +73,10 @@ services:
     depends_on:
       - backend
       - frontend
+    # Healthy when Koru answers and the backend behind it does, as nginx's
+    # check (through the edge) waits for both: `up --wait` relies on it.
     healthcheck:
-      test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "/bin/busybox", "sh", "-c", "wget -q -O /dev/null http://127.0.0.1:8080/healthz && wget -q -O /dev/null http://backend:3000/api/v1/auth/settings"]
       interval: 2s
       timeout: 5s
       retries: 30

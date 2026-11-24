@@ -1232,15 +1232,35 @@ Content-Security-Policy, the backend, the relays) stays as it is. The nginx
 edge remains the default.
 
 **Licence.** Koru has no licence yet and is not distributed with Kutup: there
-is no Koru image or source here. Build it from your own checkout of its
-sources, for your own server only.
+is no Koru image or source here, and its image is never published. It is
+built from your own checkout of its sources, for your own server only.
+
+**The image.** `scripts/build-koru-image.sh` builds `kutup-koru:<commit>`
+on the machine with the checkout (`KORU_SRC`; `KUTUP_KORU_COMMIT`, default
+its `HEAD`; a checkout with uncommitted changes is refused), from that
+commit's files, and prints the image's name, id and commit. The overlay runs
+the image `KUTUP_KORU_IMAGE` names and never pulls one:
 
 ```sh
-# .env: KORU_SRC=/path/to/koru (a checkout of Koru's sources)
+scripts/build-koru-image.sh        # kutup-koru:276e58932949 sha256:… 276e5893…
+# .env: KUTUP_KORU_IMAGE=kutup-koru:276e58932949
 #       COMPOSE_FILE=docker-compose.yml:docker-compose.koru.yml
-docker compose build koru          # the image kutup-koru:local
 docker compose up -d --wait
 ```
+
+On a server deployed with `scripts/deploy.sh`, the deploying machine does
+this: with `KUTUP_DEPLOY_KORU_SRC` set to the Koru checkout (and the
+server's `COMPOSE_FILE` naming `docker-compose.koru.yml`), it builds or
+reuses the image, copies it with `docker save | ssh <server> docker load`
+unless the server has it already, checks that the server's image has the
+same layers (Docker's two image stores give one image different ids), sets `KUTUP_KORU_IMAGE` and `KUTUP_KORU_IMAGE_ID` in the server's
+`.env` (the tag is only ever written by a deploy; the id is checked again
+at every deploy), records the Koru commit and image id in `deploy-history/` beside
+the other images, runs `koru check` instead of `nginx -t`, reloads Koru
+with `SIGHUP` after the start, and keeps the new and the previous Koru
+image (a rollback with `KUTUP_KORU_COMMIT` set to the earlier commit then
+copies nothing). The server needs no registry token and no checkout of
+Koru. `--dry-run` says what it would copy and set, and changes nothing.
 
 `koru/render.sh` writes Koru's configuration at every start from the
 settings the apps already read, as nginx's own does:
@@ -1285,10 +1305,7 @@ What differs from the nginx edge:
 - **Mail with `KORU_TLS=acme`**: Stalwart reads `nginx/certs/`; with Koru's
   own certificates, give Mail its certificate there yourself, or use `files`.
 
-`scripts/deploy.sh` notices the overlay in `COMPOSE_FILE`: it builds the
-image, validates the configuration with `koru check` instead of `nginx -t`,
-and reloads Koru with `SIGHUP` after the start. `scripts/test-koru-edge.sh`
-runs Koru in block mode in front of a stub and checks the limits, headers and
+`scripts/test-koru-edge.sh` (with `KUTUP_KORU_IMAGE` set) runs Koru in block mode in front of a stub and checks the limits, headers and
 log privacy above; the static gate checks the written configuration
 (`scripts/test-koru-config.py`).
 

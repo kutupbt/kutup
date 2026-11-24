@@ -7,16 +7,16 @@
 # rate limit answers 429 with code rateLimited, the editor sandbox has no
 # API, the edge headers are set, and `koru check` accepts the file.
 #
-#   scripts/test-koru-edge.sh       needs Docker and the image kutup-koru:local
-#                                   (docker compose -f docker-compose.yml
-#                                   -f docker-compose.koru.yml build koru)
+#   scripts/test-koru-edge.sh       needs Docker and KUTUP_KORU_IMAGE, the image
+#                                   scripts/build-koru-image.sh builds
+#                                   (it prints the name)
 #
 # Koru is not in CI (it is built from the operator's own checkout of its
 # sources); scripts/test-koru-config.py checks the file in the static gate.
 
 set -euo pipefail
 
-image="${KORU_IMAGE:-kutup-koru:local}"
+image="${KUTUP_KORU_IMAGE:?set KUTUP_KORU_IMAGE (scripts/build-koru-image.sh prints it)}"
 docker image inspect "$image" >/dev/null 2>&1 || { echo "test-koru-edge: build $image first" >&2; exit 2; }
 run="kutup-koru-edge-test-$$"
 work="$(mktemp -d)"

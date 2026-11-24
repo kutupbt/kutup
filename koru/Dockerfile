@@ -1,10 +1,10 @@
 # Koru as Kutup's edge proxy (docker-compose.koru.yml; docs/self-hosting.md,
 # "Koru edge (optional)"). Koru's sources are not in this repository: the
-# `koru` build context is a checkout of it (KORU_SRC). The proxy is built
-# as Koru's own Dockerfile builds its `lite` target (no admin interface);
-# beside it the image carries a static busybox, for the start script that
-# writes koru.toml from Kutup's settings (render.sh) and for the health
-# check, which the distroless base has no tool for.
+# `koru` build context is one commit of them (scripts/build-koru-image.sh).
+# The proxy is built as Koru's own Dockerfile builds its `lite` target (no
+# admin interface); beside it the image carries a static busybox, for the
+# start script that writes koru.toml from Kutup's settings (render.sh) and
+# for the health check, which the distroless base has no tool for.
 
 ARG RUST_IMAGE=rust:1.99-slim-trixie
 ARG BUSYBOX_IMAGE=busybox:1.37.0-musl
