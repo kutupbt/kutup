@@ -140,7 +140,14 @@ test('someone without an account joins a scheduled meeting through its link', as
   await expect(guest.getByTestId('chat-meeting-message')).toHaveCount(0)
   await guest.getByTestId('chat-link-call-leave').click()
   // The owner's leave button asks which: leave, or end it for everyone.
-  const recorded = chat.waitForRequest((sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/v1/account/records')
+  // The stay goes into the account-records store's `joinedMeetings` scope,
+  // in a batch of its own (other scopes write batches meanwhile).
+  const joinedBatch = (sent: { method(): string; url(): string; postData(): string | null }) => {
+    if (sent.method() !== 'POST' || new URL(sent.url()).pathname !== '/api/v1/account/records') return false
+    const body = JSON.parse(sent.postData() ?? '{}') as { puts?: { scope?: string }[] }
+    return (body.puts ?? []).some((put) => put.scope === 'joinedMeetings')
+  }
+  const recorded = chat.waitForRequest(joinedBatch)
   await ownerCall.getByTestId('chat-link-call-leave-menu').click()
   await ownerCall.getByTestId('chat-link-call-leave').click()
   await expect(ownerCall.getByTestId('chat-link-call-left')).toBeVisible({ timeout: 30_000 })
@@ -154,7 +161,10 @@ test('someone without an account joins a scheduled meeting through its link', as
   await expect(entry.getByTestId('chat-meeting-rejoin')).toHaveAttribute('href', url)
   await expect.poll(() => chat.evaluate(() => localStorage.getItem('kutup.chat.meetingHistory')), { timeout: 30_000 }).toBe('[]')
   const recordedBody = (await recorded).postData() ?? ''
-  expect(Object.keys(JSON.parse(recordedBody) as Record<string, unknown>).sort()).toEqual(['entry', 'id'])
+  // Only sealed envelopes under random ids: the title is in none of it.
+  const batch = JSON.parse(recordedBody) as { puts: Record<string, unknown>[] }
+  expect(Object.keys(batch).sort()).toEqual(['deletes', 'head', 'puts'])
+  for (const put of batch.puts) expect(Object.keys(put).sort()).toEqual(['baseRevision', 'envelope', 'id', 'scope'])
   expect(recordedBody).not.toContain('Team sync')
   await chat.reload()
   await chat.getByRole('link', { name: 'Meetings', exact: true }).click()
