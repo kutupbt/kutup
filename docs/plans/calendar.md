@@ -869,8 +869,9 @@ Built from §5 and §6 above, following Proton's web client
 (`packages/shared/lib/calendar/import`, `icsSurgery/`, `export/`, and the
 import and export modals in `packages/components/containers/calendar`).
 
-**Rust core: `kutup_crypto::calendar_ics`** (feature `calendar`, in the
-`crypto-calendar` WASM as `calendarImportIcs` and `calendarExportIcs`). One
+**Rust core: `kutup_crypto::calendar_ics`** (feature `calendar-format`, in
+the `calendar-ics` WASM runtime as `calendarImportIcs` and
+`calendarExportIcs`, below). One
 module for every outside `.ics` Kutup reads or writes, so E4's invitations
 (`calendar_itip`, docs/plans/calendar-e4.md §2) and E5's feeds build on it:
 `reader` (the lenient reader: a tree of components and properties, values
