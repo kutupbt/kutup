@@ -8,7 +8,7 @@ import type { DriveFile, Folder } from './model'
 // shared with people or by link, and its files shared by themselves. The
 // server gives counts; names come from this account's own folder listings.
 
-interface SharedByMeRow {
+export interface SharedByMeRow {
   collectionId: string
   fileId?: string
   people: number
@@ -26,13 +26,23 @@ export interface SharedByMeItem {
 
 export const sharedByMeKey = ['shared-by-me'] as const
 
-export function useSharedByMe() {
-  const folders = useFolders()
-  const rows = useQuery({
+/** The server's counts of what this account shares, one row per folder or file. */
+export function useSharedByMeRows() {
+  return useQuery({
     queryKey: sharedByMeKey,
     refetchOnMount: 'always',
     queryFn: async () => (await api.get<SharedByMeRow[]>('/drive/shared-by-me')).data,
   })
+}
+
+/** The row for a folder (`fileId` absent) or one of its files shared by itself. */
+export function sharedByMeRowOf(rows: readonly SharedByMeRow[] | undefined, collectionId: string, fileId?: string): SharedByMeRow | undefined {
+  return rows?.find((r) => r.collectionId === collectionId && (r.fileId ?? undefined) === fileId)
+}
+
+export function useSharedByMe() {
+  const folders = useFolders()
+  const rows = useSharedByMeRows()
   // The folders whose files are shared, listed to name them.
   const index = folders.data
   const listed = [...new Set((rows.data ?? []).filter((r) => r.fileId).map((r) => r.collectionId))]

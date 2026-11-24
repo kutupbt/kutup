@@ -23,6 +23,8 @@ export interface BlockReaderHandle {
   readonly opened: OpenedObject
   /** Block `index`'s verified plaintext. */
   block(index: number): Promise<Uint8Array>
+  /** Whether a Drive signing public key (base64) made the opened manifest's signature (Drive's details dialog asks). */
+  signedBy(driveSigningPublicKey: string): Promise<boolean>
   /** Answers one service-worker stream request on `port` (from the Worker itself where there is one). */
   serve(port: MessagePort, range: StreamRange, mimeType: string): Promise<void>
   /** Stops its fetches and drops its blocks. */
@@ -89,6 +91,7 @@ async function openInPage(options: OpenBlockReaderOptions): Promise<Opened> {
     signedBy: async (key) => reader.signedBy(key),
     handle: {
       opened: reader.opened,
+      signedBy: async (key) => reader.signedBy(key),
       block: async (index) => {
         await refresh()
         return reader.block(index)
@@ -168,10 +171,12 @@ async function openInWorker(options: OpenBlockReaderOptions): Promise<Opened> {
       token: await tokenOf(options.accessToken),
       client: clientVersionValue(),
     })
+    const signedBy = async (key: string) => (await call<'signedBy'>({ type: 'signedBy', id: nextId++, key })).ok
     return {
-      signedBy: async (key) => (await call<'signedBy'>({ type: 'signedBy', id: nextId++, key })).ok,
+      signedBy,
       handle: {
         opened,
+        signedBy,
         block: async (index) => (await call<'block'>({ type: 'block', id: nextId++, index, token: await tokenOf(options.accessToken) })).bytes,
         serve: async (port, range, mimeType) => {
           let token = ''

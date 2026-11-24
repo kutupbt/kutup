@@ -41,7 +41,7 @@ Both are cheapest before the wipe.
 | New folder, rename, move, copy | `packages/drive/modals/{createFolderModal,moveItemsModal,copyItemsModal}/`, `modals/RenameModal/` | ✅ copy also across owners and servers (`drive/copy.ts`) |
 | New document, sheet | `sections/folders/buttons/CreateNewDocumentButton.tsx`, `CreateNewSheetButton.tsx` | ✅ note, document, spreadsheet, presentation, whiteboard, map, password vault (`create/NewMenu.tsx`) |
 | Create a blank file of any name | `modals/CreateFileModal/CreateFileModalView.tsx` | ❌ |
-| Details: size, type, dates, created by, last uploaded by (signature check), downloads of a shared item | `modals/DetailsModal/FileDetailsModalView.tsx`, `FilesDetailsModal/` | ❌ no details dialog; signer warnings show only when a check fails (`drive-ui/ManifestSignerWarnings.tsx`) and on shared items (`IdentityShield`) |
+| Details: size, type, dates, created by, last uploaded by (signature check), downloads of a shared item | `modals/DetailsModal/FileDetailsModalView.tsx`, `FilesDetailsModal/` | 🟡 a file's or folder's menu → Details (`details/DetailsDialog.tsx`), in folders and search results: name, location, created by, last uploaded by, uploaded, modified, type and media type, size (stored, encrypted) and original size, versions, sharing (owner: people and public links), your access to someone else's folder; the signature on the current content checked against the identity pins (only its manifest is read), as Proton's banner; advanced: exact bytes, the upload's SHA-256 while it still describes the content, the id. Several items: their number and the files' size. No download count (gap 15); notes show no original size (their metadata keeps the upload's) and no signature banner (their saved state is checked as the editor opens it) |
 | Signature mark on items | `statelessComponents/SignatureIcon.tsx` | 🟡 warnings, not a mark per item |
 | Folder colours | (none) | ✅ Kutup's (`dialogs/ColorDialog.tsx`, also `kutup color`) |
 | Keyboard shortcuts | arrows and selection only | ✅ arrows, Enter, Space for Quick look, Escape |
@@ -93,7 +93,7 @@ Both are cheapest before the wipe.
 
 | Feature | Proton | Kutup |
 |---|---|---|
-| Version list for any file: preview, restore, download, delete, details | `modals/RevisionsModal/RevisionsModalView.tsx`, `revisions/ContextMenuButtons/` | ✅ Drive → a file's menu → Version history (`features/versions/VersionHistoryDialog.tsx`, `editors/src/history.ts`): current version, then earlier ones by day, week, month and year (Proton's grouping), with who saved each and its size; preview in Quick Look, download, restore (sealed again as the newest version, the rest kept), keep forever, delete (the owner, or whoever saved it), and the owner's retention with a link to change it. Notes, code files and place lists list their saved states and are restored in their editor (`VersionHistoryPanel.tsx`), which merges into the live document. No details dialog per version (gap 5) |
+| Version list for any file: preview, restore, download, delete, details | `modals/RevisionsModal/RevisionsModalView.tsx`, `revisions/ContextMenuButtons/` | ✅ Drive → a file's menu → Version history (`features/versions/VersionHistoryDialog.tsx`, `editors/src/history.ts`): current version, then earlier ones by day, week, month and year (Proton's grouping), with who saved each and its size; preview in Quick Look, download, restore (sealed again as the newest version, the rest kept), keep forever, delete (the owner, or whoever saved it), and the owner's retention with a link to change it. Notes, code files and place lists list their saved states and are restored in their editor (`VersionHistoryPanel.tsx`), which merges into the live document. No details dialog per version |
 | Retention setting | `packages/components/containers/drive/settings/RetentionDaysSection.tsx` | ✅ Drive → Settings: 1 week to 10 years (`settings/DriveSettingsPage.tsx`, `version_retention.rs`); Proton also offers "don't keep" |
 
 ## Trash
@@ -108,7 +108,7 @@ Both are cheapest before the wipe.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Name search on the device | `modules/search/internal/` (SharedWorker, WASM, encrypted IndexedDB index, 50,000 entries, opt in) | 🟡 names decrypted in the browser and matched there (`search/SearchPage.tsx`, `editors/src/search.ts`), accents and Turkish i folded; rebuilt per visit, no stored index |
-| Filters: type, date, shared, author | index entry fields | ❌ name only |
+| Filters: type, date, shared, author | index entry fields (no filter UI) | 🟡 the toolbar's type, and on the results: modified (today, 7 days, 30 days, 12 months), location (My files, Shared with me), created by (me, others), shared by me; kept in the URL (`search/FilterBar.tsx`, `search/filters.ts`). No filter by a chosen person or a custom date range |
 | Content search | (none) | ❌ neither |
 
 ## Previews and players
@@ -170,15 +170,16 @@ What people hit first, with whether the fix needs the server or the schema:
    download, delete one): built (`features/versions/VersionHistoryDialog.tsx`).
 4. **Large downloads in Firefox and Safari:** a service worker stream, as
    Proton's. Client only.
-5. **Details dialog** (size, type, dates, uploader, signer, location,
-   shares): client only; the data is there.
+5. ~~**Details dialog**~~ (size, type, dates, uploader, signer, location,
+   shares): built (`features/details/DetailsDialog.tsx`).
 6. **Live updates** while a folder is open: **schema** (Drive tables into
    the change feed: triggers, tombstones) and a client subscription.
 7. **Invitations: a notice when something is shared, accept or decline:**
    **schema** (an accepted state on the share tables) plus a notice (web
    push or mail).
-8. **Search filters** (type, date, owner, shared) and a stored encrypted
-   index for large Drives: client only.
+8. ~~**Search filters**~~ (type, date, location, creator, shared): built
+   (`features/search/FilterBar.tsx`). Still open: a stored encrypted index
+   for large Drives (client only).
 9. **Folder tree in the sidebar:** client only.
 10. **Bookmarks** (save a public link to Shared with me): an account record
     (**format**), or a table if the server must list them (**schema**).
