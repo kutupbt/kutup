@@ -8,3 +8,4 @@ specs/204-calendar-link-busy-feed.spec.ts
 specs/205-calendar-share-decline-leave.spec.ts
 specs/206-calendar-busy-switch.spec.ts
 specs/209-calendar-recurrence.spec.ts
+specs/210-calendar-popovers.spec.ts

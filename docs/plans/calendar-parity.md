@@ -29,9 +29,9 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| Views and navigation | 4 | 1 | 9 |
-| Creating and moving on the grid | 6 | 0 | 4 |
-| The event editor | 5 | 2 | 3 |
+| Views and navigation | 8 | 0 | 5 |
+| Creating and moving on the grid | 9 | 0 | 1 |
+| The event editor | 6 | 2 | 2 |
 | Recurrence | 0 | 3 | 2 |
 | Reminders and notifications | 6 | 0 | 0 |
 | Time zones | 1 | 2 | 2 |
@@ -45,7 +45,7 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 | Search and shortcuts | 1 | 0 | 2 |
 | Booking pages | 0 | 0 | 1 |
 | Other apps and platforms | 2 | 1 | 2 |
-| **All** | **44** | **12** | **50** |
+| **All** | **52** | **11** | **43** |
 
 ## Views and navigation
 
@@ -55,10 +55,10 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 | Today, previous, next; the range as the title | `cal/components/DateCursorButtons.tsx`, `cal/containers/calendar/getTitleDateString.ts` | ✅ | `features/format.ts` |
 | Current-time line; the grid scrolled to now | `cal/components/calendar/TimeGrid.tsx` | ✅ | `features/TimeGrid.tsx`, refreshed every 30 seconds |
 | Overlapping events side by side | `cal/components/calendar/layout.ts` | ✅ | `features/placement.ts` (`columns`) |
-| Mini month navigator in the sidebar | `packages/components/components/miniCalendar/LocalizedMiniCalendar.tsx` | ❌ | listed in calendar.md's UX parity table; not planned |
-| Custom range (days or weeks dragged on the mini calendar) | `VIEWS.CUSTOM`, `ViewSelector.tsx` "Custom" | ❌ | with the mini calendar; not planned |
-| A day header opens that day | `handleClickDateWeekView` in `InteractiveCalendarView.tsx` | ❌ | UX parity table; not planned |
-| "+N more" in the month opens the day's events | `cal/components/events/MorePopoverEvent.tsx` | 🟡 | a count only (`CalendarPage.tsx`); UX parity table |
+| Mini month navigator in the sidebar | `packages/components/components/miniCalendar/LocalizedMiniCalendar.tsx` | ✅ | `features/MiniCalendar.tsx`; no week numbers until the setting (E2 §7) |
+| Custom range (days or weeks dragged on the mini calendar) | `VIEWS.CUSTOM`, `ViewSelector.tsx` "Custom" | ✅ | `features/viewState.ts` (`?range=`): days as a week, a week or more as a month of weeks |
+| A day header opens that day | `handleClickDateWeekView` in `InteractiveCalendarView.tsx` | ✅ | week and month day numbers (`features/TimeGrid.tsx`, `CalendarPage.tsx`) |
+| "+N more" in the month opens the day's events | `cal/components/events/MorePopoverEvent.tsx` | ✅ | `features/CalendarPopovers.tsx` (`DayEvents`) |
 | Week numbers | `pcc/settings/CalendarLayoutSection.tsx` "Show week numbers" | ❌ | planned: E2 settings (calendar.md E2 §7) |
 | Default view | `pcc/settings/ViewPreferenceSelector.tsx` | ❌ | always opens in week; planned: E2 §7 |
 | Agenda (list) view | `VIEWS.AGENDA` (commented out in `ViewSelector.tsx`; search results are the only list) | ❌ | Kutup's own aim (calendar.md §13), not Proton's; comes nearly free with search |
@@ -77,9 +77,9 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 | Resize by the bottom edge | only booking ranges | ✅ | beyond Proton (calendar.md "Calendar UX parity") |
 | Touch (long press) and keyboard paths on the grid | none | ✅ | beyond Proton: `features/press.ts`, slots as cells, Alt+arrows move |
 | Escape cancels a drag | none | ✅ | beyond Proton |
-| Quick-create popover (title, Save, More options) | `cal/components/eventModal/CreateEventPopover.tsx` | ❌ | the full editor opens; UX parity table |
-| Event peek popover (details, Edit, Delete) | `cal/components/events/EventPopover.tsx`, `PopoverEventContent.tsx` | ❌ | a click opens the editor; UX parity table |
-| Duplicate an event | `cal/components/events/eventPopoverButtons/EventPopoverButtons.tsx` "Duplicate event" | ❌ | not planned |
+| Quick-create popover (title, Save, More options) | `cal/components/eventModal/CreateEventPopover.tsx` | ✅ | `features/CalendarPopovers.tsx` (`QuickCreate`): title, the calendar, the span; dates and times in More options |
+| Event peek popover (details, Edit, Delete) | `cal/components/events/EventPopover.tsx`, `PopoverEventContent.tsx` | ✅ | `features/CalendarPopovers.tsx` (`EventPeek`); Delete through `features/EventDelete.tsx` |
+| Duplicate an event | `cal/components/events/eventPopoverButtons/EventPopoverButtons.tsx` "Duplicate event" | ✅ | the editor as a new event; a series' rule kept, a changed occurrence's dropped |
 | A repeating event moved or resized asks "this / this and future / all" | `cal/containers/calendar/confirmationModals/SelectRecurringType.tsx`, `eventActions/getRecurringSaveType.ts` | ❌ | planned: E2 app (calendar.md E2 §9) |
 
 ## The event editor
@@ -95,7 +95,7 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 | Repeat | `inputs/FrequencyInput.tsx`, `CustomFrequencyModal.tsx`, `rows/RepeatEveryRow.tsx`, `RepeatOnRow.tsx`, `EndsRow.tsx` | 🟡 | no control yet (the editor writes `rrule: null`); see Recurrence |
 | Participants | `rows/RowParticipants.tsx`, `inputs/ParticipantsInput.tsx` | ❌ | planned: E4c |
 | Colour per event | `inputs/EventColorSelect.tsx` "Custom event colors" | ❌ | events take their calendar's colour; not planned |
-| Links in the description and location clickable | `cal/hooks/useUrlifyString.tsx` | ❌ | the event is shown only in its editor's fields; comes with the peek popover |
+| Links in the description and location clickable | `cal/hooks/useUrlifyString.tsx` | ✅ | `features/linkText.ts`: http, https and mailto only, written as text (never HTML), `rel="noopener noreferrer"` |
 
 ## Recurrence
 
@@ -253,8 +253,8 @@ What people hit first, then what blocks moving from Proton or Google:
    The core and server are done; without the app a weekly meeting can't be
    entered.
 2. **`.ics` import and export** (in progress, E2 §5–6).
-3. **The event peek and quick-create popovers**, with Duplicate and
-   clickable links: every click now opens the full editor.
+3. ~~The event peek and quick-create popovers, with Duplicate and
+   clickable links~~ (built, 2026-11-24).
 4. **Settings on the account** (E2 §7): default calendar, default duration,
    default view, week numbers, secondary zone, the zone's auto-detect and
    "Time zone changed — Update".
@@ -262,8 +262,9 @@ What people hit first, then what blocks moving from Proton or Google:
    invitation language and the "add as pending" setting.
 6. **Search** (`/`) on an index in the browser, as Proton's encrypted
    search, and the agenda list it gives.
-7. **Mini calendar** with the custom range, day headers opening the day,
-   "+N more" opening the day.
+7. ~~Mini calendar with the custom range, day headers opening the day,
+   "+N more" opening the day~~ (built, 2026-11-24; week numbers wait for
+   the setting, item 4).
 8. **Feeds from a URL and Google import** (E5), then **meeting links**
    (E5, with auto-add).
 9. **Shortcuts list (`?`) and Meta+K**, printing, today's date in the

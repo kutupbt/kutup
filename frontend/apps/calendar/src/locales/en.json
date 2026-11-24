@@ -86,7 +86,11 @@
     "week": "Week",
     "month": "Month",
     "more_one": "{{count}} more",
-    "more_other": "{{count}} more"
+    "more_other": "{{count}} more",
+    "openDay": "Open {{day}}",
+    "newOn": "New event on {{day}}",
+    "moreLabel_one": "{{count}} more event on {{day}}",
+    "moreLabel_other": "{{count}} more events on {{day}}"
   },
   "settings": {
     "title": "Settings",
@@ -119,7 +123,22 @@
       "startedYesterday": "{{title}} started yesterday",
       "startedYesterdayAt": "{{title}} started yesterday at {{time}}",
       "startedOn": "{{title}} started on {{date}}",
-      "startedOnAt": "{{title}} started on {{date}} at {{time}}"
+      "startedOnAt": "{{title}} started on {{date}} at {{time}}",
+      "atTime": "At time of event",
+      "minuteBefore_one": "{{count}} minute before",
+      "minuteBefore_other": "{{count}} minutes before",
+      "hourBefore_one": "{{count}} hour before",
+      "hourBefore_other": "{{count}} hours before",
+      "dayBefore_one": "{{count}} day before",
+      "dayBefore_other": "{{count}} days before",
+      "weekBefore_one": "{{count}} week before",
+      "weekBefore_other": "{{count}} weeks before",
+      "sameDayAt": "On the same day at {{time}}",
+      "dayBeforeAt_one": "{{count}} day before at {{time}}",
+      "dayBeforeAt_other": "{{count}} days before at {{time}}",
+      "weekBeforeAt_one": "{{count}} week before at {{time}}",
+      "weekBeforeAt_other": "{{count}} weeks before at {{time}}",
+      "byEmail": "{{text}} by email"
     },
     "banner": "Kutup Calendar needs your permission to show desktop notifications for event reminders.",
     "bannerLabel": "Desktop notifications",
@@ -448,6 +467,50 @@
     "futureDeleted": "Future events deleted",
     "allDeleted": "All events deleted",
     "invalid": "This repeat doesn't fit the event's start. Choose another.",
-    "countTooLarge": "This server takes fewer repeats. Choose a smaller number of events."
+    "countTooLarge": "This server takes fewer repeats. Choose a smaller number of events.",
+    "text": {
+      "daily": "Daily",
+      "everyDays_one": "Every {{count}} day",
+      "everyDays_other": "Every {{count}} days",
+      "weekly": "Weekly on {{days}}",
+      "everyWeeks_one": "Every {{count}} week on {{days}}",
+      "everyWeeks_other": "Every {{count}} weeks on {{days}}",
+      "weeklyAll": "Weekly on all days",
+      "everyWeeksAll_one": "Every {{count}} week on all days",
+      "everyWeeksAll_other": "Every {{count}} weeks on all days",
+      "monthly": "Monthly {{on}}",
+      "everyMonths_one": "Every {{count}} month {{on}}",
+      "everyMonths_other": "Every {{count}} months {{on}}",
+      "yearly": "Yearly",
+      "everyYears_one": "Every {{count}} year",
+      "everyYears_other": "Every {{count}} years",
+      "times_one": "{{text}}, {{count}} time",
+      "times_other": "{{text}}, {{count}} times",
+      "until": "{{text}}, until {{date}}",
+      "custom": {
+        "daily": "Custom daily",
+        "weekly": "Custom weekly",
+        "monthly": "Custom monthly",
+        "yearly": "Custom yearly"
+      }
+    }
+  },
+  "popover": {
+    "edit": "Edit event",
+    "duplicate": "Duplicate event",
+    "close": "Close",
+    "ownZone": "{{start}} – {{end}} in {{zone}}",
+    "participants": "Participants",
+    "organizer": "Organizer: {{address}}",
+    "addTitle": "Add title",
+    "moreOptions": "More options",
+    "eventLabel": "Event details",
+    "createLabel": "Create event",
+    "dayLabel": "The day's events"
+  },
+  "mini": {
+    "title": "Month navigator",
+    "previous": "Previous month",
+    "next": "Next month"
   }
 }

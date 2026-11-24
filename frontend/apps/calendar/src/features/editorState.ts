@@ -6,7 +6,7 @@ import type { Instance } from './placement'
 /**
  * What the event editor is open for: a new event (at a day, maybe a span
  * a drag chose), or one to change (maybe moved or resized on the grid,
- * not saved until the editor's Save).
+ * not saved until the editor's Save), or one to copy.
  */
 export type EditorTarget =
   | {
@@ -19,6 +19,9 @@ export type EditorTarget =
       allDay?: boolean
       /** All-day: the last day it covers (a drag across days). */
       lastDate?: CivilDate
+      /** What the quick-create popover had (its "More options"). */
+      title?: string
+      calendarId?: string
     }
   | {
       kind: 'edit'
@@ -31,6 +34,17 @@ export type EditorTarget =
        * days (`YYYY-MM-DD`).
        */
       moved?: { start: string; end: string }
+    }
+  | {
+      /**
+       * Proton's "Duplicate event": a new event filled from this one at
+       * the occurrence opened, its repeat kept (a changed occurrence's
+       * dropped); `writable` whether its calendar takes the copy.
+       */
+      kind: 'duplicate'
+      event: CalendarEvent
+      instance?: Instance | null
+      writable: boolean
     }
 
 let target: EditorTarget | null = null

@@ -1,6 +1,7 @@
 import { addDays, minutesOf, type CivilDate } from '@kutup/calendar-core/time'
 import { localToUtc, utcToLocal } from '@kutup/crypto/calendar'
 import { openEditor } from './editorState'
+import { openPopover, type NewTarget } from './popoverState'
 import { DAY_MINUTES, localAt, shiftLocal } from './gridInteraction'
 import { eventZone, inZone, type Placed } from './placement'
 
@@ -12,23 +13,33 @@ import { eventZone, inZone, type Placed } from './placement'
 // in real time (as Proton's grid, and as a repeating event's occurrences).
 
 /**
- * Opens a new timed event from `start` to `end` (minutes of `date`, in the
- * view's zone). A start the zone skips that day (the hour summer time
- * removes) is read with the offset before the gap (RFC 5545 §3.3.5): 02:30
- * is 03:30, and the event keeps its length.
+ * A new timed event from `start` to `end` (minutes of `date`, in the view's
+ * zone). A start the zone skips that day (the hour summer time removes) is
+ * read with the offset before the gap (RFC 5545 §3.3.5): 02:30 is 03:30,
+ * and the event keeps its length.
  */
-export async function openNew(date: CivilDate, start: number, end: number, zone: string): Promise<void> {
+export async function newTimed(date: CivilDate, start: number, end: number, zone: string): Promise<NewTarget> {
   const local = localAt(date, start)
   const real = await utcToLocal(await localToUtc(local, zone), zone)
   const shift = real === local ? 0 : (real.slice(0, 10) === date ? minutesOf(real) : minutesOf(real) + DAY_MINUTES) - start
   const from = start + shift
   const to = end + shift
-  openEditor({
+  return {
     kind: 'new',
     date: from >= DAY_MINUTES ? addDays(date, 1) : date,
     minutes: from % DAY_MINUTES,
     ...(to > DAY_MINUTES ? { endDate: addDays(date, Math.floor(to / DAY_MINUTES)), endMinutes: to % DAY_MINUTES } : { endMinutes: to }),
-  })
+  }
+}
+
+/** Opens the editor for a new timed event (the N shortcut: Proton's full editor). */
+export async function openNew(date: CivilDate, start: number, end: number, zone: string): Promise<void> {
+  openEditor(await newTimed(date, start, end, zone))
+}
+
+/** Proton's quick-create popover for a new timed event, at `anchor` (the grid's draft is drawn from it). */
+export async function quickNew(date: CivilDate, start: number, end: number, zone: string, anchor: Element): Promise<void> {
+  openPopover({ kind: 'create', target: await newTimed(date, start, end, zone) }, anchor)
 }
 
 /** Opens `placed` moved by days and minutes (an all-day event by days). */
