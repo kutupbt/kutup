@@ -7,11 +7,11 @@
 # the others; leave docker-compose.acme.yml out (Koru gets its own
 # certificates with KORU_TLS=acme):
 #
-#   KUTUP_KORU_IMAGE=kutup-koru:<commit> docker compose -f docker-compose.yml -f docker-compose.koru.yml up -d --wait
+#   KUTUP_KORU_IMAGE=kutup-koru:<koru commit>-<koru/ hash> docker compose -f docker-compose.yml -f docker-compose.koru.yml up -d --wait
 #
 # koru/render.sh writes Koru's configuration at every start from the same
 # settings as the apps (KUTUP_BASE_DOMAIN or KUTUP_<APP>_URL, MAIL_HOSTNAME,
-# KUTUP_ACME_EXTRA_DOMAINS, CHAT_SFU_URL, CHAT_SFU_TURN_DOMAIN, CHAT_TURN_URLS).
+# KUTUP_ACME_DOMAINS, KUTUP_ACME_EXTRA_DOMAINS, CHAT_SFU_URL, CHAT_SFU_TURN_DOMAIN, CHAT_TURN_URLS).
 # KORU_MODE: detect (the default) logs what Koru would refuse; block refuses it.
 
 services:
@@ -20,7 +20,7 @@ services:
     profiles: ["nginx-edge"]
 
   koru:
-    image: ${KUTUP_KORU_IMAGE:?set KUTUP_KORU_IMAGE to kutup-koru:<commit> (scripts/build-koru-image.sh)}
+    image: ${KUTUP_KORU_IMAGE:?set KUTUP_KORU_IMAGE to kutup-koru:<koru commit>-<koru/ hash> (scripts/build-koru-image.sh)}
     # Built here or copied here, never fetched.
     pull_policy: never
     restart: unless-stopped
@@ -54,6 +54,7 @@ services:
       KUTUP_PASS_URL: ${KUTUP_PASS_URL:-}
       KUTUP_CALENDAR_URL: ${KUTUP_CALENDAR_URL:-}
       MAIL_HOSTNAME: ${MAIL_HOSTNAME:-}
+      KUTUP_ACME_DOMAINS: ${KUTUP_ACME_DOMAINS:-}
       KUTUP_ACME_EXTRA_DOMAINS: ${KUTUP_ACME_EXTRA_DOMAINS:-}
       KUTUP_ACME_EMAIL: ${KUTUP_ACME_EMAIL:-}
       KUTUP_ACME_STAGING: ${KUTUP_ACME_STAGING:-0}

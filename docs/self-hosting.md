@@ -1235,15 +1235,17 @@ edge remains the default.
 is no Koru image or source here, and its image is never published. It is
 built from your own checkout of its sources, for your own server only.
 
-**The image.** `scripts/build-koru-image.sh` builds `kutup-koru:<commit>`
-on the machine with the checkout (`KORU_SRC`; `KUTUP_KORU_COMMIT`, default
-its `HEAD`; a checkout with uncommitted changes is refused), from that
-commit's files, and prints the image's name, id and commit. The overlay runs
+**The image.** `scripts/build-koru-image.sh` builds
+`kutup-koru:<Koru commit>-<hash of koru/>` on the machine with the checkout
+(`KORU_SRC`; `KUTUP_KORU_COMMIT`, default its `HEAD`; a checkout with
+uncommitted changes is refused), from that commit's files and this
+checkout's `koru/` (so a changed start script gets an image of its own),
+and prints the image's name, id and commit. The overlay runs
 the image `KUTUP_KORU_IMAGE` names and never pulls one:
 
 ```sh
-scripts/build-koru-image.sh        # kutup-koru:276e58932949 sha256:… 276e5893…
-# .env: KUTUP_KORU_IMAGE=kutup-koru:276e58932949
+scripts/build-koru-image.sh        # kutup-koru:<koru commit>-<hash> sha256:… <koru commit>
+# .env: KUTUP_KORU_IMAGE=kutup-koru:<koru commit>-<hash>
 #       COMPOSE_FILE=docker-compose.yml:docker-compose.koru.yml
 docker compose up -d --wait
 ```
@@ -1262,11 +1264,67 @@ image (a rollback with `KUTUP_KORU_COMMIT` set to the earlier commit then
 copies nothing). The server needs no registry token and no checkout of
 Koru. `--dry-run` says what it would copy and set, and changes nothing.
 
+**Switching a running server from nginx to Koru.** Rehearsed on a test
+stack with the acme overlay and the call relays running (2026-11-24):
+
+1. Check the names first: nginx answers every host name, Koru only those
+   its configuration lists. With the image on the server,
+   `KUTUP_KORU_IMAGE=kutup-koru:<tag> scripts/check-koru-names.sh` prints the
+   sites, the TURN streams and their upstreams, and every name on
+   `nginx/certs/fullchain.pem` that Koru would not serve (exit status 1).
+   Add a missing name to `KUTUP_ACME_EXTRA_DOMAINS`. (It needs Python 3.11
+   or newer, for `tomllib`.)
+2. Keep the current settings: `cp .env .env.bak-pre-koru`.
+3. In `.env`: take `docker-compose.acme.yml` out of `COMPOSE_FILE` and add
+   `docker-compose.koru.yml`; set `KORU_MODE=detect`, `KORU_TLS=files`,
+   `KUTUP_HTTP_PORT=80` and `KUTUP_HTTPS_PORT=443` (the acme overlay
+   published 80 and 443 itself; without these Koru publishes 38080 and
+   38443). Give the key to Koru's user:
+   `chown 65532:65532 nginx/certs/privkey.pem` (nginx, Stalwart's setup
+   and LiveKit read it as root anyway; coturn runs as 65532 with this
+   overlay).
+4. Redeploy the running release: `KUTUP_DEPLOY_KORU_SRC=… scripts/deploy.sh
+   <the running tag>` (`--dry-run` first). Its `koru check` refuses a key
+   Koru cannot read before anything changes. Until the deploy has written
+   `KUTUP_KORU_IMAGE` into `.env`, `docker compose up`, `run` and `config`
+   refuse to start; `ps`, `exec`, `logs`, `stop` and `start` (the backup
+   units' calls) still work with Compose 5 (check `docker compose version`
+   with an older one). The deploy removes the old nginx container, which
+   keeps the ports although its service is off, and the acme container,
+   then starts Koru: the edge is down for those few seconds, and calls in
+   progress end, since coturn and LiveKit restart with their own TLS. If
+   the start fails after that, the deploy says so; go back to nginx as
+   below. Browsers that remember nginx's HTTP/3 offer fall back to HTTP/2.
+
+**Back to nginx** (also rehearsed), from the deployment's directory:
+
+```sh
+docker compose rm -sf koru
+sed -i -e "s#^COMPOSE_FILE=.*#$(grep '^COMPOSE_FILE=' .env.bak-pre-koru)#" \
+  -e '/^KORU_MODE=/d; /^KORU_TLS=/d; /^KUTUP_HTTP_PORT=/d; /^KUTUP_HTTPS_PORT=/d' \
+  -e '/^KUTUP_KORU_IMAGE=/d; /^KUTUP_KORU_IMAGE_ID=/d' .env
+docker compose up -d --wait --remove-orphans
+curl -sI https://drive.<domain>/ | grep -i '^server:'     # server: nginx
+```
+
+Only the edge's lines change, so the images a later deploy pinned stay.
+coturn goes back to its own user and plain TCP behind nginx. The key may
+stay owned by 65532; the next renewal by the acme overlay writes it as
+root again.
+
+**Certificate renewal.** With `KORU_TLS=files` nothing renews
+`nginx/certs/`. The acme overlay is gone, and its check over port 80 could
+not pass behind Koru anyway, since Koru sends plain HTTP to HTTPS before any
+route. Stalwart reads the same files. Before a Let's Encrypt certificate's
+last 30 days, renew it by hand, or move to `KORU_TLS=acme` and give Mail its
+certificate there.
+
 `koru/render.sh` writes Koru's configuration at every start from the
 settings the apps already read, as nginx's own does:
 
 - every app host (`KUTUP_BASE_DOMAIN`, or `KUTUP_<APP>_URL`), `MAIL_HOSTNAME`
-  and the other names in `KUTUP_ACME_EXTRA_DOMAINS` on one site: the frontend
+  and the other names in `KUTUP_ACME_DOMAINS` and `KUTUP_ACME_EXTRA_DOMAINS`
+  on one site: the frontend
   by default, the API, `/api/fed/` and `/.well-known/` (federation discovery,
   `security.txt`, the Web Key Directory) to the backend;
 - the editor sandbox on a site of its own whose `/api/` is 404;

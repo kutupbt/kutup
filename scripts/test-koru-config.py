@@ -133,6 +133,18 @@ def main() -> None:
     check("staging" in acme["server"]["acme"]["directory"], "acme: staging")
     check(all(s["mode"] == "block" for s in acme["site"]), "KORU_MODE=block")
 
+    # The names nginx's certificate covers instead of the apps' (KUTUP_ACME_DOMAINS) are served too.
+    named = config(KUTUP_ACME_DOMAINS="kutup.example.org,turn.example.org")
+    check("kutup.example.org" in named["site"][0]["hosts"], "KUTUP_ACME_DOMAINS names are sites")
+    check(any(s["hosts"] == ["turn.example.org"] for s in named["stream"]), "KUTUP_ACME_DOMAINS relay names are streams")
+    # A list naming the editor sandbox (as KUTUP_ACME_DOMAINS replacing the apps' would) keeps its own site.
+    listed = config(KUTUP_ACME_DOMAINS="account.example.org,editor.example.org")
+    check([s["hosts"] for s in listed["site"]][1] == ["editor.example.org"], "an editor named in KUTUP_ACME_DOMAINS keeps its site")
+    check("editor.example.org" not in listed["site"][0]["hosts"], "the editor is not an app host")
+    # An editor sharing an app's host name (another port): no editor site, and no error.
+    shared = config(KUTUP_EDITOR_URL="https://drive.example.org:8443")
+    check(all(s["hosts"] != ["editor.example.org"] for s in shared["site"]), "an editor on an app's host name has no site of its own")
+
     relay = config(KORU_RELAY_PROXY_PROTOCOL="v2", KORU_PROXY_PROTOCOL_FROM="10.0.0.5,10.1.0.0/16")
     check(all(s.get("proxy_protocol") == "v2" for s in relay["stream"]), "KORU_RELAY_PROXY_PROTOCOL")
     check(relay["server"]["proxy_protocol_from"] == ["10.0.0.5", "10.1.0.0/16"], "KORU_PROXY_PROTOCOL_FROM")

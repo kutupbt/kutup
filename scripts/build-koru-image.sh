@@ -4,7 +4,7 @@
 # registry. scripts/deploy.sh copies the image to the server itself
 # (docs/self-hosting.md, "Koru edge (optional)").
 #
-#   scripts/build-koru-image.sh            build, or reuse, kutup-koru:<commit>
+#   scripts/build-koru-image.sh            build, or reuse, kutup-koru:<koru commit>-<koru/ hash>
 #   scripts/build-koru-image.sh --dry-run  only say which: builds nothing
 #
 # Settings (environment):
@@ -36,22 +36,27 @@ if [ -n "$(git -C "$src" status --porcelain)" ]; then
 fi
 commit="$(git -C "$src" rev-parse --verify -q "${KUTUP_KORU_COMMIT:-HEAD}^{commit}")" \
   || { echo "build-koru-image: ${KUTUP_KORU_COMMIT:-HEAD} is not a commit in $src" >&2; exit 1; }
-image="kutup-koru:${commit:0:12}"
+# Kutup's side of the image (koru/: the Dockerfile and the start script)
+# is part of its name too, so a changed render.sh is never served by an
+# image built before the change.
+files="$(cd "$root" && find koru -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-8)"
+image="kutup-koru:${commit:0:12}-$files"
+built="$commit $files"
 
 label() {
-  docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null || true
+  docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}} {{index .Config.Labels "dev.kutup.koru-files"}}' "$image" 2>/dev/null || true
 }
-if [ "$(label)" != "$commit" ] && $dry; then
+if [ "$(label)" != "$built" ] && $dry; then
   echo "$image - $commit"
   exit 0
 fi
-if [ "$(label)" != "$commit" ]; then
+if [ "$(label)" != "$built" ]; then
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
   git -C "$src" archive "$commit" | tar -x -C "$work"
   docker build -q --build-context koru="$work" \
-    --label "org.opencontainers.image.revision=$commit" \
+    --label "org.opencontainers.image.revision=$commit" --label "dev.kutup.koru-files=$files" \
     -t "$image" "$root/koru" >/dev/null
-  [ "$(label)" = "$commit" ] || { echo "build-koru-image: the build did not produce $image" >&2; exit 1; }
+  [ "$(label)" = "$built" ] || { echo "build-koru-image: the build did not produce $image" >&2; exit 1; }
 fi
 echo "$image $(docker image inspect -f '{{.Id}}' "$image") $commit"

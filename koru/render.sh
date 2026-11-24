@@ -4,7 +4,8 @@
 # "Koru edge (optional)"). The nginx edge's rules, as Koru sites and routes:
 #
 #   every app host (KUTUP_BASE_DOMAIN or KUTUP_<APP>_URL), MAIL_HOSTNAME and
-#   the other names in KUTUP_ACME_EXTRA_DOMAINS: one site, the frontend by
+#   the other names in KUTUP_ACME_DOMAINS and KUTUP_ACME_EXTRA_DOMAINS (the
+#   names the nginx edge's certificate covers): one site, the frontend by
 #   default and the API, federation and /.well-known/ routes to the backend;
 #   the editor sandbox: a site of its own with no API at all (404);
 #   sfu.<domain> (CHAT_SFU_URL): the group-call SFU;
@@ -148,8 +149,10 @@ for url in $(printf '%s' "${CHAT_TURN_URLS:-}" | tr ',' ' '); do
   esac
 done
 sfu_turn=$(host_of "${CHAT_SFU_TURN_DOMAIN:-}")
-for name in $(printf '%s' "${KUTUP_ACME_EXTRA_DOMAINS:-}" | tr ',' ' '); do
+for name in $(printf '%s,%s' "${KUTUP_ACME_DOMAINS:-}" "${KUTUP_ACME_EXTRA_DOMAINS:-}" | tr ',' ' '); do
   name=$(host_of "$name")
+  # The editor sandbox has its site of its own, whichever list names it.
+  [ "$name" != "$editor" ] || continue
   case "$name" in
     turn.*) turn=$(add "$turn" "$name") ;;
     sfu-turn.*) sfu_turn=$(add "$sfu_turn" "$name") ;;
@@ -163,7 +166,7 @@ done
 for name in $sfu $turn $sfu_turn; do sites=$(remove "$sites" "$name"); done
 for name in $turn $sfu_turn; do [ "$name" != "$sfu" ] || fail "$name is both the SFU and a relay"; done
 case " $sites " in *" $editor "*) editor="" ;; esac
-case " $sfu $turn $sfu_turn " in *" $editor "*) fail "the editor host $editor is also a call host" ;; esac
+[ -z "$editor" ] || case " $sfu $turn $sfu_turn " in *" $editor "*) fail "the editor host $editor is also a call host" ;; esac
 for name in $sites $editor $sfu $turn $sfu_turn; do check_host "$name"; done
 [ -n "$sites" ] || fail "no app hosts"
 
