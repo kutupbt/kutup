@@ -98,6 +98,10 @@ export interface DriveFile {
   fileKeyEnvelope: string
   /** The key generation the upload was sealed under. */
   originalKeyGeneration: number
+  /** The original upload as stored (sealed), in bytes; absent where the listing does not say. */
+  originalSizeBytes?: number
+  /** The original upload is gone (deleted from the version history, or pruned by retention). */
+  originalPruned?: boolean
   /** The key generation of what a download serves. */
   contentKeyGeneration: number
   /** The file's older keys, each sealed under the next. */

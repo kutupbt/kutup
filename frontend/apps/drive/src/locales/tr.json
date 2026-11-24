@@ -122,7 +122,8 @@
       "trash": "Çöp kutusuna taşı",
       "copyTo": "Kopyala…",
       "moveTo": "Taşı…",
-      "quickLook": "Hızlı bakış"
+      "quickLook": "Hızlı bakış",
+      "versionHistory": "Sürüm geçmişi"
     },
     "movedToTrash_one": "Çöp kutusuna taşındı",
     "movedToTrash_other": "{{count}} öğe çöp kutusuna taşındı",
@@ -431,5 +432,51 @@
     "links_one": "herkese açık bağlantı",
     "links_other": "{{count}} herkese açık bağlantı",
     "manage": "Paylaşımı yönet"
+  },
+  "versions": {
+    "title": "Sürüm geçmişi",
+    "loading": "Sürümler yükleniyor…",
+    "loadFailed": "Sürüm geçmişi yüklenemedi.",
+    "current": "Geçerli sürüm",
+    "none": "Önceki sürüm yok. Bu dosya her değiştirildiğinde ya da kaydedildiğinde önceki sürüm burada kalır.",
+    "original": "İlk yükleme",
+    "kept": "Hep saklanır",
+    "more": "Sürüm işlemleri",
+    "unknownAuthor": "Bilinmeyen kişi",
+    "preview": "Önizle",
+    "previewOf": "{{date}} tarihli sürüm",
+    "restore": "Sürümü geri yükle",
+    "restoreInEditor": "Düzenleyicide geri yükle",
+    "download": "İndir",
+    "downloadFailed": "Sürüm indirilemedi.",
+    "keep": "Hep sakla",
+    "unkeep": "Hep saklamayı bırak",
+    "updateFailed": "Sürüm değiştirilemedi.",
+    "delete": "Sürümü sil",
+    "groups": {
+      "today": "Bugün",
+      "yesterday": "Dün",
+      "lastWeek": "Geçen hafta"
+    },
+    "retention": "Önceki sürümler {{period}} saklanır: son günün tamamı, sonra bir hafta boyunca saatte bir, ardından günde bir sürüm. Hep saklanan sürümler kalır.",
+    "change": "Değiştir",
+    "restoreTitle": "Bu sürümü geri yükle",
+    "restoreDescription": "{{name}}, {{date}} tarihli sürüme geri döndürülecek. Diğer bütün sürümler saklanmaya devam eder.",
+    "restoreSubmit": "Geri yükle",
+    "restoring": "Sürüm geri yükleniyor…",
+    "restored": "Sürüm geri yüklendi",
+    "restoreFailed": "Sürüm geri yüklenemedi.",
+    "restoreProblem": {
+      "changed": "Dosya bu arada değişti. Geçmişine yeniden bakıp tekrar deneyin.",
+      "ownUpload": "Bu dosyanın açık bir yüklemesi var. Onu bitirin ya da iptal edin, sonra tekrar deneyin.",
+      "othersUpload": "Şu anda biri bu dosyanın yeni bir sürümünü yüklüyor. Bitince tekrar deneyin."
+    },
+    "deleteTitle": "Bu sürümü sil",
+    "deleteDescription": "{{name}}, {{date}} sürüm geçmişinden kalıcı olarak silinsin mi?",
+    "deleteWarning": "Geri getirilemez.",
+    "deleteKept": "Bu sürüm hep saklanmak üzere işaretlenmişti. Geri getirilemez.",
+    "deleteSubmit": "Kalıcı olarak sil",
+    "deleteFailed": "Sürüm silinemedi.",
+    "deleted": "Sürüm silindi"
   }
 }
