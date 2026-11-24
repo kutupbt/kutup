@@ -86,7 +86,11 @@
     "week": "Hafta",
     "month": "Ay",
     "more_one": "{{count}} tane daha",
-    "more_other": "{{count}} tane daha"
+    "more_other": "{{count}} tane daha",
+    "openDay": "{{day}} gününü aç",
+    "newOn": "{{day}} için yeni etkinlik",
+    "moreLabel_one": "{{day}}: {{count}} etkinlik daha",
+    "moreLabel_other": "{{day}}: {{count}} etkinlik daha"
   },
   "settings": {
     "title": "Ayarlar",
@@ -119,7 +123,22 @@
       "startedYesterday": "{{title}} dün başladı",
       "startedYesterdayAt": "{{title}} dün {{time}} saatinde başladı",
       "startedOn": "{{title}} {{date}} tarihinde başladı",
-      "startedOnAt": "{{title}} {{date}} tarihinde {{time}} saatinde başladı"
+      "startedOnAt": "{{title}} {{date}} tarihinde {{time}} saatinde başladı",
+      "atTime": "Etkinlik saatinde",
+      "minuteBefore_one": "{{count}} dakika önce",
+      "minuteBefore_other": "{{count}} dakika önce",
+      "hourBefore_one": "{{count}} saat önce",
+      "hourBefore_other": "{{count}} saat önce",
+      "dayBefore_one": "{{count}} gün önce",
+      "dayBefore_other": "{{count}} gün önce",
+      "weekBefore_one": "{{count}} hafta önce",
+      "weekBefore_other": "{{count}} hafta önce",
+      "sameDayAt": "Aynı gün saat {{time}}",
+      "dayBeforeAt_one": "{{count}} gün önce saat {{time}}",
+      "dayBeforeAt_other": "{{count}} gün önce saat {{time}}",
+      "weekBeforeAt_one": "{{count}} hafta önce saat {{time}}",
+      "weekBeforeAt_other": "{{count}} hafta önce saat {{time}}",
+      "byEmail": "{{text}} (e-posta ile)"
     },
     "banner": "Kutup Takvim'in etkinlik hatırlatıcıları için masaüstü bildirimleri gösterebilmesi için izninize ihtiyacı var.",
     "bannerLabel": "Masaüstü bildirimleri",
@@ -448,6 +467,50 @@
     "futureDeleted": "Sonraki etkinlikler silindi",
     "allDeleted": "Tüm etkinlikler silindi",
     "invalid": "Bu tekrar, etkinliğin başlangıcına uymuyor. Başka birini seçin.",
-    "countTooLarge": "Bu sunucu daha az tekrar kabul ediyor. Daha küçük bir etkinlik sayısı seçin."
+    "countTooLarge": "Bu sunucu daha az tekrar kabul ediyor. Daha küçük bir etkinlik sayısı seçin.",
+    "text": {
+      "daily": "Her gün",
+      "everyDays_one": "{{count}} günde bir",
+      "everyDays_other": "{{count}} günde bir",
+      "weekly": "Her hafta: {{days}}",
+      "everyWeeks_one": "{{count}} haftada bir: {{days}}",
+      "everyWeeks_other": "{{count}} haftada bir: {{days}}",
+      "weeklyAll": "Her hafta, her gün",
+      "everyWeeksAll_one": "{{count}} haftada bir, her gün",
+      "everyWeeksAll_other": "{{count}} haftada bir, her gün",
+      "monthly": "Her ay {{on}}",
+      "everyMonths_one": "{{count}} ayda bir, {{on}}",
+      "everyMonths_other": "{{count}} ayda bir, {{on}}",
+      "yearly": "Her yıl",
+      "everyYears_one": "{{count}} yılda bir",
+      "everyYears_other": "{{count}} yılda bir",
+      "times_one": "{{text}}, {{count}} kez",
+      "times_other": "{{text}}, {{count}} kez",
+      "until": "{{text}}, {{date}} tarihine kadar",
+      "custom": {
+        "daily": "Özel günlük",
+        "weekly": "Özel haftalık",
+        "monthly": "Özel aylık",
+        "yearly": "Özel yıllık"
+      }
+    }
+  },
+  "popover": {
+    "edit": "Etkinliği düzenle",
+    "duplicate": "Etkinliği kopyala",
+    "close": "Kapat",
+    "ownZone": "{{zone}} saatiyle {{start}} – {{end}}",
+    "participants": "Katılımcılar",
+    "organizer": "Düzenleyen: {{address}}",
+    "addTitle": "Başlık ekle",
+    "moreOptions": "Diğer seçenekler",
+    "eventLabel": "Etkinlik ayrıntıları",
+    "createLabel": "Etkinlik oluştur",
+    "dayLabel": "Günün etkinlikleri"
+  },
+  "mini": {
+    "title": "Ay takvimi",
+    "previous": "Önceki ay",
+    "next": "Sonraki ay"
   }
 }

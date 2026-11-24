@@ -54,6 +54,8 @@ export async function renameCalendar(page: Page, from: string, to: string): Prom
  */
 export async function addEvent(page: Page, hour: number, title: string, calendar?: string): Promise<void> {
   await page.getByTestId(`calendar-slot-${today()}-${hour * 2}`).click()
+  // The quick-create popover first; "More options" opens the editor.
+  await page.getByTestId('create-popover-more').click()
   const editor = page.getByRole('dialog', { name: 'New event' })
   await editor.getByLabel('Title').fill(title)
   if (calendar) {

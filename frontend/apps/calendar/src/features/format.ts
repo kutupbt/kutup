@@ -23,7 +23,7 @@ export function formatHour(hour: number, locale: string, hour12: boolean | null)
   )
 }
 
-export function formatWeekday(date: CivilDate, locale: string, width: 'short' | 'long' = 'short'): string {
+export function formatWeekday(date: CivilDate, locale: string, width: 'narrow' | 'short' | 'long' = 'short'): string {
   return new Intl.DateTimeFormat(locale, { weekday: width, timeZone: 'UTC' }).format(asUtc(date))
 }
 

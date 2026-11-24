@@ -102,6 +102,9 @@ test('calendar reminders: the editor, a calendar’s defaults, and one firing wh
   // Opened again, the event shows its own reminder.
   await page.goto(appUrl('calendar', `/?view=day&date=${start.date}`))
   await page.getByTestId('calendar-event').filter({ hasText: 'Toplantı' }).first().click()
+  // Its popover lists it (Proton's), and Edit opens it.
+  await expect(page.getByTestId('event-popover-reminders')).toHaveText('At time of event')
+  await page.getByTestId('event-popover-edit').click()
   const opened = page.getByRole('dialog', { name: 'Event' })
   await expect(opened.getByTestId('reminder-row')).toHaveCount(1)
   await expect(opened.getByRole('combobox', { name: 'When' })).toContainText('at time of event')
