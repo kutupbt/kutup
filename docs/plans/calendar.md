@@ -894,11 +894,17 @@ one form). Kutup's own event parts keep their strict canonical form
 - Export lists every event through `GET …/events/all` (paged by id); events
   that don't open are reported by start time.
 
-**WASM:** `crypto-calendar` grows from 2,172,288 to 2,242,678 bytes gzipped
+**WASM:** `crypto-calendar` grows from 2,172,288 to 2,243,045 bytes gzipped
 (99.9% of its 2,245,000 budget, not raised). Building `kutup-crypto` at
-`opt-level = "s"` in the `wasm-release` profile brings it to 2,118,880
-(measured); that, or a lazily loaded runtime for files, is the next step
-before anything else grows it.
+`opt-level = "s"` in `wasm-release` was measured (2026-11-24) and not
+taken: it brings crypto-calendar to 2,119,723 and crypto to 1,780,287, but
+sealing a 4 MiB Drive block takes 210 ms instead of 172 (+22%) and opening
+one 156 ms instead of 117 (+33%): the AEAD and hashing code generic over
+their parameters is compiled in `kutup-crypto` at its level (Argon2id, in
+its own crate, is unchanged; the `.ics` import and export +14%). The next
+step is a lazily loaded runtime for `.ics` files (import, export, and
+E4's invitations in Mail, as calendar-e4.md Q-4 proposes), so neither
+calendar runtime carries them until a file is opened.
 
 An imported series is drawn at every occurrence and edited with the E2
 app's "this / this and following / all" (§9 above).
