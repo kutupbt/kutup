@@ -786,6 +786,7 @@ pub(crate) async fn file_rows(
         shared: bool,
         name_hash: Option<String>,
         content_hash: Option<String>,
+        original_pruned: bool,
     }
     let rows: Vec<Row> = sqlx::query_as(&format!(
         r#"SELECT f.id, f.collection_id, f.uploader_account_id,
@@ -793,7 +794,7 @@ pub(crate) async fn file_rows(
                   kutup_b64(f.metadata_envelope) AS metadata_envelope,
                   kutup_b64(f.file_key_envelope) AS file_key_envelope, f.key_epoch, f.key_generation,
                   f.metadata_revision, f.encrypted_size_bytes, f.created_at, f.updated_at,
-                  f.original_key_generation,
+                  f.original_key_generation, f.original_pruned,
                   {} AS key_history, {} AS content_key_generation,
                   sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                   sm.key_generation AS thumb_sm_generation,
@@ -853,6 +854,7 @@ pub(crate) async fn file_rows(
             shared: r.shared,
             name_hash: r.name_hash,
             content_hash: r.content_hash,
+            original_pruned: r.original_pruned,
         })
         .collect())
 }

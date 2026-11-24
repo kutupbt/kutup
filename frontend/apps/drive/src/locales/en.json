@@ -122,7 +122,8 @@
       "trash": "Move to trash",
       "copyTo": "Copy to…",
       "moveTo": "Move to…",
-      "quickLook": "Quick look"
+      "quickLook": "Quick look",
+      "versionHistory": "Version history"
     },
     "movedToTrash_one": "Moved to trash",
     "movedToTrash_other": "{{count}} items moved to trash",
@@ -431,5 +432,51 @@
     "links_one": "public link",
     "links_other": "{{count}} public links",
     "manage": "Manage sharing"
+  },
+  "versions": {
+    "title": "Version history",
+    "loading": "Loading versions…",
+    "loadFailed": "The version history could not be loaded.",
+    "current": "Current version",
+    "none": "No earlier versions. Each time this file is replaced or saved, the version before stays here.",
+    "original": "First upload",
+    "kept": "Kept forever",
+    "more": "Version actions",
+    "unknownAuthor": "Unknown author",
+    "preview": "Preview",
+    "previewOf": "Version from {{date}}",
+    "restore": "Restore version",
+    "restoreInEditor": "Restore in the editor",
+    "download": "Download",
+    "downloadFailed": "The version could not be downloaded.",
+    "keep": "Keep forever",
+    "unkeep": "Stop keeping forever",
+    "updateFailed": "The version could not be changed.",
+    "delete": "Delete version",
+    "groups": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "lastWeek": "Last week"
+    },
+    "retention": "Earlier versions are kept for {{period}}: all of the last day, then one an hour for a week and one a day after that. Versions kept forever stay.",
+    "change": "Change",
+    "restoreTitle": "Restore this version",
+    "restoreDescription": "{{name}} will be restored to the version from {{date}}. All other versions will still be saved.",
+    "restoreSubmit": "Restore",
+    "restoring": "Restoring the version…",
+    "restored": "Version restored",
+    "restoreFailed": "The version could not be restored.",
+    "restoreProblem": {
+      "changed": "The file changed meanwhile. Look at its history again and retry.",
+      "ownUpload": "Another upload of this file is open. Finish or cancel it, then retry.",
+      "othersUpload": "Someone is uploading a new version of this file right now. Retry once it is done."
+    },
+    "deleteTitle": "Delete this version",
+    "deleteDescription": "Are you sure you want to permanently delete {{name}}, {{date}} from the version history?",
+    "deleteWarning": "It cannot be recovered.",
+    "deleteKept": "This version was kept forever. It cannot be recovered.",
+    "deleteSubmit": "Delete permanently",
+    "deleteFailed": "The version could not be deleted.",
+    "deleted": "Version deleted"
   }
 }
