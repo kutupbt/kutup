@@ -944,6 +944,23 @@ pub struct EventsQuery {
     pub limit: Option<i64>,
 }
 
+/// Whether an event meets the window `[$2, $3)`: it starts before its end
+/// and ends (or, repeating, may still recur) after its start; or it is a
+/// changed occurrence (a `RECURRENCE-ID`) of a series whose occurrence it
+/// replaces meets the window, wherever it was moved to, so a client drawing
+/// the series there knows the series no longer occurs at that instant
+/// (Proton's `recurrenceInstances`). The occurrence replaced lasts what the
+/// series' first does, a day more for zone offsets; a client keeps what
+/// meets the window.
+pub(crate) const MEETS_WINDOW: &str = "((se.start_utc < $3
+            AND COALESCE(se.range_end_utc, 'infinity'::timestamptz) >= $2)
+         OR (se.recurrence_id IS NOT NULL AND se.recurrence_id < $3
+            AND se.recurrence_id + interval '1 day' + COALESCE(
+                (SELECT max(p.end_utc - p.start_utc) FROM calendar_events pe
+                   JOIN calendar_shared_events p ON p.id = pe.shared_event_id
+                  WHERE pe.calendar_id = e.calendar_id AND p.uid = se.uid
+                    AND p.recurrence_id IS NULL), interval '0') >= $2))";
+
 pub(crate) fn instant(value: &str, what: &str) -> AppResult<time::OffsetDateTime> {
     time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
         .map_err(|_| AppError::bad_request(format!("{what} is not an RFC 3339 time")))
@@ -993,16 +1010,89 @@ pub async fn events(
     // client's cursor by (start, id).
     let mut rows: Vec<EventRow> = sqlx::query_as(&format!(
         "{}
-          WHERE e.calendar_id = $1 AND se.start_utc < $3
-            AND COALESCE(se.range_end_utc, 'infinity'::timestamptz) >= $2
+          WHERE e.calendar_id = $1 AND {}
             AND ($4::timestamptz IS NULL OR (se.start_utc, e.id) > ($4, $5))
           ORDER BY se.start_utc, e.id
           LIMIT $6",
-        event_view_sql(7)
+        event_view_sql(7),
+        MEETS_WINDOW
     ))
     .bind(id)
     .bind(start)
     .bind(end)
+    .bind(after.map(|(at, _)| at))
+    .bind(after.map(|(_, id)| id))
+    .bind(limit + 1)
+    .bind(user_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let next = (rows.len() as i64 > limit).then(|| {
+        rows.truncate(limit as usize);
+        rows.last().map(|row| EventCursor {
+            after_start: row.start_utc,
+            after_id: row.id,
+        })
+    });
+    Ok(Json(EventPage {
+        events: rows.into_iter().map(event_view).collect(),
+        next: next.flatten(),
+    }))
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesQuery {
+    /// The series' UID.
+    pub uid: String,
+    /// The `next` of the previous page, both or neither.
+    pub after_start: Option<String>,
+    pub after_id: Option<Uuid>,
+}
+
+/// `GET /api/v1/calendar/calendars/{id}/events/by-uid?uid` — every event
+/// of a calendar with one UID: a series and its changed occurrences,
+/// wherever they are (Proton's `queryEvents({ UID })`, read before a
+/// series is changed or deleted), oldest start first, paged.
+#[utoipa::path(
+    get,
+    path = "/api/v1/calendar/calendars/{id}/events/by-uid",
+    tag = "calendar",
+    security(("BearerAuth" = [])),
+    params(("id" = Uuid, Path), SeriesQuery),
+    responses((status = 200, body = EventPage), (status = 404))
+)]
+pub async fn events_by_uid(
+    State(state): State<AppState>,
+    user: AuthAccount,
+    Path(id): Path<Uuid>,
+    Query(query): Query<SeriesQuery>,
+) -> AppResult<Json<EventPage>> {
+    let user_id = trusted_uuid(&user.account_id)?;
+    if query.uid.is_empty() || query.uid.chars().count() > kutup_crypto::calendar_event::MAX_UID_LEN
+    {
+        return Err(AppError::bad_request("uid is 1 to 255 characters"));
+    }
+    let after = match (&query.after_start, query.after_id) {
+        (Some(at), Some(id)) => Some((instant(at, "afterStart")?, id)),
+        (None, None) => None,
+        _ => return Err(AppError::bad_request("afterStart and afterId go together")),
+    };
+    let limit = CALENDAR_EVENTS_PAGE.load(&state.pool).await?;
+    let mut conn = state.pool.acquire().await?;
+    let permissions = member_permissions(&mut conn, user_id, id).await?;
+    if permissions & READ == 0 {
+        return Err(AppError::forbidden("this calendar shows busy times only"));
+    }
+    let mut rows: Vec<EventRow> = sqlx::query_as(&format!(
+        "{}
+          WHERE e.calendar_id = $1 AND se.uid = $2
+            AND ($3::timestamptz IS NULL OR (se.start_utc, e.id) > ($3, $4))
+          ORDER BY se.start_utc, e.id
+          LIMIT $5",
+        event_view_sql(6)
+    ))
+    .bind(id)
+    .bind(&query.uid)
     .bind(after.map(|(at, _)| at))
     .bind(after.map(|(_, id)| id))
     .bind(limit + 1)
@@ -1138,6 +1228,21 @@ async fn reminders_then_alarms(
         }
     }
     crate::calendar_alarms::recompute(tx, event)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
+/// A changed occurrence made or changed: its series' alarms skip the
+/// occurrence it replaces (or, its `RECURRENCE-ID` the same, still do).
+async fn series_alarms(
+    tx: &mut Transaction<'_, Postgres>,
+    calendar: Uuid,
+    checked: &Checked,
+) -> AppResult<()> {
+    if checked.recurrence_id.is_none() {
+        return Ok(());
+    }
+    crate::calendar_alarms::recompute_series(tx, calendar, &checked.shared.uid)
         .await
         .map_err(|error| AppError::internal(error.to_string()))
 }
@@ -1572,6 +1677,7 @@ async fn apply(
                 None => RemindersChange::Keep,
             };
             reminders_then_alarms(&mut tx, id, user_id, change).await?;
+            series_alarms(&mut tx, calendar, &checked).await?;
             Some(id)
         }
         EventChange::Update {
@@ -1686,12 +1792,15 @@ async fn apply(
                 Some(Some(list)) => RemindersChange::Own(list),
             };
             reminders_then_alarms(&mut tx, *id, user_id, change).await?;
+            series_alarms(&mut tx, calendar, &checked).await?;
             Some(*id)
         }
         EventChange::Delete { id, base_revision } => {
             debug_assert!(checked.is_none());
-            let current: Option<(i64, i64, Uuid, i64, bool)> = sqlx::query_as(
-                "SELECT e.revision, e.bytes, se.id, se.bytes, se.home_calendar_id = e.calendar_id
+            type Current = (i64, i64, Uuid, i64, bool, String, bool);
+            let current: Option<Current> = sqlx::query_as(
+                "SELECT e.revision, e.bytes, se.id, se.bytes, se.home_calendar_id = e.calendar_id,
+                        se.uid, se.recurrence_id IS NOT NULL
                    FROM calendar_events e JOIN calendar_shared_events se ON se.id = e.shared_event_id
                   WHERE e.id = $1 AND e.calendar_id = $2
                   FOR UPDATE OF e, se",
@@ -1700,7 +1809,8 @@ async fn apply(
             .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            let Some((revision, own_bytes, shared_id, shared_bytes, home)) = current else {
+            let Some((revision, own_bytes, shared_id, shared_bytes, home, uid, changed)) = current
+            else {
                 return Err(AppError::not_found("not found"));
             };
             if revision != *base_revision {
@@ -1730,6 +1840,12 @@ async fn apply(
                 -bytes,
             )
             .await?;
+            // A changed occurrence gone: the series reminds of it again.
+            if changed {
+                crate::calendar_alarms::recompute_series(&mut tx, calendar, &uid)
+                    .await
+                    .map_err(|error| AppError::internal(error.to_string()))?;
+            }
             None
         }
     };

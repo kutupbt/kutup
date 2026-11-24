@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { CalendarEvent } from '@kutup/calendar-core/api'
 import type { CivilDate } from '@kutup/calendar-core/time'
+import type { Instance } from './placement'
 
 /**
  * What the event editor is open for: a new event (at a day, maybe a span
@@ -22,6 +23,8 @@ export type EditorTarget =
   | {
       kind: 'edit'
       event: CalendarEvent
+      /** The occurrence of a repeating event opened (its first when none is named). */
+      instance?: Instance | null
       /**
        * Where a drag put it: local date-times in the event's own zone
        * (`YYYY-MM-DDTHH:MM:SS`), or for an all-day event its first and last

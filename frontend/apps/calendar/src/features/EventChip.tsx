@@ -33,7 +33,7 @@ export function EventChip({
         e.stopPropagation()
         // A pointer's click is the grid's (a press that may have dragged); a key's is this button's.
         if (onPointerDown && e.detail > 0) return
-        openEditor({ kind: 'edit', event: placed.event })
+        openEditor({ kind: 'edit', event: placed.event, instance: placed.instance })
       }}
       className={cn('flex w-full min-w-0 touch-pan-y items-center gap-1 truncate rounded px-1.5 py-0.5 text-left text-xs hover:brightness-95', faded && 'opacity-40')}
       style={{ background: `${placed.color}26`, borderLeft: `3px solid ${placed.color}` }}
