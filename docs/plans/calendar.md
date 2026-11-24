@@ -946,17 +946,26 @@ one form). Kutup's own event parts keep their strict canonical form
 - Export lists every event through `GET …/events/all` (paged by id); events
   that don't open are reported by start time.
 
-**WASM:** `crypto-calendar` grows from 2,172,288 to 2,243,045 bytes gzipped
-(99.9% of its 2,245,000 budget, not raised). Building `kutup-crypto` at
-`opt-level = "s"` in `wasm-release` was measured (2026-11-24) and not
-taken: it brings crypto-calendar to 2,119,723 and crypto to 1,780,287, but
-sealing a 4 MiB Drive block takes 210 ms instead of 172 (+22%) and opening
-one 156 ms instead of 117 (+33%): the AEAD and hashing code generic over
-their parameters is compiled in `kutup-crypto` at its level (Argon2id, in
-its own crate, is unchanged; the `.ics` import and export +14%). The next
-step is a lazily loaded runtime for `.ics` files (import, export, and
-E4's invitations in Mail, as calendar-e4.md Q-4 proposes), so neither
-calendar runtime carries them until a file is opened.
+**WASM: a runtime of its own.** The `.ics` code first lived in
+`crypto-calendar`, which it took from 2,172,288 to 2,243,045 bytes gzipped,
+over its budget once master grew. Building `kutup-crypto` at
+`opt-level = "s"` was measured and not taken: it would have saved about
+124 KB, but sealing a 4 MiB Drive block took 210 ms instead of 172 (+22%)
+and opening one 156 ms instead of 117 (+33%), the AEAD and hashing code
+being compiled in `kutup-crypto` at its level. So the files have their own
+runtime, `calendar-ics` (`crates/kutup-calendar-ics-wasm`,
+`scripts/build-calendar-ics-wasm.sh`): `kutup-crypto` with the new
+`calendar-format` feature only (event text, recurrence, `calendar_ics` and
+the bundled time zone database; no keys, no OpenPGP), exporting
+`calendarImportIcs` and `calendarExportIcs`. The Calendar app loads it the
+first time a file is imported or exported (`@kutup/crypto/calendarIcs`),
+from its own origin under `/calendar-ics-wasm/<hash>/` like the other
+runtimes, so the apps' `script-src 'self' 'wasm-unsafe-eval'` takes it with
+no new origin. It holds no key: crypto-calendar seals what it reads and
+opens what it writes. Mail's invitations (E4, calendar-e4.md Q-4) load it
+the same way. Its budget in `frontend/wasm-budgets.json` is 342,000 bytes,
+about 110% of its first size (310,617); its checks are
+`scripts/test-calendar-ics-wasm.mjs`.
 
 An imported series is drawn at every occurrence and edited with the E2
 app's "this / this and following / all" (§9 above).

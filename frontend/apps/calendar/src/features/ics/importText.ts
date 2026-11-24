@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next'
 import type { IcsFileRefused, ImportLimits, SubmitError, SubmitErrorKind } from '@kutup/calendar-core/ics'
-import type { IcsErrorKind } from '@kutup/crypto/calendar'
+import type { IcsErrorKind } from '@kutup/crypto/calendarIcs'
 
 // Proton's texts for an import (`ImportFileError`, `getICSErrorMessage`).
 

@@ -1,0 +1,24 @@
+[package]
+name = "kutup-calendar-ics-wasm"
+description = "Browser bindings for .ics files: the import and export of kutup_crypto::calendar_ics, loaded on first use"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The calendar formats alone (no keys, no OpenPGP): event text, recurrence,
+# the bundled time zone database and `.ics` files (docs/plans/calendar.md,
+# E2c). Sealing stays in the crypto-calendar runtime.
+kutup-crypto = { path = "../kutup-crypto", default-features = false, features = ["calendar-format"] }
+serde.workspace = true
+serde-wasm-bindgen = "0.6"
+wasm-bindgen = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }

@@ -505,6 +505,14 @@ impl CalendarEncrypted {
     }
 }
 
+/// An event's parts, to seal (`crate::calendar` seals them).
+pub struct EventParts {
+    pub shared_signed: SharedSigned,
+    pub shared_encrypted: SharedEncrypted,
+    pub calendar_signed: CalendarSigned,
+    pub calendar_encrypted: Option<CalendarEncrypted>,
+}
+
 // ----- the fields a client edits -----
 
 /// A time as a client sends and reads it.
@@ -589,7 +597,7 @@ pub struct EventFieldsV1 {
 }
 
 impl EventFieldsV1 {
-    pub fn to_parts(&self) -> Result<crate::calendar::EventParts> {
+    pub fn to_parts(&self) -> Result<EventParts> {
         let stamp: Timestamp = self
             .dtstamp
             .parse()
@@ -608,7 +616,7 @@ impl EventFieldsV1 {
             .iter()
             .map(TimeV1::to_time)
             .collect::<Result<Vec<_>>>()?;
-        Ok(crate::calendar::EventParts {
+        Ok(EventParts {
             shared_signed: SharedSigned {
                 uid: self.uid.clone(),
                 dtstamp: stamp,
@@ -670,7 +678,7 @@ impl EventFieldsV1 {
         })
     }
 
-    pub fn of(parts: &crate::calendar::EventParts) -> Self {
+    pub fn of(parts: &EventParts) -> Self {
         let shared = &parts.shared_signed;
         let secret = &parts.shared_encrypted;
         let calendar = &parts.calendar_signed;
@@ -1113,7 +1121,7 @@ mod tests {
         let text = comment.build().unwrap();
         assert_eq!(CalendarEncrypted::parse(&text).unwrap(), comment);
         // Through the fields and back: nothing dropped.
-        let parts = crate::calendar::EventParts {
+        let parts = EventParts {
             shared_signed: parsed,
             shared_encrypted: SharedEncrypted {
                 uid: signed().uid,

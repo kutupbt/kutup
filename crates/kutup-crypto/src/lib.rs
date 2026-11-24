@@ -52,13 +52,13 @@ pub mod asset;
 pub mod blocks;
 #[cfg(feature = "calendar")]
 pub mod calendar;
-#[cfg(feature = "calendar")]
+#[cfg(feature = "calendar-format")]
 pub mod calendar_event;
-#[cfg(feature = "calendar")]
+#[cfg(feature = "calendar-format")]
 pub mod calendar_ics;
 #[cfg(feature = "calendar")]
 pub mod calendar_link;
-#[cfg(feature = "calendar")]
+#[cfg(feature = "calendar-format")]
 pub mod calendar_recurrence;
 pub mod calendar_settings;
 pub mod chat_attachment_ledger;

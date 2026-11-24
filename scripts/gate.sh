@@ -144,6 +144,7 @@ web() {
   pnpm -C frontend run test:crypto-wasm
   pnpm -C frontend run test:pass-wasm
   pnpm -C frontend run test:mail-search-wasm
+  pnpm -C frontend run test:calendar-ics-wasm
   step "Production build"
   pnpm -C frontend run build
   node scripts/check-app-bundles.mjs

@@ -1,4 +1,5 @@
-// `.ics` import and export in the browser (docs/plans/calendar.md, E2 §5–6),
+// `.ics` import and export in the browser (docs/plans/calendar.md, E2 §5–6,
+// E2c: the reading and writing in the `.ics` runtime, loaded on first use),
 // as Proton's (`applications/calendar` import and export modals,
 // `packages/shared/lib/calendar/import`): the Rust core reads the file and
 // rebuilds each event; here every event is sealed with the calendar's key
@@ -7,7 +8,8 @@
 // `Overwrite`. The export opens every event of a calendar here and the Rust
 // core writes the file: the server never sees one in the clear.
 
-import { exportIcs, importIcs, sealCalendarEvent, type EventFields, type IcsError, type IcsFileError, type IcsImport, type IcsReminder } from '@kutup/crypto/calendar'
+import { sealCalendarEvent, type EventFields } from '@kutup/crypto/calendar'
+import { exportIcs, importIcs, type IcsError, type IcsFileError, type IcsImport, type IcsReminder } from '@kutup/crypto/calendarIcs'
 import type { MailAccount } from '@kutup/mail-core/api'
 import { loadServerSettings } from '@kutup/session/apps'
 import api from '@kutup/session/client'

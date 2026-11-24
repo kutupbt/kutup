@@ -12,8 +12,13 @@ default = ["mnemonic"]
 mnemonic = ["dep:bip39"]
 # OpenPGP mail address keys (`mail_key`); off for clients that do not need rPGP (Chat).
 mail = ["dep:pgp", "dep:rand", "dep:rsa"]
-# Calendars (`calendar`, `calendar_event`): mail's OpenPGP plus time zones.
-calendar = ["mail", "dep:jiff", "dep:jiff-tzdb"]
+# Calendars (`calendar`, `calendar_link`): mail's OpenPGP plus the formats below.
+calendar = ["mail", "calendar-format"]
+# The calendar formats without any key (`calendar_event`, `calendar_recurrence`,
+# `calendar_ics`): event text, recurrence and `.ics` files over the bundled
+# time zone database. The browser's `.ics` runtime (kutup-calendar-ics-wasm)
+# builds this alone.
+calendar-format = ["dep:jiff", "dep:jiff-tzdb"]
 # Builders of malformed values for negative vectors; on for this crate's own
 # tests only (the dev-dependency on itself below), never for a client.
 test-vectors = []

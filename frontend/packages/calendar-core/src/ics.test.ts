@@ -13,6 +13,8 @@ vi.mock('@kutup/crypto/calendar', () => ({
     if (sealed.fail.has(fields.uid)) throw new Error('cannot seal')
     return { sealed: fields.uid }
   },
+}))
+vi.mock('@kutup/crypto/calendarIcs', () => ({
   importIcs: vi.fn(),
   exportIcs: (input: unknown) => Promise.resolve(JSON.stringify(input)),
 }))

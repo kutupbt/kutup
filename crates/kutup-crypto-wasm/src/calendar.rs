@@ -13,7 +13,6 @@ use kutup_crypto::calendar::{
     SealedMetadataV1, UnlockedCalendarKey, FIRST_KEY_GENERATION,
 };
 use kutup_crypto::calendar_event::{self, EventFieldsV1};
-use kutup_crypto::calendar_ics;
 use kutup_crypto::calendar_link;
 use kutup_crypto::calendar_recurrence;
 use serde::{Deserialize, Serialize};
@@ -361,22 +360,6 @@ pub fn calendar_occurrences(
 pub fn calendar_range_end(fields: JsValue) -> Result<Option<String>, JsValue> {
     let fields: EventFieldsV1 = from_js(fields, "event fields")?;
     calendar_recurrence::range_end_v1(&fields).map_err(crypto_error)
-}
-
-/// Reads an `.ics` file for import (docs/plans/calendar.md, E2 §5):
-/// `{"read": {method, events, errors, hidden}}`, each event's fields and
-/// reminders rebuilt as Proton's import does, or `{"refused": reason}`.
-#[wasm_bindgen(js_name = calendarImportIcs)]
-pub fn calendar_import_ics(text: &str, options: JsValue) -> Result<JsValue, JsValue> {
-    let options: calendar_ics::import::ImportOptionsV1 = from_js(options, "import options")?;
-    to_js(&calendar_ics::import::import(text, &options).map_err(crypto_error)?)
-}
-
-/// Writes a calendar's events, opened, as one `.ics` file (E2 §6).
-#[wasm_bindgen(js_name = calendarExportIcs)]
-pub fn calendar_export_ics(calendar: JsValue) -> Result<String, JsValue> {
-    let calendar: calendar_ics::export::ExportCalendarV1 = from_js(calendar, "export")?;
-    calendar_ics::export::export(&calendar).map_err(crypto_error)
 }
 
 // ---------------------------------------------------------------- sharing (E3)
