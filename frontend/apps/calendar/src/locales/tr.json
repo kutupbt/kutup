@@ -660,6 +660,7 @@
       "autoAddHint": "Aldığınız davetler hemen takviminize eklenir. Düzenleyenin yanıtınızı görmesi için yine de yanıt vermeniz gerekir.",
       "saved": "Tercih kaydedildi",
       "failed": "Tercih kaydedilemedi."
-    }
+    },
+    "singleEdits": "Bu serinin tek başına değiştirilmiş tekrarları var: bu seriye davet henüz desteklenmiyor."
   }
 }

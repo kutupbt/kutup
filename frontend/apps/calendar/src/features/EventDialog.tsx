@@ -148,7 +148,21 @@ export function EventDialog() {
       // An invitation's series changes as a whole (a single occurrence of
       // an invitation is not changed on its own yet: docs/plans/calendar-e4.md, as built).
       if (!calendar.owned) throw new NotOwnCalendar()
-      const fields = fieldsOf(form, account.data.serverDomain, existing)
+      let fields = fieldsOf(form, account.data.serverDomain, existing)
+      let base = existing
+      if (existing && recurring) {
+        // The whole series, as "All events" plans it: its first day kept
+        // when only the time or the details changed, and its EXDATEs.
+        const context = await seriesContext(await loadSeries(account.data, calendar, existing.fields.uid), existing, target?.kind === 'edit' ? target.instance : null)
+        if (context) {
+          if (context.children.length) throw new InvitationSingleEdits()
+          const step = (await planSave('all', context, form, reminders)).find((s) => s.kind === 'update' && s.event.id === context.parent.id)
+          if (step?.kind === 'update') {
+            fields = step.fields
+            base = context.parent
+          }
+        }
+      }
       const saved = await saveInvitedEvent({
         session,
         account: account.data,
@@ -156,7 +170,7 @@ export function EventDialog() {
         calendar,
         fields,
         attendees: participants,
-        existing,
+        existing: base,
         reminders,
         lng: sendLanguage(inviteSettings.data, i18n.language),
       })
@@ -229,6 +243,8 @@ export function EventDialog() {
       ? t('recurrence.invalid')
       : error instanceof NotOwnCalendar
         ? t('invitations.notOwnCalendar')
+        : error instanceof InvitationSingleEdits
+          ? t('invitations.singleEdits')
         : error instanceof EventRefusedError && (error.code === 'inviteeUnknown' || error.code === 'tooManyAttendees' || error.code === 'selfInvitation')
           ? t(`invitations.refused.${error.code}`)
       : error instanceof EventRefusedError
@@ -454,6 +470,14 @@ export function EventDialog() {
       />
     </>
   )
+}
+
+/** A series with changed occurrences: an invitation changes as a whole. */
+class InvitationSingleEdits extends Error {
+  constructor() {
+    super('a series with changed occurrences is not an invitation yet')
+    this.name = 'InvitationSingleEdits'
+  }
 }
 
 /** Invitations are sent from the account's own calendars only. */

@@ -762,6 +762,8 @@ pub async fn delete(
     .bind(owner)
     .execute(&mut *tx)
     .await?;
+    // Attendees' copies of its invitations go first, each given back.
+    crate::handlers::calendar_invitations::refund_copies_homed_in(&mut tx, &[id]).await?;
     sqlx::query("DELETE FROM calendars WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)

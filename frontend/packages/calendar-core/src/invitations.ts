@@ -36,6 +36,7 @@ import {
   authorKeys,
   beforeEventWrite,
   syncOne,
+  timesOf,
   type AttendeeRow,
   type Calendar,
   type CalendarEvent,
@@ -130,9 +131,14 @@ export async function kutupInvitees(account: MailAccount, attendees: Attendee[])
 
 // ----- the organizer -----
 
-/** Whether a change moved the event (Proton's SEQUENCE + 1: times, all-day or the rule). */
-export function movedEvent(before: EventFields, after: EventFields): boolean {
-  return JSON.stringify([before.start, before.end, before.rrule ?? null]) !== JSON.stringify([after.start, after.end, after.rrule ?? null])
+/**
+ * Whether a change moved the event (Proton's SEQUENCE + 1): its times (as
+ * instants, whatever their spelling), all-day or its rule.
+ */
+export async function movedEvent(before: EventFields, after: EventFields): Promise<boolean> {
+  const [a, b] = await Promise.all([timesOf(before), timesOf(after)])
+  const same = (x: string, y: string) => Date.parse(x) === Date.parse(y)
+  return !same(a.startUtc, b.startUtc) || !same(a.endUtc, b.endUtc) || a.fullDay !== b.fullDay || (before.rrule ?? null) !== (after.rrule ?? null)
 }
 
 /** Whether a change touches what an update mail tells (Proton's title, description, location, times or rule). */
@@ -222,7 +228,7 @@ export async function saveInvitedEvent(args: {
   if (attendees.some((a) => account.isOwnAddress(a.email))) throw new Error('self invitation not allowed')
   const before = existing && existing.attendees ? { fields: existing.fields, attendees: existing.attendees } : null
   // An update that moved the event asks everyone again (Proton's SEQUENCE + 1).
-  const moved = !!before && movedEvent(before.fields, args.fields)
+  const moved = !!before && (await movedEvent(before.fields, args.fields))
   const fields: EventFields = {
     ...args.fields,
     organizer: attendees.length ? `mailto:${canonicalEmail(account.address)}` : null,

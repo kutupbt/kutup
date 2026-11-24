@@ -226,6 +226,9 @@ pub async fn destroy(
     // The shared mailboxes it signed for need a new signer: its signing
     // shares go with it, but it may still hold the seed.
     crate::mail::group_keys::signer_leaving(&mut tx, target).await?;
+    // Other accounts' copies of its invitations go with its calendars:
+    // each owner is given back what its copy held.
+    crate::handlers::calendar_invitations::refund_copies_of_account(&mut tx, target).await?;
     sqlx::query("DELETE FROM accounts WHERE id = $1")
         .bind(target)
         .execute(&mut *tx)

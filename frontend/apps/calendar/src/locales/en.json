@@ -660,6 +660,7 @@
       "autoAddHint": "Invitations you receive go into your calendar at once. You still need to reply for the organizer to see your response.",
       "saved": "Preference saved",
       "failed": "The preference wasn't saved."
-    }
+    },
+    "singleEdits": "This series has occurrences changed on their own: invitations to it are not supported yet."
   }
 }

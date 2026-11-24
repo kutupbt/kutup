@@ -294,6 +294,52 @@ pub(crate) async fn refund_copies(
     drop_copies(tx, shared_id, &[]).await
 }
 
+/// Before calendars go (one deleted, or an account's with it): the other
+/// accounts' copies of the events at home in them go first, each owner
+/// given back what it held (the shared rows' cascade would take them
+/// uncounted).
+pub(crate) async fn refund_copies_homed_in(
+    tx: &mut Transaction<'_, Postgres>,
+    calendars: &[Uuid],
+) -> AppResult<()> {
+    let gone: Vec<(Uuid, i64)> = sqlx::query_as(
+        "DELETE FROM calendar_events e USING calendar_shared_events se, calendars c
+          WHERE se.id = e.shared_event_id AND se.home_calendar_id = ANY($1)
+            AND e.calendar_id <> se.home_calendar_id AND c.id = e.calendar_id
+            AND NOT (e.calendar_id = ANY($1))
+          RETURNING c.owner_account_id, e.bytes",
+    )
+    .bind(calendars)
+    .fetch_all(&mut **tx)
+    .await?;
+    for (owner, bytes) in gone {
+        crate::storage_pool::charge(
+            &mut **tx,
+            crate::storage_pool::Payer::Account(owner),
+            -bytes,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// [`refund_copies_homed_in`] for every calendar an account owns, before
+/// the account goes.
+pub(crate) async fn refund_copies_of_account(
+    tx: &mut Transaction<'_, Postgres>,
+    account: Uuid,
+) -> AppResult<()> {
+    let calendars: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM calendars WHERE owner_account_id = $1")
+            .bind(account)
+            .fetch_all(&mut **tx)
+            .await?;
+    if calendars.is_empty() {
+        return Ok(());
+    }
+    refund_copies_homed_in(tx, &calendars).await
+}
+
 /// Writes an invitation's attendee part, rows and invitees on its shared
 /// row: answers kept for the tokens that stay (unless reset), the rows of
 /// people removed gone with their invitee rows and adopted copies. `None`:

@@ -55,8 +55,8 @@ export function InvitationWidgets({ account, message, parsed }: { account: MailA
   )
 }
 
-function when(invitation: Invitation, lng: string): string {
-  const start = invitation.fields.start
+function when(fields: Invitation['fields'], lng: string): string {
+  const start = fields.start
   if ('date' in start) return new Intl.DateTimeFormat(lng, { dateStyle: 'full', timeZone: 'UTC' }).format(new Date(`${start.date}T00:00:00Z`))
   if ('utc' in start) return new Intl.DateTimeFormat(lng, { dateStyle: 'full', timeStyle: 'short' }).format(new Date(start.utc))
   const shown = new Intl.DateTimeFormat(lng, { dateStyle: 'full', timeStyle: 'short', timeZone: 'UTC' }).format(new Date(`${start.zoned.local}Z`))
@@ -89,6 +89,8 @@ function InvitationWidget({ account, text, message, messageId }: { account: Mail
       // What Proton's widget does on its own: an update or cancellation
       // applied, an outside reply written, a new one added as pending.
       const changed = await applyOnView({ session, account, calendars: list, state: first, autoAdd: settings.data!.autoAdd }).catch(() => false)
+      // A reply older than the answer stored: out of date (Proton's).
+      if (changed === 'stale' && first.kind === 'organizer') return { ...first, status: 'outdated' }
       return changed ? widgetState({ account, calendars: list, outcome, message }) : first
     },
   })
@@ -155,17 +157,19 @@ function InvitationWidget({ account, text, message, messageId }: { account: Mail
   if (s.kind === 'unsupported') return frame(<p data-testid="invitation-unsupported">{t('invitation.widget.unsupported')}</p>)
 
   const invitation = s.invitation
+  // A Kutup invitation shows what its organizer signed, never the mail's copy.
+  const shown = s.kind === 'attendee' && s.kutup ? s.kutup.fields : invitation.fields
   const header = (
     <div className="flex gap-2">
       <CalendarDays className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 space-y-0.5">
         <p className="font-medium" data-testid="invitation-title">
-          {invitation.fields.summary || t('invitation.body.untitled')}
+          {shown.summary || t('invitation.body.untitled')}
         </p>
         <p className="text-muted-foreground" data-testid="invitation-when">
-          {when(invitation, i18n.language)}
+          {when(shown, i18n.language)}
         </p>
-        {invitation.fields.location ? <p className="text-muted-foreground">{invitation.fields.location}</p> : null}
+        {shown.location ? <p className="text-muted-foreground">{shown.location}</p> : null}
         {invitation.organizer ? (
           <p className="text-xs text-muted-foreground">
             {t('invitation.widget.organizer')}: {invitation.organizer.name || invitation.organizer.email}

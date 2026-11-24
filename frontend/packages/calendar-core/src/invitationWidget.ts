@@ -137,18 +137,40 @@ function sameRecurrence(a: EventFields['recurrenceId'], b: EventFields['recurren
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
 }
 
-/** The stored event an invitation names: by UID and RECURRENCE-ID, in the account's own calendars first. */
-export async function findStored(account: MailAccount, calendars: Calendar[], fields: EventFields): Promise<Stored | null> {
+/**
+ * The stored event an invitation names: by UID and RECURRENCE-ID, in the
+ * account's own calendars first, and only one organized by `organizer`
+ * (when given): a mail naming someone else's UID never reaches an event
+ * that isn't theirs, and never one this account organizes.
+ */
+export async function findStored(account: MailAccount, calendars: Calendar[], fields: EventFields, organizer?: string | null): Promise<Stored | null> {
   for (const calendar of [...calendars].sort((a, b) => Number(b.owned) - Number(a.owned))) {
     try {
       const series = await loadSeries(account, calendar, fields.uid)
-      const event = series.find((e) => sameRecurrence(e.fields.recurrenceId, fields.recurrenceId))
+      const event = series.find(
+        (e) =>
+          sameRecurrence(e.fields.recurrenceId, fields.recurrenceId) &&
+          (organizer === undefined || organizerMatches(account, e, organizer)),
+      )
       if (event) return { calendar, event }
     } catch {
       // A calendar that can't be read now holds nothing for the widget.
     }
   }
   return null
+}
+
+/**
+ * Whether a stored event is the attendee's copy of `organizer`'s invitation:
+ * its ORGANIZER that address (a Kutup copy: the address that signed it),
+ * and not this account's own.
+ */
+function organizerMatches(account: MailAccount, event: CalendarEvent, organizer: string | null): boolean {
+  if (!organizer || account.isOwnAddress(organizer)) return false
+  const stored = event.fields.organizer ? canonicalEmail(event.fields.organizer) : null
+  if (stored !== organizer) return false
+  // A Kutup copy's organizer is the one whose keys verified it.
+  return event.home || event.organizer === organizer
 }
 
 function timing(fields: EventFields, now = Date.now()): 'upcoming' | 'inProgress' | 'ended' {
@@ -201,6 +223,7 @@ export async function widgetState(args: {
     const stored = await findStored(account, calendars.filter((c) => c.owned), invitation.fields)
     const base = { kind: 'organizer' as const, invitation, attendee, stored }
     if (!message.from || canonicalEmail(message.from) !== attendee.email) return { ...base, status: 'notFromAttendee' }
+    // Only an event this account organizes, at its home, signed by it.
     if (!stored || !stored.event.home || stored.event.organizer === null || !account.isOwnAddress(stored.event.organizer)) {
       // A reply to one occurrence of a series this account holds.
       if (invitation.fields.recurrenceId) {
@@ -218,14 +241,17 @@ export async function widgetState(args: {
   // REQUEST and CANCEL only reach an attendee.
   if (organizerIsMe) return { kind: 'error', key: 'invitation.widget.error.invalidMethod' }
   const me = invitation.attendees.find((a) => account.isOwnAddress(a.email)) ?? null
-  const stored = await findStored(account, calendars, invitation.fields)
+  const organizer = invitation.organizer?.email ?? null
+  if (!organizer) return { kind: 'error', key: 'invitation.widget.error.invitationInvalid' }
+  const stored = await findStored(account, calendars, invitation.fields, organizer)
   let kutup: InvitedEvent | null = null
   if (!stored || stored.event.home === false) {
     try {
       const row = (await loadInvitedRows()).find((r) => r.uid === invitation.fields.uid)
       if (row) {
         const opened = await openInvitedEvent(account, row)
-        if (opened.verified && sameRecurrence(opened.fields.recurrenceId, invitation.fields.recurrenceId)) kutup = opened
+        // The mail only finds it: it counts when its signed organizer is the one the mail names.
+        if (opened.verified && opened.organizer === organizer && sameRecurrence(opened.fields.recurrenceId, invitation.fields.recurrenceId)) kutup = opened
         else opened.invitation.free()
       }
     } catch {
@@ -236,7 +262,9 @@ export async function widgetState(args: {
   let status: 'new' | 'updated' | 'outdated' | 'cancelled' = 'new'
   if (invitation.method === 'CANCEL') status = 'cancelled'
   else if (known && isOutdated(invitation.fields, known)) status = 'outdated'
-  else if (known && (invitation.fields.sequence ?? 0) > (known.sequence ?? 0)) status = 'updated'
+  // An update: a higher SEQUENCE (the event moved), or the same and a newer
+  // DTSTAMP (its title, place or description changed, the answer kept).
+  else if (known && ((invitation.fields.sequence ?? 0) > (known.sequence ?? 0) || Date.parse(invitation.fields.dtstamp) > Date.parse(known.dtstamp))) status = 'updated'
   let answer: Partstat | null = kutup?.answer?.partstat ?? null
   if (!answer && stored?.event.attendees) {
     const mine = (await attendeeAnswers(account, stored.calendar, stored.event).catch(() => [])).find((a) => account.isOwnAddress(a.email))
@@ -357,12 +385,12 @@ export async function applyOnView(args: {
   calendars: Calendar[]
   state: WidgetState
   autoAdd: boolean
-}): Promise<boolean> {
+}): Promise<boolean | 'stale'> {
   const { session, account, calendars, state } = args
   if (state.kind === 'organizer') {
     if (state.status !== 'applied' && !(state.status === 'counter' && state.attendee.partstat !== 'needs-action')) return false
     if (!state.stored || state.attendee.partstat === 'needs-action' || state.attendee.partstat === 'delegated') return false
-    await applyReply({
+    return applyReply({
       account,
       calendar: state.stored.calendar,
       event: state.stored.event,
@@ -370,8 +398,7 @@ export async function applyOnView(args: {
       partstat: state.attendee.partstat,
       note: state.invitation.note,
       dtstamp: state.invitation.fields.dtstamp,
-    })
-    return true
+    }).then((outcome) => (outcome === 'stale' ? 'stale' : true))
   }
   if (state.kind !== 'attendee' || state.kutup || !state.me) {
     if (state.kind === 'attendee' && state.kutup && args.autoAdd) return (await addPendingInvitations(session, account, calendars)) > 0

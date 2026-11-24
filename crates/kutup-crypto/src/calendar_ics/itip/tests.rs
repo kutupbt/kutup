@@ -1,7 +1,13 @@
 //! Invitations as Apple, Google, Outlook, Fastmail and Proton write them
-//! (`tests/ics/itip/*.ics`; see its README for which are Proton's own test
-//! files and which were written for these tests), Proton's refusals, and
-//! what Kutup writes read back.
+//! (`tests/ics/itip/*.ics`), Proton's refusals, and what Kutup writes read
+//! back. Where the files come from:
+//! - `apple-single-edit.ics`, `google-request.ics`, `apple-principal.ics`:
+//!   Proton's own tests (WebClients
+//!   `applications/mail/src/app/helpers/calendar/invite.test.ts`), as Apple
+//!   and Google wrote them;
+//! - `proton-reply.ics`: Proton's `ExtraEvents.test.tsx` (its year fixed);
+//! - `outlook-request.ics`, `fastmail-cancel.ics`: synthetic, written for
+//!   these tests in Outlook's (Windows zone names) and Fastmail's shapes.
 
 use super::*;
 use crate::calendar_event::TimeV1;
