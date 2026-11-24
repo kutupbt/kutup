@@ -845,6 +845,8 @@ arrival, and direct sending. Phases, each with its own plan before code:
   seeing other people's busy times beside an event's participants (E4,
   Q-4), a default for "show others when I'm busy" on new calendars, and
   calendars shared with accounts on other servers (after E5, Q-2).
+  The goal is Proton Calendar parity: the gap list and its order are in
+  [`plans/calendar-parity.md`](plans/calendar-parity.md).
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed
   2026-10-10; G1 done): distribution lists and shared mailboxes with
   their own storage quota, owner/manager/member roles and post policies;
