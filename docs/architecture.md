@@ -505,6 +505,22 @@ integration remain tracked in [`roadmap.md`](roadmap.md).
 
 ---
 
+## Calendar invitations
+
+Invitations cross accounts (docs/plans/calendar-e4.md). An organizer's
+event keeps one shared row (the parts the organizer signs) and one calendar
+row per calendar holding it. Every invitation goes as an iMIP mail through
+Mail: end-to-end encrypted to Kutup recipients, PGP or plain to others, a
+`.ics` that never carries a key. For a Kutup attendee on the same server
+the organizer's client also wraps the event's shared session key to the
+attendee's address key, so the server lists the invitation and the
+attendee's client adopts it into its own calendar at once. Answers are rows
+filed under a token keyed by that session key, sealed under it and signed
+by their writer: the server stores them and checks who may write which row
+(the organizer, or the invitee whose token it is), but reads neither names,
+addresses nor answers. Attendees on other servers get the mail only; there
+is no cross-server calendar federation.
+
 ## Storage Layer
 
 Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backend uses the Rust `aws-sdk-s3` crate configured to point at the internal SeaweedFS S3 gateway.

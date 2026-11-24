@@ -553,7 +553,12 @@ settings.
 - **Spam limit:** an account holds at most `calendar.invitations_per_account`
   invitee rows; past it, a new invitation comes by mail only.
 
-### What the clients verify (trust)
+## Trust decisions
+
+For review: every place a client takes something from another account,
+another server or the network, and what the server holds.
+
+### What the clients verify
 
 - The **organizer shown** is ORGANIZER only when it is the address whose
   checked keys verified the shared parts (`CalendarEvent.organizer`); an
@@ -608,6 +613,8 @@ answers (with their notes). The answer's signature is inside its sealed
 blob. An invitee's key packet is OpenPGP to the address key (not
 post-quantum, as Mail's address keys).
 
+## As built, continued
+
 ### Proton behaviours copied, and where Kutup differs
 
 Copied: the methods and their direction rule; the reader's repairs (UID and
@@ -641,6 +648,43 @@ Differs:
 - Busy times show as a line under each participant ("Busy at this time" and
   the day's blocks), not as blocks drawn on the grid.
 - The invitation language setting offers English and Turkish (the app's).
+
+### Problems hit, and how they were solved
+
+- **An update would have destroyed every attendee's state.** `rewrite`
+  deleted the shared row and inserted it again; the baseline's
+  `ON DELETE CASCADE`s from the shared row took the attendee rows, answers,
+  invitee rows and every copy with it. It now updates both rows in place;
+  the live test checks an answer and a copy outlive a change.
+- **The invitee rows couldn't say whose answer a Kutup attendee may write.**
+  Without a token on the invitee row any invitee could overwrite any
+  attendee's answer. The migration adds it (with a foreign key to the
+  attendee row), and the server checks it.
+- **An adopted copy has two authors.** Opening checked every part against
+  one key list; `open_event_by` checks the shared parts against the
+  organizer and the calendar parts against the row's own author
+  (`calendar_events.author_address_id`).
+- **The organizer rule was too strict at first.** Requiring ORGANIZER to be
+  the signer on every event made an outside invitation impossible to keep
+  as the attendee's own event. The rule became: only the organizer's own
+  event reaches Kutup invitees.
+- **Cascades outside the new code.** Deleting a calendar, or closing an
+  account, cascaded through the shared rows into other accounts' copies
+  without giving their storage back; both now delete those copies first
+  and refund each owner.
+- **Mail loads `crypto`, not `crypto-calendar`.** A second, lazily loaded
+  instance (`getCalendarCryptoWasm`) instead of growing `crypto`.
+- **Mail would have let any mail reach any event by UID** (Proton matches
+  by UID). Caught in review: a stored event counts only when its ORGANIZER
+  is the mail's (see "Trust decisions").
+- **A recurring invitation's edit** went through `fieldsOf`, which takes
+  the form's (an occurrence's) start and empties EXDATEs; it now goes
+  through the series plan ("All events").
+- **SEQUENCE compared by spelling** (`JSON.stringify` of times from two
+  sources) would have reset answers on a rename; compared as instants now.
+- **Tooling:** HMAC through `primitives::mac` (direct `hmac::Hmac` is a
+  disallowed type), a CRLF fixture rewritten with LF (the whitespace check),
+  and the RAM disk filling during the web gate (the debug target cleared).
 
 ### Left for later (roadmap)
 
