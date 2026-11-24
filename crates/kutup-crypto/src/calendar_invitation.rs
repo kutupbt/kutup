@@ -28,9 +28,7 @@
 //! invitation as an object and asks it for tokens, answers and rows.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 
 use crate::calendar::{
     decrypt_data_packet, encrypt_data_packet, key_packet_to, signed_by, EventPart, SessionKey,
@@ -42,7 +40,7 @@ use crate::calendar_event::{
 };
 use crate::error::{CryptoError, Result};
 use crate::mail_key::sign_detached;
-use crate::primitives::{kdf, Suite};
+use crate::primitives::{kdf, mac, Suite};
 
 /// A token's length: an HMAC-SHA256.
 pub const TOKEN_LEN: usize = 32;
@@ -74,12 +72,13 @@ pub fn attendee_token(shared_key: &SessionKey, uid: &str, email: &str) -> Result
         TOKEN_KEY_CONTEXT,
         key.as_mut(),
     )?;
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key.as_ref()).expect("any key length");
     // The UID's length first: no UID and address split another way.
-    mac.update(&[uid.len() as u8]);
-    mac.update(uid.as_bytes());
-    mac.update(email.as_bytes());
-    Ok(mac.finalize().into_bytes().into())
+    Ok(mac(
+        Suite::V1,
+        key.as_ref(),
+        &[&[uid.len() as u8], uid.as_bytes(), email.as_bytes()],
+    )
+    .to_array())
 }
 
 /// A token as the wire carries it: base64url without padding.

@@ -210,6 +210,16 @@ Specific codes, where an app does something particular (a test in
 | `exdateNotAnOccurrence` | 400 | An events sync: a calendar-part `EXDATE` isn't an occurrence of the series; that change only |
 | `parentMissing` | 400 | An events sync: a changed occurrence's series isn't in the calendar; that change only |
 | `notAnOccurrence` | 400 | An events sync: a `RECURRENCE-ID` isn't an occurrence of its series; that change only |
+| `invitationMismatch` | 400 | An events sync: an event with an ORGANIZER carries its attendee list (`invitation`), and only such an event does; that change only |
+| `organizerNotAuthor` | 400 | An events sync: Kutup invitees on an event whose ORGANIZER isn't the signing address; that change only |
+| `notOwnCalendar` | 403 | An events sync: invitations are sent from the caller's own calendars only; that change only |
+| `notOrganizer` | 403 | An events sync: an invitation is changed by its organizer only; that change only |
+| `tooManyAttendees` | 400 | An events sync: more attendees than `calendarAttendeesPerEvent`; that change only |
+| `inviteeUnknown` | 400 | An events sync: an invitee is not an active address on this server; that change only |
+| `inviteeKey` | 400 | An events sync: an invitee's key packet is not to one of their address keys; that change only |
+| `selfInvitation` | 400 | An events sync: the organizer invites one of their own addresses; that change only |
+| `answerStale` | 409 | `PUT /api/v1/calendar/shared-events/{id}/attendees/{token}`: a newer answer is stored |
+| `alreadyAdopted` | 409 | `POST /api/v1/calendar/calendars/{id}/events/adopt`: the event is in one of the caller's calendars already |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
@@ -3102,6 +3112,44 @@ its pins). `PUT /calendars/{id}` takes `shareBusy` too.
   their organization (Proton's rule); anyone else gets an empty list. The
   window is at most `calendarBusyWindowDays` (31; `400 busyWindowTooLong`);
   `calendar.rate.busy` (60 a minute per account).
+
+### Invitations (docs/plans/calendar-e4.md)
+
+An event with an ORGANIZER is an invitation: its shared row carries the
+attendee part (`AttendeesEncrypted`, sealed under the shared session key,
+signed by the organizer), one row per attendee filed under a keyed token,
+and one invitee row per Kutup attendee on this server.
+
+- `POST …/events/sync`: a create or update of an event with an ORGANIZER
+  carries `invitation: { attendees: { data, signature }, rows: [{ token,
+  optional }], invitees: [{ address, keyPacket, token }], resetAnswers }`,
+  the whole list each time (rows and invitees not listed go, with the
+  removed invitees' copies). Invitees only when ORGANIZER is the signing
+  address. An update is written in place: answers, invitee rows and copies
+  stay. `EventView` gains `sharedEventId`, `home` (false: an attendee's own
+  copy), `calendarAuthorAddress` (who signed a copy's calendar parts),
+  `attendees` and `attendeeRows: [{ token, optional, answer,
+  answerUpdatedAt }]`.
+- `PUT /api/v1/calendar/shared-events/{id}/attendees/{token}` `{ answer,
+  updatedAt }` → 204: a sealed answer, by the owner of the event's home
+  calendar or by the invitee whose token it is (anyone else: 404).
+- `GET /api/v1/calendar/invitations/events?afterId=` → `{ events: [{
+  sharedEventId, uid, authorAddress, address, keyPacket, token,
+  sharedSigned, sharedEncrypted, attendees, startUtc, endUtc, rangeEndUtc,
+  sequence, copies: [[calendarId, eventId]], attendeeRows }], next }`: the
+  caller's invitations, at most `calendarInvitationsPerAccount` held.
+- `POST /api/v1/calendar/calendars/{id}/events/adopt` `{ id, sharedEventId,
+  addressId, sharedKeyPacket, calendarKeyPacket, calendarSigned,
+  calendarEncrypted }` → `EventView`: the invitee's own copy, in a calendar
+  they own, its key packets to the calendar's newest key.
+- `GET · PUT /api/v1/calendar/settings/invitations` `{ inviteLocale: en |
+  tr | null, autoAdd }`: "Send in" and "Add to calendar and mark as
+  pending" (on by default).
+- `GET /api/v1/calendar/busy` also answers `accessible`: false when the
+  person's busy times can't be read ("Availability unknown").
+- Limits (`/auth/settings` `calendar`): `attendeesPerEvent` (100),
+  `invitationCountMax` (499), `busyShownMax` (10),
+  `invitationIcsMaxBytes` (1 MiB).
 
 ### Links
 
