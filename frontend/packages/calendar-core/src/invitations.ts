@@ -26,7 +26,7 @@ import {
   type OpenedInvitation,
   type Partstat,
 } from '@kutup/crypto/calendar'
-import { addressKeys } from '@kutup/mail-core/keys'
+import { AddressDisabled, addressKeys, GroupAddress, NoKutupAddress } from '@kutup/mail-core/keys'
 import type { MailAccount, PinnedKeys } from '@kutup/mail-core/api'
 import api from '@kutup/session/client'
 import { loadServerSettings } from '@kutup/session/apps'
@@ -109,7 +109,10 @@ export function isAddress(value: string): boolean {
  * The Kutup attendees on this server the event reaches at once (§6): their
  * address and the primary key of their checked key list. Anyone else (an
  * outside address, a Kutup address elsewhere, a shared mailbox) gets the mail
- * only.
+ * only. Only those answers leave someone out: any other failure to look an
+ * address up (the network, a changed or unverified key) fails the save, since
+ * the server takes a shorter invitee list as removing the rest (security
+ * review M2).
  */
 export async function kutupInvitees(account: MailAccount, attendees: Attendee[]): Promise<{ address: string; publicKey: string }[]> {
   const settings = await loadServerSettings<{ chat?: { serverName?: string } }>()
@@ -121,8 +124,9 @@ export async function kutupInvitees(account: MailAccount, attendees: Attendee[])
         const keys = await addressKeys(attendee.email)
         if (keys.group || keys.disabled || keys.accountRef?.server !== server) return null
         return { address: attendee.email, publicKey: keys.primary }
-      } catch {
-        return null
+      } catch (error) {
+        if (error instanceof NoKutupAddress || error instanceof GroupAddress || error instanceof AddressDisabled) return null
+        throw error
       }
     }),
   )
@@ -297,22 +301,47 @@ export interface AttendeeAnswer extends Attendee {
   verified: boolean
 }
 
-/** The keys an answer may be signed with: the organizer's and each Kutup attendee's own. */
-async function signerKeys(account: MailAccount, organizer: string | null, attendees: Attendee[]): Promise<string[]> {
-  const keys = organizer ? await authorKeys(account, organizer).catch(() => []) : []
-  const theirs = await Promise.all(
-    attendees.map(async (a) => (account.isOwnAddress(a.email) ? account.ownPublicKeys : await addressKeys(a.email).then((k) => k.all).catch(() => []))),
+/** An attendee's own keys (the account's when it is one of its addresses). */
+async function attendeeKeys(account: MailAccount, email: string): Promise<string[]> {
+  return account.isOwnAddress(email) ? account.ownPublicKeys : await addressKeys(email).then((k) => k.all).catch(() => [])
+}
+
+/**
+ * Each answer row opened against only the keys that may sign it: the
+ * organizer's (who writes outside attendees' replies) and that row's own
+ * attendee's, by the token the row is for. Every attendee holds the shared
+ * key and could seal an answer for another's row; checking a row against
+ * all attendees' keys together would show it as verified (security review M1).
+ */
+export async function openAnswerRows(
+  account: MailAccount,
+  open: (rows: { token: string; answer: string | null }[], keys: string[]) => { token: string; answer: Answer | null; verified: boolean }[],
+  organizer: string | null,
+  tokens: { email: string; token: string }[],
+  rows: { token: string; answer: string | null }[],
+): Promise<{ token: string; answer: Answer | null; verified: boolean }[]> {
+  const organizerKeys = organizer ? await authorKeys(account, organizer).catch(() => []) : []
+  return Promise.all(
+    rows.map(async (row) => {
+      const email = tokens.find((t) => t.token === row.token)?.email
+      const keys = [...organizerKeys, ...(email ? await attendeeKeys(account, email) : [])]
+      return open([row], keys)[0] ?? { token: row.token, answer: null, verified: false }
+    }),
   )
-  return [...keys, ...theirs.flat()]
 }
 
 /** Each attendee of an invitation with their answer (none given: needs-action). */
 export async function attendeeAnswers(account: MailAccount, calendar: Calendar, event: CalendarEvent): Promise<AttendeeAnswer[]> {
   if (!event.attendees) return []
   const organizer = event.fields.organizer ? canonicalEmail(event.fields.organizer) : null
-  const keys = await signerKeys(account, organizer, event.attendees)
   const rows = event.attendeeRows.map((row) => ({ token: row.token, answer: row.answer }))
-  const opened = calendar.unlocked.openAnswers(event.sealed, event.sharedEventId, rows, keys)
+  const opened = await openAnswerRows(
+    account,
+    (some, keys) => calendar.unlocked.openAnswers(event.sealed, event.sharedEventId, some, keys),
+    organizer,
+    event.tokens,
+    rows,
+  )
   return answersOf(event.attendees, event.tokens, opened)
 }
 

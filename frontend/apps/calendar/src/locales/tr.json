@@ -595,6 +595,8 @@
       "encryptionError": "Şifreleme başarısız",
       "parentEventMissing": "Asıl yinelenen etkinlik bulunamadı",
       "sequenceBehind": "Bu etkinliğin daha yeni bir sürümü takvimde zaten var",
+      "invitationOverwrite": "Takvimde bu etkinliğin UID'sine sahip bir davet var; içe aktarma onu değiştirmez",
+      "uidTaken": "Takvimde bu etkinliğin UID'sine sahip, başka birinden gelen bir davet var",
       "eventLimit": "Takvim daha fazla etkinlik alamıyor",
       "quota": "Depolama alanınız dolu"
     },

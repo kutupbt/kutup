@@ -375,7 +375,24 @@ pub(crate) async fn write_invitation(
     .execute(&mut **tx)
     .await?;
     let tokens: Vec<Vec<u8>> = invitation.rows.iter().map(|(t, _)| t.clone()).collect();
-    let accounts: Vec<Uuid> = invitation.invitees.iter().map(|(a, ..)| *a).collect();
+    // An invitee stays while their attendee row does, listed this time or
+    // not: a client that could not look an address up must not uninvite it
+    // by sending a shorter list (security review M2). Removing the attendee
+    // removes them.
+    let mut accounts: Vec<Uuid> = invitation.invitees.iter().map(|(a, ..)| *a).collect();
+    let still_attending: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT invitee_account_id FROM calendar_event_invitees
+          WHERE shared_event_id = $1 AND token = ANY($2)",
+    )
+    .bind(shared_id)
+    .bind(&tokens)
+    .fetch_all(&mut **tx)
+    .await?;
+    for account in still_attending {
+        if !accounts.contains(&account) {
+            accounts.push(account);
+        }
+    }
     // People removed lose their copy first, then their rows (and with an
     // attendee row, its invitee row).
     drop_copies(tx, shared_id, &accounts).await?;

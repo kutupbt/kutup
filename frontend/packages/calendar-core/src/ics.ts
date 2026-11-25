@@ -84,7 +84,16 @@ export async function readIcsFile(file: File, zone: string, limits: ImportLimits
 }
 
 /** Why an event that was read wasn't imported after all: the server's refusal or the sealing. */
-export type SubmitErrorKind = 'encryptionError' | 'parentEventMissing' | 'sequenceBehind' | 'eventLimit' | 'quota' | 'singleEditUnsupported' | 'externalError'
+export type SubmitErrorKind =
+  | 'encryptionError'
+  | 'parentEventMissing'
+  | 'sequenceBehind'
+  | 'eventLimit'
+  | 'quota'
+  | 'singleEditUnsupported'
+  | 'invitationOverwrite'
+  | 'uidTaken'
+  | 'externalError'
 
 export interface SubmitError {
   id: string
@@ -114,6 +123,10 @@ function refusal(result: SyncResult): SubmitErrorKind {
       return 'singleEditUnsupported'
     case 'sequenceBehind':
       return 'sequenceBehind'
+    case 'invitationOverwrite':
+      return 'invitationOverwrite'
+    case 'uidTaken':
+      return 'uidTaken'
     case 'eventLimit':
       return 'eventLimit'
     case 'quotaExceeded':

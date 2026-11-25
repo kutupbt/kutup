@@ -595,6 +595,8 @@
       "encryptionError": "Encryption failed",
       "parentEventMissing": "Original recurring event could not be found",
       "sequenceBehind": "A newer version of this event is already in the calendar",
+      "invitationOverwrite": "An invitation with this event's UID is in the calendar; it isn't replaced by an import",
+      "uidTaken": "An invitation from someone else with this event's UID is in the calendar",
       "eventLimit": "The calendar holds no more events",
       "quota": "Your storage is full"
     },

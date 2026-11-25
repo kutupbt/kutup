@@ -1840,8 +1840,8 @@ async fn apply(
                 None => RemindersChange::Keep,
             };
             if *overwrite {
-                let same: Option<Uuid> = sqlx::query_scalar(
-                    "SELECT e.id FROM calendar_events e
+                let same: Option<(Uuid, bool)> = sqlx::query_as(
+                    "SELECT e.id, se.attendees_encrypted IS NOT NULL FROM calendar_events e
                        JOIN calendar_shared_events se ON se.id = e.shared_event_id
                       WHERE e.calendar_id = $1 AND se.home_calendar_id = $1 AND se.uid = $2
                         AND se.recurrence_id IS NOT DISTINCT FROM $3",
@@ -1851,14 +1851,24 @@ async fn apply(
                 .bind(checked.recurrence_id)
                 .fetch_optional(&mut *tx)
                 .await?;
-                if let Some(same) = same {
+                if let Some((same, invited)) = same {
+                    // An overwrite without the invitation would drop its
+                    // attendees and their copies (an import carries none):
+                    // an invitation is changed by its organizer, with its
+                    // attendees (security review M4).
+                    if invited && invitation.is_none() {
+                        return Err(coded(
+                            AppError::conflict("an invitation is not overwritten by an import"),
+                            "invitationOverwrite",
+                        ));
+                    }
                     rewrite(
                         &mut tx,
                         (calendar, owner, user_id, address_id),
                         same,
                         None,
                         &checked,
-                        None,
+                        invitation.as_ref(),
                     )
                     .await?;
                     reminders_then_alarms(&mut tx, same, user_id, change).await?;
@@ -1928,10 +1938,11 @@ async fn apply(
         }
         EventChange::Delete { id, base_revision } => {
             debug_assert!(checked.is_none());
-            type Current = (i64, i64, Uuid, i64, bool, String, bool);
+            type Current = (i64, i64, Uuid, i64, bool, String, bool, Option<Uuid>, bool);
             let current: Option<Current> = sqlx::query_as(
                 "SELECT e.revision, e.bytes, se.id, se.bytes, se.home_calendar_id = e.calendar_id,
-                        se.uid, se.recurrence_id IS NOT NULL
+                        se.uid, se.recurrence_id IS NOT NULL,
+                        se.author_account_id, se.attendees_encrypted IS NOT NULL
                    FROM calendar_events e JOIN calendar_shared_events se ON se.id = e.shared_event_id
                   WHERE e.id = $1 AND e.calendar_id = $2
                   FOR UPDATE OF e, se",
@@ -1940,7 +1951,8 @@ async fn apply(
             .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            let Some((revision, own_bytes, shared_id, shared_bytes, home, uid, changed)) = current
+            let Some((revision, own_bytes, shared_id, shared_bytes, home, uid, changed, author, invited)) =
+                current
             else {
                 return Err(AppError::not_found("not found"));
             };
@@ -1948,6 +1960,16 @@ async fn apply(
                 return Err(revisions::conflict(
                     "this event was changed elsewhere",
                     revision,
+                ));
+            }
+            // Deleting an invitation at home deletes every attendee's copy
+            // and answer: its organizer's (the owner who sent it) to do, as
+            // changing it is, not any member writing to the calendar
+            // (security review M3).
+            if home && invited && (author != Some(user_id) || owner != user_id) {
+                return Err(coded(
+                    AppError::forbidden("only the organizer deletes an invitation"),
+                    "notOrganizer",
                 ));
             }
             // Deleted in its home calendar, the shared row goes (with every
