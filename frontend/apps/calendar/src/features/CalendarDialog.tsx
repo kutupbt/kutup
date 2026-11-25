@@ -7,6 +7,7 @@ import {
   PERMISSION,
   createCalendar,
   deleteCalendar,
+  feedState,
   updateCalendar,
   useCalendarMutation,
   type Calendar,
@@ -41,10 +42,13 @@ export function CalendarDialog({
   onOpenChange,
   calendar,
   onExport,
+  fromUrl = false,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   calendar?: Calendar
+  /** A new calendar from a URL (Proton's "Add calendar from URL", E5a). */
+  fromUrl?: boolean
   /** Proton's calendar export: every event in one `.ics` file. */
   onExport?: (calendar: Calendar) => void
 }) {
@@ -54,6 +58,8 @@ export function CalendarDialog({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [color, setColor] = useState<string>(CALENDAR_COLORS[0])
+  const [url, setUrl] = useState('')
+  const subscribing = !calendar && fromUrl
   const [confirming, setConfirming] = useState(false)
   // Proton's event defaults: this member's, for timed and all-day events.
   const [defaults, setDefaults] = useState<DefaultReminders>({ timed: [], allDay: [] })
@@ -63,7 +69,7 @@ export function CalendarDialog({
 
   const save = useCalendarMutation(async () => {
     if (!account.data) throw new Error('no mail keys')
-    if (!calendar) return createCalendar(session, account.data, name.trim(), color)
+    if (!calendar) return createCalendar(session, account.data, name.trim(), color, subscribing ? url.trim() : undefined)
     await updateCalendar(session, account.data, calendar, {
       ...(owner && (name.trim() !== calendar.name || description !== calendar.description) ? { name: name.trim(), description } : {}),
       ...(color !== calendar.color ? { color } : {}),
@@ -92,6 +98,7 @@ export function CalendarDialog({
   useEffect(() => {
     if (!open) return
     setName(calendar?.name ?? '')
+    setUrl('')
     setDescription(calendar?.description ?? '')
     setColor(calendar?.color ?? CALENDAR_COLORS[Math.floor(Math.random() * CALENDAR_COLORS.length)])
     setDefaults(calendar?.defaultReminders ?? { timed: [], allDay: [] })
@@ -105,21 +112,41 @@ export function CalendarDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{calendar ? t('calendars.editTitle') : t('calendars.newTitle')}</DialogTitle>
+            <DialogTitle>{calendar ? t('calendars.editTitle') : subscribing ? t('feeds.newTitle') : t('calendars.newTitle')}</DialogTitle>
           </DialogHeader>
           <form
             className="mt-4 space-y-4"
             onSubmit={(e) => {
               e.preventDefault()
-              if (!name.trim()) return
+              if (!name.trim() || (subscribing && !url.trim())) return
               save.mutate(undefined, {
                 onSuccess: () => {
-                  toast.success(calendar ? t('calendars.saved') : t('calendars.created'))
+                  toast.success(calendar ? t('calendars.saved') : subscribing ? t('feeds.created') : t('calendars.created'))
                   onOpenChange(false)
                 },
               })
             }}
           >
+            {subscribing ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="calendar-feed-url">{t('feeds.url')}</Label>
+                <Input
+                  id="calendar-feed-url"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  inputMode="url"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="https://"
+                  maxLength={8192}
+                  autoFocus
+                  required
+                  data-testid="calendar-feed-url"
+                />
+                <p className="text-xs text-muted-foreground">{t('feeds.urlHint')}</p>
+              </div>
+            ) : null}
+            {calendar?.feed ? <FeedDetails calendar={calendar} /> : null}
             <div className="space-y-1.5">
               <Label htmlFor="calendar-name">{t('calendars.name')}</Label>
               <Input
@@ -128,7 +155,7 @@ export function CalendarDialog({
                 onChange={(e) => setName(e.target.value)}
                 maxLength={MAX_NAME}
                 disabled={!owner}
-                autoFocus
+                autoFocus={!subscribing}
                 required
                 data-testid="calendar-name"
               />
@@ -192,7 +219,7 @@ export function CalendarDialog({
                   </div>
                 ) : null}
                 {/* Busy times are answered from the calendars one owns: a member can't show the owner's. */}
-                {calendar?.owned ? (
+                {calendar?.owned && !calendar.feed ? (
                   <div className="flex items-start gap-2">
                     <Checkbox id="calendar-share-busy" checked={shareBusy} onCheckedChange={(v) => setShareBusy(v === true)} className="mt-0.5" data-testid="calendar-share-busy" />
                     <div className="space-y-0.5">
@@ -221,7 +248,7 @@ export function CalendarDialog({
             {calendar && !calendar.owned && calendar.owner ? (
               <p className="text-xs text-muted-foreground">{t('sharing.sharedBy', { address: calendar.owner.address })}</p>
             ) : null}
-            {save.error ? <Alert variant="error">{apiErrorMessage(save.error, t('calendars.saveFailed'))}</Alert> : null}
+            {save.error ? <Alert variant="error">{feedError(save.error, t) ?? apiErrorMessage(save.error, t('calendars.saveFailed'))}</Alert> : null}
             <DialogFooter className="sm:justify-between">
               {calendar && (calendar.permissions & PERMISSION.superOwner) !== 0 ? (
                 <Button type="button" variant="ghost" onClick={() => setConfirming(true)} data-testid="calendar-delete">
@@ -238,7 +265,7 @@ export function CalendarDialog({
                 <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
                   {t('common.cancel')}
                 </Button>
-                <Button type="submit" loading={save.isPending} disabled={!name.trim() || hasRepeats(defaults.timed) || hasRepeats(defaults.allDay)} data-testid="calendar-save">
+                <Button type="submit" loading={save.isPending} disabled={!name.trim() || (subscribing && !url.trim()) || hasRepeats(defaults.timed) || hasRepeats(defaults.allDay)} data-testid="calendar-save">
                   {t('common.save')}
                 </Button>
               </div>
@@ -289,5 +316,33 @@ export function CalendarDialog({
         />
       ) : null}
     </>
+  )
+}
+
+/** The server's refusals of a feed, in words (E5a). */
+function feedError(error: unknown, t: (key: string) => string): string | null {
+  const code = (error as { response?: { data?: { code?: string } } })?.response?.data?.code
+  if (code === 'feedUrlInvalid') return t('feeds.errors.url')
+  if (code === 'feedLimit') return t('feeds.errors.limit')
+  return null
+}
+
+/** A subscription's address (its owner's only) and how its last fetch went. */
+function FeedDetails({ calendar }: { calendar: Calendar }) {
+  const { t, i18n } = useTranslation()
+  const feed = calendar.feed!
+  const state = feedState(feed)
+  const when = (at: string | null) => (at ? new Date(at).toLocaleString(i18n.language) : t('feeds.never'))
+  return (
+    <div className="space-y-1.5 rounded-md border p-3 text-sm" data-testid="calendar-feed-details">
+      <p className="font-medium">{t('feeds.subscribed')}</p>
+      {feed.url ? <p className="break-all text-xs text-muted-foreground" data-testid="calendar-feed-address">{feed.url}</p> : null}
+      <p className={cn('text-xs', state === 'ok' || state === 'syncing' ? 'text-muted-foreground' : 'text-status-warn')} data-testid="calendar-feed-state">
+        {t(`feeds.state.${state}`)}
+      </p>
+      <p className="text-xs text-muted-foreground">{t('feeds.lastSynced', { when: when(feed.syncedAt) })}</p>
+      {feed.skipped > 0 ? <p className="text-xs text-muted-foreground">{t('feeds.skipped', { count: feed.skipped })}</p> : null}
+      <p className="text-xs text-muted-foreground">{t('feeds.readOnly')}</p>
+    </div>
   )
 }

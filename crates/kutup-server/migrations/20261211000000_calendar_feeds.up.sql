@@ -19,7 +19,7 @@ CREATE TABLE calendar_feeds (
     status text NOT NULL DEFAULT 'syncing' CHECK (status IN (
         'syncing', 'ok', 'unreachable', 'tooBig', 'notACalendar',
         'tooManyEvents', 'storageFull', 'unavailable')),
-    -- SHA-256 of the last body applied: an unchanged feed costs nothing.
+    -- The digest (Suite V1) of the last body applied: an unchanged feed costs nothing.
     content_hash bytea CHECK (octet_length(content_hash) = 32),
     -- The last fetch that ended with the calendar matching the feed.
     synced_at timestamp with time zone,
@@ -32,7 +32,7 @@ CREATE TABLE calendar_feeds (
 );
 CREATE INDEX calendar_feeds_next ON calendar_feeds (next_at);
 
--- A feed event's source (SHA-256 of its fields as read): a refresh reseals
+-- A feed event's source (the digest of its fields as read): a refresh reseals
 -- only what changed.
 ALTER TABLE calendar_events ADD COLUMN feed_source_hash bytea
     CHECK (octet_length(feed_source_hash) = 32);

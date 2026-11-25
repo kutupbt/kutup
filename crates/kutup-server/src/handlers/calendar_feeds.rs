@@ -15,7 +15,6 @@ use kutup_crypto::calendar_ics::import::{
     import, FileError, ImportOptionsV1, ImportOutcomeV1, ImportedEventV1,
 };
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
 use url::Url;
 use utoipa::ToSchema;
@@ -405,7 +404,7 @@ async fn refresh_one(
     let max_bytes = CALENDAR_FEED_MAX_BYTES.load(pool).await?;
     let timeout = CALENDAR_FEED_TIMEOUT_SECONDS.load(pool).await?;
     let body = fetch(url, max_bytes, timeout, reach).await?;
-    let hash = Sha256::digest(&body).to_vec();
+    let hash = digest(&body);
     if old_status == "ok" && old_hash == Some(hash.as_slice()) {
         return Ok(Refreshed::Unchanged);
     }
@@ -447,6 +446,15 @@ async fn fetch(
     }
 }
 
+/// The 32-byte digest feeds and their events are compared by.
+fn digest(data: &[u8]) -> Vec<u8> {
+    kutup_crypto::primitives::hash(kutup_crypto::primitives::Suite::V1, data).to_vec()
+}
+
+/// What one refresh reads: the hashes kept, the events sealed, and how
+/// many weren't taken.
+type Read = (HashSet<Vec<u8>>, Vec<Sealed>, i32);
+
 /// One feed event sealed and checked, with what identifies it.
 struct Sealed {
     source_hash: Vec<u8>,
@@ -458,7 +466,7 @@ struct Sealed {
 fn source_hash(event: &ImportedEventV1) -> Vec<u8> {
     let mut fields = event.fields.clone();
     fields.dtstamp = String::new();
-    Sha256::digest(serde_json::to_vec(&fields).expect("fields serialize")).to_vec()
+    digest(&serde_json::to_vec(&fields).expect("fields serialize"))
 }
 
 /// Makes the calendar match the feed: events whose source is unchanged stay
@@ -505,8 +513,8 @@ async fn apply(
     let kept_hashes: HashSet<Vec<u8>> = existing.iter().map(|(_, hash)| hash.clone()).collect();
     // The CPU work (reading, sealing, checking) off the async threads.
     let (text, secret, public) = (text.to_owned(), key.secret.clone(), key.public.clone());
-    let (unchanged, sealed, skipped) = tokio::task::spawn_blocking(
-        move || -> Result<(HashSet<Vec<u8>>, Vec<Sealed>, i32), Failure> {
+    let (unchanged, sealed, skipped) =
+        tokio::task::spawn_blocking(move || -> Result<Read, Failure> {
             let read = match import(&text, &options).map_err(|e| anyhow::anyhow!(e.to_string()))? {
                 ImportOutcomeV1::Read(read) => read,
                 ImportOutcomeV1::Refused(FileError::NoEvents) => {
@@ -558,10 +566,9 @@ async fn apply(
                 }
             }
             Ok((unchanged, sealed, skipped))
-        },
-    )
-    .await
-    .map_err(|error| Failure::Fault(error.into()))??;
+        })
+        .await
+        .map_err(|error| Failure::Fault(error.into()))??;
     let mut skipped = skipped;
     let mut tx = pool.begin().await?;
     // The calendar orders its writes; its key may have rotated meanwhile
@@ -997,7 +1004,17 @@ mod tests {
         // client opens and verifies it; the server can't.
         let feed = load_feed_key(&pool).await.unwrap().unwrap();
         let unlocked = cal::unlock_calendar_key(&key.locked_secret_key, &passphrase).unwrap();
-        let sealed: (String, String, Vec<u8>, String, Vec<u8>, Vec<u8>, String, String) =
+        type Stored = (
+            String,
+            String,
+            Vec<u8>,
+            String,
+            Vec<u8>,
+            Vec<u8>,
+            String,
+            String,
+        );
+        let sealed: Stored =
             sqlx::query_as(
                 "SELECT se.shared_signed, se.shared_signed_signature, se.shared_encrypted,
                         se.shared_encrypted_signature, e.shared_key_packet, e.calendar_key_packet,

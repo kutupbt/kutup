@@ -1009,6 +1009,32 @@ feed events signed by a server key; order E5a, E5c, E5b).
   owner, never logged in full (the path and query can carry a secret, as
   Google's does).
 
+**As built (2026-11-25).** `handlers/calendar_feeds.rs`; migration
+`20261211000000_calendar_feeds`.
+
+- The feed key is one OpenPGP key (`calendar_feed_key`, made on first use,
+  `cal::generate_feed_key`), the address keys' shape; events are sealed by
+  `cal::seal_feed_event` (fresh session keys each time) and go through the
+  same `check_event` and `insert_as` as the events sync, with no author
+  address. The client verifies them against `GET /calendar/feed-key`.
+- A refresh claims a feed by moving its `next_at` first (`FOR UPDATE SKIP
+  LOCKED`), so two instances never fetch one feed at once. An unchanged
+  body (its digest against `content_hash`) costs nothing. Otherwise each event
+  is hashed from its fields without DTSTAMP (Google writes the request time
+  there): unchanged hashes are kept untouched (ids, reminders, alarms),
+  changed events are sealed again in place by UID and RECURRENCE-ID (a feed
+  may lower SEQUENCE: it is someone else's), new ones inserted, missing
+  ones deleted, all in one transaction with the storage charged or given
+  back once. One event the server refuses (a RECURRENCE-ID that is no
+  occurrence) is rolled back to a savepoint and counted in `skipped`.
+- ORGANIZER is dropped: nobody answers a subscription. VALARMs are not
+  taken; the member's default reminders apply (Proton's).
+- The browser takes the write bit off a feed calendar's permissions, so
+  every write affordance (editor, drag, delete, import target) follows.
+- Not done: conditional requests (ETag / If-Modified-Since; the body hash
+  covers the cost on our side), rotating the feed key, and a manual
+  "refresh now".
+
 ### E5c: Kutup meeting links in events
 
 "Add Kutup meeting" in the event editor makes a Chat call link (its title

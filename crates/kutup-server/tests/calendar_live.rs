@@ -1680,3 +1680,106 @@ fn imports_overwrite_by_uid_and_the_export_lists_every_event() {
     assert_eq!(all(10).len(), 4);
     drop_calendars(&c, &base, &ada, &[&id]);
 }
+
+/// Calendars from a URL (docs/plans/calendar.md, E5a): only a public https
+/// address, the account's limit as a setting, the address its owner's only,
+/// the feed key published, and no event written through the sync.
+#[test]
+fn calendars_from_a_url() {
+    let (Ok(base), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = crate::common::client();
+    let (name, password) = admin.split_once(':').unwrap();
+    let admin_token = admin_token(&c, &base, password, name);
+    let ada = owner(&c, &base);
+    let post = |url: &str| {
+        let mut body = new_calendar(&ada, "Holidays").0;
+        body["feedUrl"] = json!(url);
+        bearer(
+            c.post(format!("{base}/api/v1/calendar/calendars")),
+            &ada.user.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+    };
+    for bad in [
+        "https://127.0.0.1/h.ics",
+        "http://example.org/h.ics",
+        "webcal://10.1.2.3/h.ics",
+    ] {
+        let r = post(bad);
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{bad}");
+        assert_eq!(r.json::<Value>().unwrap()["code"], "feedUrlInvalid");
+    }
+    let r = post("webcal://calendar.invalid/h.ics");
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let created: Value = r.json().unwrap();
+    let id = created["id"].as_str().unwrap().to_owned();
+    assert_eq!(created["feed"]["url"], "https://calendar.invalid/h.ics");
+    assert!(created["feed"]["syncedAt"].is_null());
+    // The first fetch runs at once; the name never resolves.
+    eventually("the feed is found unreachable", || {
+        let list: Value = bearer(
+            c.get(format!("{base}/api/v1/calendar/calendars")),
+            &ada.user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        list["calendars"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|calendar| {
+                calendar["id"] == id.as_str() && calendar["feed"]["status"] == "unreachable"
+            })
+    });
+    // Its events are the feed's only.
+    let r = bearer(
+        c.post(format!("{base}/api/v1/calendar/calendars/{id}/events/sync")),
+        &ada.user.token,
+    )
+    .json(&json!({ "addressId": ada.address_id, "changes": [{ "delete": { "id": uuid::Uuid::new_v4(), "baseRevision": 1 } }] }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let results: Value = r.json().unwrap();
+    assert_eq!(results["results"][0]["status"], 403);
+    assert_eq!(results["results"][0]["code"], "feedReadOnly");
+    // The key that signs them is published, and stays the same.
+    let feed_key = |token: &str| -> String {
+        let r = bearer(c.get(format!("{base}/api/v1/calendar/feed-key")), token)
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        r.json::<Value>().unwrap()["publicKey"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let published = feed_key(&ada.user.token);
+    assert!(!decode(&published).is_empty());
+    assert_eq!(feed_key(&ada.user.token), published);
+    // The account's limit is a setting.
+    let set = |value: Value| {
+        let r = bearer(c.put(format!("{base}/api/v1/admin/settings")), &admin_token)
+            .json(&json!({ "calendarFeedsPerAccount": value }))
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+    };
+    set(json!(1));
+    let second = post("https://calendar.invalid/other.ics");
+    set(Value::Null);
+    assert_eq!(second.status(), StatusCode::CONFLICT);
+    assert_eq!(second.json::<Value>().unwrap()["code"], "feedLimit");
+    drop_calendars(&c, &base, &ada, &[&id]);
+}

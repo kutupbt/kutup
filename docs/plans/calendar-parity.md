@@ -207,7 +207,7 @@ All planned in E4 (`calendar-e4.md`, slices E4a–E4e) unless said.
 | `.ics` import (a file, a calendar, a report) | `pcc/importModal/` | 🟡 | in progress (`feat/calendar-ics`); plan calendar.md E2 §5 |
 | `.ics` export | `pcc/exportModal/`, `pcc/settings/CalendarExportSection.tsx` | 🟡 | in progress (`feat/calendar-ics`); plan E2 §6 |
 | Import from Google (and Outlook) | `packages/activation` (Easy Switch, OAuth through Proton's server) | ❌ | planned: E5, Google only, in the browser (D-3); Outlook not planned |
-| Add calendar from URL (subscribed feeds, statuses) | `pcc/calendarModal/subscribedCalendarModal/`, `pcc/settings/OtherCalendarsSection.tsx` | ❌ | planned: E5 |
+| Add calendar from URL (subscribed feeds, statuses) | `pcc/calendarModal/subscribedCalendarModal/`, `pcc/settings/OtherCalendarsSection.tsx` | ✅ | E5a: server fetch every 6 h (admin setting), Proton's statuses and 12-hour "not synced" |
 | Holiday calendars | `pcc/calendarModal/holidaysCalendarModal/` | ❌ | planned: after E5 (D-4) |
 | CalDAV | none | ➖ | as Proton ([`../research/06-webdav-support.md`](../research/06-webdav-support.md)) |
 

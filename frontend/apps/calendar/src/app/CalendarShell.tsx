@@ -1,11 +1,12 @@
 import { FeedbackButton } from '@kutup/ui/components/feedback'
 import { feedbackServices } from '@kutup/session/feedback'
-import { BookUser, CalendarDays, FileType, FileUp, HardDrive, Images, KeyRound, Mail as MailIcon, Map as MapIcon, MessagesSquare, Pencil, Plus, Settings2, UserRound, Users } from 'lucide-react'
+import { BookUser, CalendarDays, FileType, FileUp, HardDrive, Images, KeyRound, Link2, Mail as MailIcon, Map as MapIcon, MessagesSquare, Pencil, Plus, Settings2, UserRound, Users } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
 import { toast } from 'sonner'
-import { CALENDAR_COLORS, createCalendar, updateCalendar, useCalendarMutation, useCalendars, type Calendar } from '@kutup/calendar-core/api'
+import { cn } from '@kutup/ui/lib/cn'
+import { CALENDAR_COLORS, createCalendar, feedState, updateCalendar, useCalendarMutation, useCalendars, type Calendar } from '@kutup/calendar-core/api'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
 import { useMailAccount } from '@kutup/mail-core/api'
 import { appUrl } from '@kutup/session/apps'
@@ -80,7 +81,8 @@ function CalendarRow({ calendar, onEdit, onShare, onReview }: { calendar: Calend
       <label htmlFor={`calendar-${calendar.id}`} className="min-w-0 flex-1 truncate" data-testid="calendar-list-item">
         {calendar.name}
       </label>
-      {calendar.owned ? (
+      {calendar.feed ? <Link2 className="size-3.5 shrink-0 text-chrome-muted" aria-label={t('feeds.badge')} /> : null}
+      {calendar.owned && !calendar.feed ? (
         <button
           type="button"
           onClick={onShare}
@@ -99,6 +101,14 @@ function CalendarRow({ calendar, onEdit, onShare, onReview }: { calendar: Calend
       >
         <Pencil className="size-3.5" aria-hidden />
       </button>
+      {calendar.feed && feedState(calendar.feed) !== 'ok' ? (
+        <span
+          className={cn('basis-full pl-6 text-xs', feedState(calendar.feed) === 'syncing' ? 'text-chrome-muted' : 'text-status-warn')}
+          data-testid="calendar-feed-status"
+        >
+          {t(`feeds.state.${feedState(calendar.feed)}`)}
+        </span>
+      ) : null}
       {onReview ? (
         <button
           type="button"
@@ -129,7 +139,7 @@ export function CalendarShell() {
   const account = useMailAccount()
   const calendars = useCalendars()
   const first = useFirstCalendar()
-  const [editing, setEditing] = useState<Calendar | 'new' | null>(null)
+  const [editing, setEditing] = useState<Calendar | 'new' | 'url' | null>(null)
   const [settings, setSettings] = useState(false)
   const [sharing, setSharing] = useState<Calendar | null>(null)
   const [importing, setImporting] = useState(false)
@@ -207,6 +217,17 @@ export function CalendarShell() {
           <li>
             <button
               type="button"
+              onClick={() => setEditing('url')}
+              className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-chrome-muted hover:bg-chrome-accent/60 hover:text-chrome-foreground"
+              data-testid="calendar-new-from-url"
+            >
+              <Link2 className="size-4" aria-hidden />
+              {t('feeds.new')}
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
               onClick={() => setImporting(true)}
               disabled={!calendars.data?.calendars.length}
               className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-chrome-muted hover:bg-chrome-accent/60 hover:text-chrome-foreground disabled:opacity-50"
@@ -261,7 +282,8 @@ export function CalendarShell() {
       <CalendarDialog
         open={editing !== null}
         onOpenChange={(open) => !open && setEditing(null)}
-        calendar={editing === 'new' || editing === null ? undefined : editing}
+        calendar={editing === 'new' || editing === 'url' || editing === null ? undefined : editing}
+        fromUrl={editing === 'url'}
         onExport={(calendar) => {
           setEditing(null)
           setExporting(calendar)
