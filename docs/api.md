@@ -220,6 +220,8 @@ Specific codes, where an app does something particular (a test in
 | `selfInvitation` | 400 | An events sync: the organizer invites one of their own addresses; that change only |
 | `answerStale` | 409 | `PUT /api/v1/calendar/shared-events/{id}/attendees/{token}`: a newer answer is stored |
 | `alreadyAdopted` | 409 | `POST /api/v1/calendar/calendars/{id}/events/adopt`: the event is in one of the caller's calendars already |
+| `uidTaken` | 409 | An events sync or adopt: the calendar holds an event with this UID from another home calendar (one UID, one home per calendar) |
+| `invitationOverwrite` | 409 | An events sync create with `overwrite`: the event it would replace is an invitation, which an import doesn't replace |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
@@ -3141,10 +3143,15 @@ and one invitee row per Kutup attendee on this server.
 - `POST /api/v1/calendar/calendars/{id}/events/adopt` `{ id, sharedEventId,
   addressId, sharedKeyPacket, calendarKeyPacket, calendarSigned,
   calendarEncrypted }` → `EventView`: the invitee's own copy, in a calendar
-  they own, its key packets to the calendar's newest key.
+  they own, its key packets to the calendar's newest key; refused with
+  `uidTaken` when that calendar holds another home's event with the UID.
+- `DELETE /api/v1/calendar/invitations/events/{id}` → 204: the caller
+  leaves the invitation: their copy (the storage back) and their invitee
+  row go; their answer row stays with the last answer (404 when not
+  invited). Deleting a copy in Calendar does this, after declining.
 - `GET · PUT /api/v1/calendar/settings/invitations` `{ inviteLocale: en |
   tr | null, autoAdd }`: "Send in" and "Add to calendar and mark as
-  pending" (on by default).
+  pending" (off by default, as Proton's).
 - `GET /api/v1/calendar/busy` also answers `accessible`: false when the
   person's busy times can't be read ("Availability unknown").
 - Limits (`/auth/settings` `calendar`): `attendeesPerEvent` (100),

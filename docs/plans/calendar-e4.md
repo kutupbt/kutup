@@ -608,10 +608,46 @@ Readable: the shared signed part (times, UID, ORGANIZER, SEQUENCE), the
 number of attendees, each one's keyed token and optional flag, when each
 last answered, which accounts and addresses of this server were invited
 (and their tokens), which calendars adopted the event, and the account's
-"Send in" language and auto-add switch. Sealed: names, addresses and
-answers (with their notes). The answer's signature is inside its sealed
-blob. An invitee's key packet is OpenPGP to the address key (not
-post-quantum, as Mail's address keys).
+"Send in" language and auto-add switch. Sealed in the calendar data:
+names, addresses and answers (with their notes). The answer's signature is
+inside its sealed blob. An invitee's key packet is OpenPGP to the address
+key (not post-quantum, as Mail's address keys).
+
+What this does not cover (security review, 2026-11-25; Proton is the same
+or weaker on each):
+- **The invitation mails.** Outside attendees get standard iMIP through
+  Kutup's SMTP, so the server sees their addresses, names, the title and
+  the times; and every invitation mail's recipients show the attendee
+  addresses, Kutup to Kutup included.
+- **Rollback.** The server can serve an older sealed answer of the same row
+  again, or drop answers: clients keep no state that would notice.
+- **Members of a calendar holding a copy** read the whole attendee list and
+  every answer, which open under the calendar's key.
+- **Who may write.** A member with view rights holds the key as one with
+  edit rights; only the server keeps them from writing.
+
+## Security review (2026-11-25)
+
+An independent review read the branch before it merged. What it found, and
+the fix for each:
+
+| | Finding | Fix |
+|---|---|---|
+| H1 | Any Kutup user who knows the UID of someone's recurring meeting (every co-attendee does) could invite them to an event with that UID and a changed occurrence: adopted, it replaced the meeting's occurrence in their calendar and broke its series and replies, since events are grouped by UID | In one calendar every event with one UID comes from one home calendar: adopt and create refuse otherwise (`uidTaken`); a copy needs the adopter's own signature, so the server can't plant one |
+| H2 | Mail applied an update, a cancellation or a reply on view from anyone: a REQUEST or CANCEL naming the real organizer in its ORGANIZER, or a reply whose From was spoofed (the From header was compared with itself), changed the event; a reply dated ahead locked the real answer out | Applied only when the From is the ORGANIZER (or the replying ATTENDEE) and passed DMARC (new `mail_messages.from_authenticated`, exposed as `fromAuthenticated`); a mail never writes a Kutup attendee's row; a reply is dated no later than its arrival. Otherwise the widget says the change wasn't applied |
+| M1 | An answer verified against every attendee's keys at once, so any attendee could sign another's answer and a server could place it in their row | Each row is opened against the organizer's keys and its own attendee's only (`openAnswerRows`) |
+| M2 | A failed key lookup (network, a changed key) silently dropped a Kutup attendee from the invitees, and the server deleted their copy | Only "not a Kutup address" (or a group, or disabled) leaves someone out; any other lookup failure fails the save; the server keeps an invitee while their attendee row stays |
+| M3 | A calendar member with write rights could delete the organizer's invitation, and every copy and answer with it | Deleting an invitation at home is the organizer's, as changing it is (`notOrganizer`) |
+| M4 | An overwriting import stripped an invitation's attendees and their copies | Refused (`invitationOverwrite`) |
+| M5 | Anyone on the server could put up to 2000 events into anyone's default calendar, with no way to leave them, reopened at every look | Adding by itself is off until turned on, as Proton's; each invitation is opened once per change; a copy deleted in Calendar leaves the invitation (`DELETE /calendar/invitations/events/{id}`); the invitations cap is per account, and `calendar.invitations_per_organizer` caps one sender |
+| L1 | A spoofed CANCEL showed a Kutup invitation as cancelled | Taken from its signed state |
+| L2 | A Kutup invitation was looked up by UID only, so another organizer's row with the same UID hid it | Matched by UID and organizer |
+| L3 | A name was shown alone, and a display name is anyone's to write | Shown with its address |
+| L4 | Answering an older copy of an outside invitation wrote its fields over newer ones | An older copy never replaces what is stored |
+| L5 | The invitee cap was counted without a lock | Counted under the invitee's account row lock |
+
+M3 is covered by its server check, not a live test (that needs a calendar
+member with write rights, which the invitation tests don't set up).
 
 ## As built, continued
 

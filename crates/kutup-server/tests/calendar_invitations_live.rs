@@ -753,6 +753,64 @@ fn invitations_between_kutup_users() {
     assert_eq!(r["status"], 200, "{r}");
     let copy = uuid::Uuid::new_v4().to_string();
     assert_eq!(adopt(&bea, &bea_cal, &copy).status(), StatusCode::OK);
+
+    // Security review H1: in one calendar every event with a UID comes from
+    // one home, so Bea's own event can't take the invitation's UID there.
+    let own = seal_invitation(
+        &bea_key,
+        &bea,
+        &fields(&uid, None, "2026-12-11T10:00:00", 0),
+        &[],
+        &[],
+        None,
+    );
+    let r = sync(
+        &c,
+        &base,
+        &bea,
+        &bea_cal,
+        json!({ "create": { "id": uuid::Uuid::new_v4(), "event": own.event } }),
+    );
+    assert_eq!((r["status"].as_u64(), r["code"].as_str()), (Some(409), Some("uidTaken")), "{r}");
+
+    // Security review M4: an import overwriting the invitation would strip
+    // its attendees and their copies: refused.
+    let import = seal_invitation(
+        &ada_key,
+        &ada,
+        &fields(&uid, None, "2026-12-12T10:00:00", 0),
+        &[],
+        &[],
+        None,
+    );
+    let r = sync(
+        &c,
+        &base,
+        &ada,
+        &ada_cal,
+        json!({ "create": { "id": uuid::Uuid::new_v4(), "event": import.event, "overwrite": true } }),
+    );
+    assert_eq!(r["code"], "invitationOverwrite", "{r}");
+
+    // Security review M5: Bea leaves; her copy, its storage and her invitee
+    // row go, and the invitation is no longer listed for her.
+    let leave = |who: &Person| {
+        bearer(
+            c.delete(format!("{base}/api/v1/calendar/invitations/events/{id}")),
+            &who.user.token,
+        )
+        .send()
+        .unwrap()
+        .status()
+    };
+    assert_eq!(leave(&cem), StatusCode::NOT_FOUND);
+    assert_eq!(leave(&bea), StatusCode::NO_CONTENT);
+    assert_eq!(storage(&c, &base, &bea.user), bea_before);
+    assert!(invitations(&c, &base, &bea)
+        .iter()
+        .all(|e| e["uid"] != uid.as_str()));
+    assert_eq!(leave(&bea), StatusCode::NOT_FOUND);
+
     let r = sync(
         &c,
         &base,
