@@ -156,7 +156,9 @@ function textPart(mimeType: 'text/plain' | 'text/html', text: string): string {
 /** A file as a MIME part, ready to be put inside a message as it is. */
 export function attachmentPart(file: { name: string; type: string; bytes: Uint8Array }, contentId?: string): Uint8Array {
   const name = encodeHeaderText(file.name).replace(/"/g, '')
-  const type = /^[\w.+-]+\/[\w.+-]+$/.test(file.type) ? file.type : 'application/octet-stream'
+  // A type and its parameters, token values only (`text/calendar; method=REQUEST; charset=utf-8`,
+  // what an invitation is sent as, docs/plans/calendar-e4.md §4).
+  const type = /^[\w.+-]+\/[\w.+-]+(?:; ?[\w-]+=[\w.+-]+)*$/.test(file.type) ? file.type : 'application/octet-stream'
   return encoder.encode(
     [
       `Content-Type: ${type}; name="${name}"`,

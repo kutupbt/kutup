@@ -227,12 +227,15 @@ function kutupWasm(modules: WasmModule[]): Plugin {
         define: {
           // The crypto runtime this app loads, as `<dir>/<hash>`: `crypto`,
           // or `crypto-calendar` (the same and calendars) where the app
-          // lists it; never both.
+          // lists it alone. An app listing both (Mail) loads `crypto`, and
+          // `crypto-calendar` only when it shows an invitation
+          // (docs/plans/calendar-e4.md, Q-4): `__KUTUP_CRYPTO_CALENDAR_WASM__`.
           __KUTUP_CRYPTO_WASM__: JSON.stringify(
-            modules.includes('crypto-calendar')
+            modules.includes('crypto-calendar') && !modules.includes('crypto')
               ? `crypto-calendar-wasm/${wasmHash('crypto-calendar')}`
               : `crypto-wasm/${wasmHash('crypto')}`,
           ),
+          __KUTUP_CRYPTO_CALENDAR_WASM__: JSON.stringify(modules.includes('crypto-calendar') ? `crypto-calendar-wasm/${wasmHash('crypto-calendar')}` : ''),
           __KUTUP_CHAT_WASM__: JSON.stringify(wasmHash('chat')),
           __KUTUP_PASS_WASM__: JSON.stringify(wasmHash('pass')),
           __KUTUP_MAIL_SEARCH_WASM__: JSON.stringify(wasmHash('mail-search')),

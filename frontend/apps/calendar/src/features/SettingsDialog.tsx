@@ -7,6 +7,7 @@ import { Label } from '@kutup/ui/components/label'
 import { Choice } from './Choice'
 import { formatWeekday, zoneOptions } from './format'
 import { setPrefs, useCalendarPrefs } from './prefs'
+import { InvitationSettings } from './invitations/InvitationSettings'
 import { NotificationSettings } from './reminders/NotificationSettings'
 
 /** A Sunday, a Monday … a Saturday, to name the weekdays by. */
@@ -59,6 +60,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             />
           </div>
           <p className="text-xs text-muted-foreground">{t('settings.thisDevice')}</p>
+          <InvitationSettings />
           <NotificationSettings />
         </div>
       </DialogContent>

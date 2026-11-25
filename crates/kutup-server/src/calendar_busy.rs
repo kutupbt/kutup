@@ -33,6 +33,11 @@ pub struct BusyBlock {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct BusyList {
     pub busy: Vec<BusyBlock>,
+    /// Whether the person's busy times could be read (Proton's
+    /// `IsDataAccessible`): false for an address that is no one's here,
+    /// someone outside the caller's organization, or a person sharing no
+    /// calendar's busy times; the editor shows "Availability unknown".
+    pub accessible: bool,
 }
 
 /// One event row as the busy times read it.

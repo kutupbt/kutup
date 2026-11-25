@@ -6,7 +6,7 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
   const [{ readFile }, module] = await Promise.all([import('node:fs/promises'), import('../../../../../wasm/crypto-calendar-wasm/kutup_crypto_wasm.js')])
   const wasm = await readFile(new URL('../../../../../wasm/crypto-calendar-wasm/kutup_crypto_wasm_bg.wasm', import.meta.url))
   await module.default({ module_or_path: wasm })
-  return { getCryptoWasm: () => Promise.resolve(module) }
+  return { getCryptoWasm: () => Promise.resolve(module), getCalendarCryptoWasm: () => Promise.resolve(module) }
 })
 
 const { followStart, modelOf, onceModel, pickPreset, presetOf, ruleOf } = await import('./frequency')
@@ -22,7 +22,7 @@ const zoned = (local: string, tzid = BERLIN): CalendarTime => ({ zoned: { local,
 let ids = 0
 /** An event as opened, its server times its first occurrence's (as `timesOf` gives them). */
 async function event(fields: Partial<EventFields> & Pick<EventFields, 'start' | 'end'>): Promise<CalendarEvent> {
-  const { timesOf } = await import('@kutup/calendar-core/api')
+  const { plainEventParts, timesOf } = await import('@kutup/calendar-core/api')
   const full: EventFields = {
     uid: 'series@kutup.test',
     dtstamp: '2026-10-01T08:00:00Z',
@@ -42,7 +42,8 @@ async function event(fields: Partial<EventFields> & Pick<EventFields, 'start' | 
     ...fields,
   }
   ids++
-  return { id: `00000000-0000-4000-8000-${String(ids).padStart(12, '0')}`, calendarId: 'cal', fields: full, ...(await timesOf(full)), revision: 1, reminders: null, verified: true }
+  const id = `00000000-0000-4000-8000-${String(ids).padStart(12, '0')}`
+  return { id, calendarId: 'cal', fields: full, ...(await timesOf(full)), revision: 1, reminders: null, verified: true, ...plainEventParts(id) }
 }
 
 describe('the repeat choice (Proton’s frequency model)', () => {

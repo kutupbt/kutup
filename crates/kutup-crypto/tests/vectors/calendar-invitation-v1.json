@@ -1,0 +1,136 @@
+{
+  "event": {
+    "sharedKeyPacket": "wV4DmNFWaO7ucy4SAQdA00mjgypz7vPMdZxcq6SisKCFA/gAAtXM/oqc9HJ+qDAwwXPOzCb0ZHNkIN9EUMrtMkgpXysWItqAERm6xttyQiBuYbufwmblty4RXhedJK8p",
+    "calendarKeyPacket": "wV4DmNFWaO7ucy4SAQdAAxvw2fYy5kLYb/HuJ1zZxiwzqtxExQ5oCRPzmectpGgwYfF+TtEXkzen7ZQvCIkTKz8SPGFuq2Iv7eDzJ+JA8CeesJRuaJtSBl6Vy+jzfCH/",
+    "sharedSigned": {
+      "data": "QkVHSU46VkNBTEVOREFSDQpWRVJTSU9OOjIuMA0KQkVHSU46VkVWRU5UDQpVSUQ6OWYwYzRkMmUtNWIxYS00ZTdjLThkM2YtMmE2YjFjMGU5ZDg0QGt1dHVwLmRldg0KRFRTVEFNUDoyMDI2MTAyMVQwODAwMDBaDQpEVFNUQVJUO1RaSUQ9RXVyb3BlL0lzdGFuYnVsOjIwMjYxMDI5VDA5MzAwMA0KRFRFTkQ7VFpJRD1FdXJvcGUvSXN0YW5idWw6MjAyNjEwMjlUMTEwMDAwDQpPUkdBTklaRVI6bWFpbHRvOmFsaWNlQGt1dHVwLmRldg0KU0VRVUVOQ0U6MA0KRU5EOlZFVkVOVA0KRU5EOlZDQUxFTkRBUg==",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwnUEABYKAB0WIQTlSr3khKyzfNV+ZW0NFuSsoG7HiAUCawWsXQAKCRANFuSsoG7H\niHuyAQC1OXtSdUaYEPZSE5PDDUiqWhHWHElN8cyJWhlKxTuZLQD/c/ud6iVmQR0z\nx7GjlnRcgN8Ddov7CBcb5wFrnMKQlQI=\n=4uZp\n-----END PGP SIGNATURE-----\n"
+    },
+    "sharedEncrypted": {
+      "data": "0sCoAXILJl00NMRYXs4bswT4eSANerD0YBIpejJUW6TMtc7qO/N3QNiILjzSMxza2cvE5baAiQrPadAWXXmhM5WBczM2Jc83m/H4Q8Wgzz68pKwQ80zvRK/yWrINMbzxIK0RdD/PlHC0LwYPqb1ZNQD7dLYMKQSsfjkG/tMDqEtCMvGt/509ZgjwUfW1zXuOEwwjyvShaoXYkFcHijZJMyLCdPFXCgvFrjg+C7Fl8ECmPkxR89BR1w0NZHcT6HwSOI4sgpZWJqpLCig5Mc0c8XsGWbD6c0FcXONNgut/t6ktgVI8hjvFIA0ZL2PAa0t+zd802Dmh5mymlaMX/nu25q1cW+Y5J5X0NCGhH2PalvK7O+JPrjfxXg9PogvtqSEOA61xz34Hm9I1t1UcS+OC0oOjriQLfztWsR/579f5qoAlqxQXzzGveZMj0bDfCjLhQl6HBwToEOzTl/YSJy1aJPmD72t5SMRJfV0O",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwnUEABYKAB0WIQTlSr3khKyzfNV+ZW0NFuSsoG7HiAUCawWsXQAKCRANFuSsoG7H\niACnAQDufTaZ68aKE2T7H6BQ/LY9zTlOq+y9LMFSMfVkN/iY7QEAmCMMQJmCP5f5\nrNbZeTdUNTbVyRM5Q4RcIuMWcJdGlAA=\n=2CxZ\n-----END PGP SIGNATURE-----\n"
+    },
+    "calendarSigned": {
+      "data": "QkVHSU46VkNBTEVOREFSDQpWRVJTSU9OOjIuMA0KQkVHSU46VkVWRU5UDQpVSUQ6OWYwYzRkMmUtNWIxYS00ZTdjLThkM2YtMmE2YjFjMGU5ZDg0QGt1dHVwLmRldg0KRFRTVEFNUDoyMDI2MTAyMVQwODAwMDBaDQpTVEFUVVM6Q09ORklSTUVEDQpUUkFOU1A6T1BBUVVFDQpFTkQ6VkVWRU5UDQpFTkQ6VkNBTEVOREFS",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwnUEABYKAB0WIQTlSr3khKyzfNV+ZW0NFuSsoG7HiAUCawWsXQAKCRANFuSsoG7H\niILlAQDUCQFgl26YqVXMrpVH5fGKfrCquJgCYRjuP3dNZJdWAQD9HxOqACvX5GGB\nujN/nyz4qOjt9ZWnPf8fboREAowveAo=\n=Ruqk\n-----END PGP SIGNATURE-----\n"
+    },
+    "calendarEncrypted": {
+      "data": "0sAUAXz0x/4daZ3Ah8BXoqWQFsfa5z0GM0wm8jfpulDYr1gIuNbhZWO0GeTr7UAt9mb+g63Qb1a4LTVW0VpdHnVmVwiIKjbzpnbIirf14wzE0vN9amuDHy1Det5z59Dla5WEeVosnkTI4FuqyIlGUFX60J6SUlrx5khfyChgfWxe97YG2a7lM7UhBS/70lhpNNjpsFR2sg9cQFt68TODN/cf6dsnO4QxafSLDqhrOGdy8P2JvEeKUTYLtZbjnZy6CuUGFgA6MeaibkkOCJS1NQRzyAyN4lM=",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwnUEABYKAB0WIQTlSr3khKyzfNV+ZW0NFuSsoG7HiAUCawWsXQAKCRANFuSsoG7H\niG8HAPoCp6/VrwmoN/3oqRni/a3bS8SdVp3e0ibeGa6RyVtuwgEA5+jahTJkduFF\n2x6hELgwi8r3o9iySeJb/rbh4VSD4gY=\n=vP6l\n-----END PGP SIGNATURE-----\n"
+    }
+  },
+  "fields": {
+    "uid": "9f0c4d2e-5b1a-4e7c-8d3f-2a6b1c0e9d84@kutup.dev",
+    "dtstamp": "2026-10-21T08:00:00Z",
+    "created": "2026-10-21T08:00:00Z",
+    "start": {
+      "zoned": {
+        "local": "2026-10-29T09:30:00",
+        "tzid": "Europe/Istanbul"
+      }
+    },
+    "end": {
+      "zoned": {
+        "local": "2026-10-29T11:00:00",
+        "tzid": "Europe/Istanbul"
+      }
+    },
+    "recurrenceId": null,
+    "rrule": null,
+    "exdates": [],
+    "organizer": "mailto:alice@kutup.dev",
+    "sequence": 0,
+    "summary": "Republic Day lunch; with friends, family",
+    "description": "Bring dessert.\nTable for 8 — ü, ş, ğ",
+    "location": "Moda, İstanbul",
+    "status": "confirmed",
+    "transp": "opaque",
+    "comment": "Booked",
+    "other": []
+  },
+  "attendeesText": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:9f0c4d2e-5b1a-4e7c-8d3f-2a6b1c0e9d84@kutup.dev\r\nATTENDEE;CN=\"Bea Kaya\";ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:bea@kutup.dev\r\nATTENDEE;ROLE=OPT-PARTICIPANT;RSVP=TRUE:mailto:guest@outside.example\r\nEND:VEVENT\r\nEND:VCALENDAR",
+  "attendees": {
+    "data": "0sB9ARFjSkleZY5o6gFYSVawZKZ+jXEVRhkCZCP6hlRqmyYd1c1WGpJvmweWDUgNTjfKUqjUygtgTSbngzzzpQB7ikfDXjDl8iKuZOAFvyW3BnsDTJxVOKYt2Ghs29IoKwlnvObDKWGXy9D0DgEViA0M8k4r3LKx9cSm3r0FztQOf4ERq+jP33o5itQK1ISFibL7qQUgsggqXZGfosyxnYKEfkGddcAwwqDR2nBWyJ+J8yeutRrL53Fh4I+sb7D6KcJjzdROphyLd3kusJS7s3MKIzg4itYV/g+BpSdeBklZsbWwnX6Ci5zFJxbeMR37Q9wJCYAH6rCQlLG9rmBNhyNBL0GgS38BSd4xuICZQYy//OTiE1PZh2ZO7qv3ACcmlCMmjivDSbVO0DtEnWNuh9HmNbNiakXDJ0gjJRpo05c=",
+    "signature": "-----BEGIN PGP SIGNATURE-----\n\nwnUEABYKAB0WIQTlSr3khKyzfNV+ZW0NFuSsoG7HiAUCawWsXQAKCRANFuSsoG7H\niDlDAQDrnrIEuB/DgRWV8MOBNpkyDHBR5dvCaZIUWJPfw/7KQwEAnnXmtNaRz6gj\nFSNtU5NNZjMDEJ00Ai3poK2wYAoP/gs=\n=y+L0\n-----END PGP SIGNATURE-----\n"
+  },
+  "tokens": [
+    {
+      "email": "bea@kutup.dev",
+      "token": "dfA3kpOFmhVbf95LBc3_CWyl9_3Q_g1W4fJUW7A9s9Y"
+    },
+    {
+      "email": "guest@outside.example",
+      "token": "zFEKil8cefJC8kRZh4JddutBM7rHzSWALI63iVpxW5g"
+    }
+  ],
+  "sharedEventId": "0b9b9a1e-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+  "inviteeKeyPacket": "wV4DuptLQTzYqg4SAQdA96BFkqDvbQ/Hpr+35Y+KOp2MrGZRY+ACdiFAppy0V18wgi/jr04f4aVh2ADjihd6mhwNBt3HS+2uTPrzBeROImZ1lWi0HurQmCOkV++HMIph",
+  "answer": "eyJkYXRhIjoiMHNBNkFjdmhPN2FpSllxMm41WSsybWw4TkV5MWRGTFVGNGMyV2dtQm1hV3lPMEpFT29BakM0cStkdnNlWWd5Q084WE10c1FXZnRweDc4c2tnWER4eWFtVWtrd0hYYTNjYnc4bVk3RitKSVhYWnpXS1dOSjFvQjcrWkNVN2ZkODdSazQ0eDdrMTVzaTFQLy9FYVp2bExhcW9vNysxS3FpcFh4TW1PUDdPbVBnaFMvOWN1ams5NDdiUVE2MUZDemVPV2YxaWxTaUhTeHNiL3F0UUZZejUwVHRMcURETkZlUWloemFKVVNJRDdvTlpZcmlxV2I4a1QzTWEzeHNMQlltOEU2by83TFdxNG44WjlIb0tDTWhENlRqczN5RFYvOGpxY09SZzk5QVlWRjVyNHdGMUFnZjArak9EbGl5QlJ0VG1mTnM0R0ZSZDE3VVIxeHJ1cmc9PSIsInNpZ25hdHVyZSI6Ii0tLS0tQkVHSU4gUEdQIFNJR05BVFVSRS0tLS0tXG5cbnduVUVBQllLQUIwV0lRVGxTcjNraEt5emZOVitaVzBORnVTc29HN0hpQVVDYXdXc1hRQUtDUkFORnVTc29HN0hcbmlMNTVBUUQ4dGVUbDRFZzBqWUdDbmZoOUtQZkRKa2FPUmJ1SzI3bk0ydTFxNjNqbkV3RUFzZms5V1hUTEFuQVFcbk00QksxVThNVUdrUVNaN29aMExaVmtVSFR5OHh4Z289XG49WTJVelxuLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tXG4ifQ==",
+  "answerJson": {
+    "v": 1,
+    "sharedEventId": "0b9b9a1e-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+    "token": "dfA3kpOFmhVbf95LBc3_CWyl9_3Q_g1W4fJUW7A9s9Y",
+    "partstat": "tentative",
+    "note": "Geç kalabilirim",
+    "updatedAt": "2026-11-24T10:00:00Z"
+  },
+  "fixed": {
+    "sessionKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
+    "uid": "e4-vector@kutup.dev",
+    "email": "Bea@Kutup.dev",
+    "token": "ZqcV04CihCWNUsMSsaF_n7jMYbpS0fFPBMJ6BSIVaeI"
+  },
+  "write": {
+    "input": {
+      "method": "REQUEST",
+      "release": "2026.1124.0",
+      "fields": {
+        "uid": "e4-vector@kutup.dev",
+        "dtstamp": "2026-11-24T10:00:00Z",
+        "created": null,
+        "start": {
+          "zoned": {
+            "local": "2026-12-10T10:00:00",
+            "tzid": "Europe/Istanbul"
+          }
+        },
+        "end": {
+          "zoned": {
+            "local": "2026-12-10T11:00:00",
+            "tzid": "Europe/Istanbul"
+          }
+        },
+        "recurrenceId": null,
+        "rrule": "FREQ=WEEKLY;COUNT=3",
+        "organizer": "mailto:alice@kutup.dev",
+        "sequence": 1,
+        "summary": "Planlama; oda 4",
+        "description": "Gündem:\nbütçe",
+        "location": "Oda 4",
+        "status": "confirmed",
+        "transp": "opaque",
+        "comment": null
+      },
+      "organizer": {
+        "email": "alice@kutup.dev",
+        "name": "Alice"
+      },
+      "attendees": [
+        {
+          "email": "bea@kutup.dev",
+          "name": "Bea Kaya",
+          "partstat": "accepted",
+          "optional": false,
+          "rsvp": true
+        },
+        {
+          "email": "guest@outside.example",
+          "partstat": "needs-action",
+          "optional": true,
+          "rsvp": true
+        }
+      ]
+    },
+    "text": "BEGIN:VCALENDAR\r\nPRODID:-//Kutup//Calendar 2026.1124.0//EN\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nCALSCALE:GREGORIAN\r\nBEGIN:VTIMEZONE\r\nTZID:Europe/Istanbul\r\nBEGIN:STANDARD\r\nDTSTART:20250101T030000\r\nTZOFFSETFROM:+0300\r\nTZOFFSETTO:+0300\r\nTZNAME:+03\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:e4-vector@kutup.dev\r\nDTSTAMP:20261124T100000Z\r\nDTSTART;TZID=Europe/Istanbul:20261210T100000\r\nDTEND;TZID=Europe/Istanbul:20261210T110000\r\nRRULE:FREQ=WEEKLY;COUNT=3\r\nSEQUENCE:1\r\nORGANIZER;CN=\"Alice\":mailto:alice@kutup.dev\r\nATTENDEE;CN=\"Bea Kaya\";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE:mai\r\n lto:bea@kutup.dev\r\nATTENDEE;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:guest@\r\n outside.example\r\nSUMMARY:Planlama\\; oda 4\r\nDESCRIPTION:Gündem:\\nbütçe\r\nLOCATION:Oda 4\r\nSTATUS:CONFIRMED\r\nTRANSP:OPAQUE\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+  }
+}

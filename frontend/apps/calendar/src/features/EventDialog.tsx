@@ -4,7 +4,10 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { EventRefusedError, PERMISSION, loadSeries, saveEvent, useCalendarMutation, useCalendars, type Reminder } from '@kutup/calendar-core/api'
 import { occurrences, timeZones } from '@kutup/crypto/calendar'
-import { useMailAccount } from '@kutup/mail-core/api'
+import { invitationLimits, loadInviteSettings, retryMessages, saveInvitedEvent, sendLanguage, sendMessages, type SendFailure } from '@kutup/calendar-core/invitations'
+import type { InvitationMessage } from '@kutup/calendar-core/invitationMail'
+import type { Attendee } from '@kutup/crypto/calendar'
+import { useMailAccount, usePinnedKeys } from '@kutup/mail-core/api'
 import { loadServerSettings } from '@kutup/session/apps'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
@@ -31,6 +34,7 @@ import { DEFAULT_MAX_COUNT, followStart, modelOf, onceModel } from './recurrence
 import { RecurringDialog } from './recurrence/RecurringDialog'
 import { RepeatField } from './recurrence/RepeatField'
 import { planOf, runPlan, type Plan } from './recurrence/run'
+import { ParticipantsRow } from './invitations/ParticipantsRow'
 
 /** Kutup-crypto's limits (`calendar_event`), as Proton's. */
 const MAX_TITLE = 255
@@ -50,7 +54,7 @@ interface Pending {
 
 /** Creates an event (maybe a duplicate), or changes or deletes one. */
 export function EventDialog() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const target = useEditorTarget()
   const prefs = useCalendarPrefs()
   const session = useRequiredSession()
@@ -69,11 +73,20 @@ export function EventDialog() {
     staleTime: Infinity,
   }).data?.calendar?.maxCount ?? DEFAULT_MAX_COUNT
   const [draft, setDraft] = useState<Draft | null>(null)
+  // The participants (docs/plans/calendar-e4.md §4), and what a save's
+  // messages didn't reach ("Send again").
+  const [participants, setParticipants] = useState<Attendee[]>([])
+  const [unsent, setUnsent] = useState<{ failures: SendFailure[]; messages: InvitationMessage[] } | null>(null)
+  const pinned = usePinnedKeys()
+  const limits = useQuery({ queryKey: ['calendar', 'invitation-limits'], queryFn: invitationLimits, staleTime: Infinity })
+  const inviteSettings = useQuery({ queryKey: ['calendar', 'invite-settings'], queryFn: loadInviteSettings, staleTime: 60_000 })
   const [pending, setPending] = useState<Pending | null>(null)
   const [warnings, setWarnings] = useState<SaveWarnings | null>(null)
   // A planned series change, kept so Save again sends only what hasn't landed.
   const plan = useRef<{ type: RecurringType; plan: Plan } | null>(null)
   const existing = target?.kind === 'edit' ? target.event : undefined
+  // Someone else's invitation: answered from the event view, changed by its organizer only.
+  const invitedCopy = !!existing?.fields.organizer && !!account.data && !account.data.isOwnAddress(existing.fields.organizer.replace(/^mailto:/i, ''))
   const recurring = isRecurring(existing)
   // A duplicate keeps its source's repeat (Proton's), not a changed occurrence's.
   const duplicated = target?.kind === 'duplicate' ? target.event : undefined
@@ -99,6 +112,9 @@ export function EventDialog() {
     const own = source && source.calendarId === base.calendarId ? source.reminders : null
     const repeats = target.kind === 'edit' ? isRecurring(source) : target.kind === 'duplicate' && !!source?.fields.rrule && !source.fields.recurrenceId
     setDraft({ ...base, reminders: remindersOf(calendar, own, base.allDay), frequency: repeats ? null : onceModel(base.startDate) })
+    // A duplicate invites no one (Proton's duplicate drops the participants).
+    setParticipants(target.kind === 'edit' ? (target.event.attendees ?? []) : [])
+    setUnsent(null)
     setPending(null)
     plan.current = null
     save.reset()
@@ -127,6 +143,43 @@ export function EventDialog() {
       throw new RuleRefused()
     })
     const reminders = remindersFor(next)
+    const invites = participants.length > 0 || (existing?.attendees?.length ?? 0) > 0
+    if (invites) {
+      // An invitation's series changes as a whole (a single occurrence of
+      // an invitation is not changed on its own yet: docs/plans/calendar-e4.md, as built).
+      if (!calendar.owned) throw new NotOwnCalendar()
+      let fields = fieldsOf(form, account.data.serverDomain, existing)
+      let base = existing
+      if (existing && recurring) {
+        // The whole series, as "All events" plans it: its first day kept
+        // when only the time or the details changed, and its EXDATEs.
+        const context = await seriesContext(await loadSeries(account.data, calendar, existing.fields.uid), existing, target?.kind === 'edit' ? target.instance : null)
+        if (context) {
+          if (context.children.length) throw new InvitationSingleEdits()
+          const step = (await planSave('all', context, form, reminders)).find((s) => s.kind === 'update' && s.event.id === context.parent.id)
+          if (step?.kind === 'update') {
+            fields = step.fields
+            base = context.parent
+          }
+        }
+      }
+      const saved = await saveInvitedEvent({
+        session,
+        account: account.data,
+        pinned: pinned ?? (() => undefined),
+        calendar,
+        fields,
+        attendees: participants,
+        existing: base,
+        reminders,
+        lng: sendLanguage(inviteSettings.data, i18n.language),
+      })
+      if (saved.failures.length) {
+        setUnsent({ failures: saved.failures, messages: saved.messages })
+        return 'asked'
+      }
+      return existing ? 'saved' : 'created'
+    }
     if (existing && recurring) {
       // Proton's: every event of the series read first, then the choice.
       const context = await seriesContext(await loadSeries(account.data, calendar, existing.fields.uid), existing, target?.kind === 'edit' ? target.instance : null)
@@ -167,10 +220,33 @@ export function EventDialog() {
     })
   const shownReminders = draft ? (draft.allDay ? draft.reminders.allDay : draft.reminders.timed) : []
   const repeated = hasRepeats(shownReminders)
-  const valid = draft !== null && draft.calendarId !== '' && endsAfterStart(draft) && !repeated && draft.frequency !== null
+  const valid = draft !== null && draft.calendarId !== '' && endsAfterStart(draft) && !repeated && draft.frequency !== null && !invitedCopy
+  const resend = useCalendarMutation(async () => {
+    if (!account.data || !unsent) return
+    const failures = await sendMessages(account.data, pinned ?? (() => undefined), retryMessages(unsent.messages, unsent.failures))
+    setUnsent(failures.length ? { failures, messages: unsent.messages } : null)
+    if (!failures.length) {
+      toast.success(t('invitations.sent'))
+      close()
+    }
+  })
+  // The participants row's window: the draft's times, for busy times.
+  const busyWindow = useMemo(() => {
+    if (!draft || draft.allDay) return null
+    const start = Date.parse(`${draft.startDate}T${draft.startTime}:00Z`)
+    const end = Date.parse(`${draft.endDate}T${draft.endTime}:00Z`)
+    if (!(end > start)) return null
+    return { start: new Date(start).toISOString(), end: new Date(end).toISOString() }
+  }, [draft])
   const errorText = (error: unknown, fallback: string) =>
     error instanceof RuleRefused
       ? t('recurrence.invalid')
+      : error instanceof NotOwnCalendar
+        ? t('invitations.notOwnCalendar')
+        : error instanceof InvitationSingleEdits
+          ? t('invitations.singleEdits')
+        : error instanceof EventRefusedError && (error.code === 'inviteeUnknown' || error.code === 'tooManyAttendees' || error.code === 'selfInvitation')
+          ? t(`invitations.refused.${error.code}`)
       : error instanceof EventRefusedError
         ? t(
             error.code === 'eventLimit'
@@ -215,6 +291,7 @@ export function EventDialog() {
               }}
             >
               {existing && !existing.verified ? <Alert variant="warn">{t('events.unverified')}</Alert> : null}
+              {invitedCopy ? <Alert variant="info">{t('invitations.notOrganizer')}</Alert> : null}
               <div className="space-y-1.5">
                 <Label htmlFor="event-title">{t('events.title')}</Label>
                 <Input
@@ -285,11 +362,26 @@ export function EventDialog() {
                 <Choice
                   id="event-calendar"
                   value={draft.calendarId}
-                  options={writable.map((calendar) => ({ value: calendar.id, label: calendar.name }))}
+                  // Invitations go from the account's own calendars only (Proton's).
+                  options={writable.filter((calendar) => participants.length === 0 || calendar.owned).map((calendar) => ({ value: calendar.id, label: calendar.name }))}
                   disabled={existing !== undefined}
                   onChange={(calendarId) => set({ calendarId })}
                 />
               </div>
+              {!existing?.fields.recurrenceId ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="event-participants-input">{t('invitations.field')}</Label>
+                  <ParticipantsRow
+                    participants={invitedCopy ? [] : participants}
+                    onChange={setParticipants}
+                    isOwnAddress={(address) => account.data?.isOwnAddress(address) ?? false}
+                    max={limits.data?.attendeesPerEvent ?? 100}
+                    busyShownMax={limits.data?.busyShownMax ?? 10}
+                    window={busyWindow}
+                    disabled={invitedCopy}
+                  />
+                </div>
+              ) : null}
               <div className="space-y-1.5">
                 <Label>{t('reminders.field')}</Label>
                 <ReminderList
@@ -314,6 +406,14 @@ export function EventDialog() {
                 <Textarea id="event-description" value={draft.description} onChange={(e) => set({ description: e.target.value })} maxLength={MAX_DESCRIPTION} rows={3} />
               </div>
               {saveError ? <Alert variant="error">{saveError}</Alert> : null}
+              {unsent ? (
+                <Alert variant="error" data-testid="event-unsent">
+                  <p>{t('invitations.notSent', { addresses: unsent.failures.map((f) => f.address).join(', ') })}</p>
+                  <Button type="button" size="sm" variant="outline" className="mt-2" loading={resend.isPending} onClick={() => resend.mutate()}>
+                    {t('invitations.sendAgain')}
+                  </Button>
+                </Alert>
+              ) : null}
               <DialogFooter className="sm:justify-between">
                 {existing ? (
                   <Button
@@ -370,6 +470,22 @@ export function EventDialog() {
       />
     </>
   )
+}
+
+/** A series with changed occurrences: an invitation changes as a whole. */
+class InvitationSingleEdits extends Error {
+  constructor() {
+    super('a series with changed occurrences is not an invitation yet')
+    this.name = 'InvitationSingleEdits'
+  }
+}
+
+/** Invitations are sent from the account's own calendars only. */
+class NotOwnCalendar extends Error {
+  constructor() {
+    super('invitations are sent from your own calendars')
+    this.name = 'NotOwnCalendar'
+  }
 }
 
 /** The repeat choice doesn't make a rule the Rust core takes for this start. */

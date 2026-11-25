@@ -54,4 +54,30 @@ assert.deepEqual(again.errors, [])
 assert.deepEqual(again.events, read.events)
 assert.throws(() => ics.calendarExportIcs({ name: 'x', description: null, zone: 'Nowhere/Else', release: '1', untitled: '-', email: null, events: [] }))
 
+// Invitations (docs/plans/calendar-e4.md §2): Proton's fixtures read as the
+// Rust tests read them, a refusal, and the writer's one form (the vectors'
+// text, byte for byte).
+const itip = (name) => readFile(`${root}crates/kutup-crypto/tests/ics/itip/${name}.ics`, 'utf8')
+const inviteOptions = { primaryZone: 'Europe/Istanbul', maxBytes: 1024 * 1024, maxCount: 499, maxAttendees: 100, now: '2026-11-24T10:00:00Z', messageDate: '2026-11-20T08:00:00Z', sender: 'zeynep@fastmail.example' }
+const appleInvite = ics.calendarReadInvitation(await itip('apple-single-edit'), inviteOptions).read
+assert.equal(appleInvite.method, 'REQUEST')
+assert.equal(appleInvite.fields.uid, 'BA3017ED-889A-4BCB-B9CB-11CE30586021')
+assert.deepEqual(appleInvite.fields.recurrenceId, { zoned: { local: '2022-09-15T09:00:00', tzid: 'Europe/Vilnius' } })
+assert.deepEqual(appleInvite.organizer, { email: 'agmailone@gmail.com', name: 'testKrt' })
+assert.equal(appleInvite.attendees[1].partstat, 'accepted')
+const outlookInvite = ics.calendarReadInvitation(await itip('outlook-request'), inviteOptions).read
+assert.equal(outlookInvite.fields.start.zoned.tzid, 'Europe/Berlin')
+const cancel = ics.calendarReadInvitation(await itip('fastmail-cancel'), inviteOptions).read
+assert.equal(cancel.fields.sequence, 3)
+assert.equal(cancel.fields.dtstamp, '2026-11-20T08:00:00Z')
+assert.deepEqual(ics.calendarReadInvitation('', inviteOptions), { refused: { error: 'noComponent', reason: null, method: null } })
+const refusedReply = ics.calendarReadInvitation('BEGIN:VCALENDAR\r\nMETHOD:REPLY\r\nBEGIN:VEVENT\r\nUID:x\r\nDTSTART:20270101T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n', inviteOptions)
+assert.deepEqual(refusedReply, { refused: { error: 'invitationInvalid', reason: 'missingAttendee', method: 'REPLY' } })
+const iv = JSON.parse(await readFile(`${root}crates/kutup-crypto/tests/vectors/calendar-invitation-v1.json`, 'utf8'))
+assert.equal(ics.calendarWriteInvitation(iv.write.input), iv.write.text)
+const back = ics.calendarReadInvitation(iv.write.text, inviteOptions).read
+assert.equal(back.fields.uid, iv.write.input.fields.uid)
+assert.equal(back.attendees.length, 2)
+assert.throws(() => ics.calendarWriteInvitation({ ...iv.write.input, method: 'PUBLISH' }))
+
 console.log('calendar-ics WASM checks passed')

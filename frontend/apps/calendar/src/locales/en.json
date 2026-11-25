@@ -595,6 +595,8 @@
       "encryptionError": "Encryption failed",
       "parentEventMissing": "Original recurring event could not be found",
       "sequenceBehind": "A newer version of this event is already in the calendar",
+      "invitationOverwrite": "An invitation with this event's UID is in the calendar; it isn't replaced by an import",
+      "uidTaken": "An invitation from someone else with this event's UID is in the calendar",
       "eventLimit": "The calendar holds no more events",
       "quota": "Your storage is full"
     },
@@ -616,5 +618,51 @@
       "retry": "Try again",
       "failed": "The calendar couldn't be exported."
     }
+  },
+  "invitations": {
+    "field": "Participants",
+    "addPlaceholder": "Add participants",
+    "add": "Add",
+    "invalidAddress": "Enter an email address.",
+    "selfInvitation": "Self invitation not allowed",
+    "already": "This participant is already added.",
+    "tooMany": "An event invites at most {{count}} people.",
+    "optional": "Optional",
+    "makeOptional": "Make this participant optional",
+    "makeRequired": "Make this participant required",
+    "remove": "Remove {{email}}",
+    "showBusy": "Show busy times",
+    "hideBusy": "Hide busy times",
+    "availabilityUnknown": "Availability unknown",
+    "busyThen": "Busy at this time",
+    "freeThen": "Free at this time",
+    "busyAllDay": "Busy all day",
+    "notOrganizer": "You were invited to this event: only its organizer changes it. Answer it from the event view.",
+    "notOwnCalendar": "Invitations are sent from your own calendars only.",
+    "refused": {
+      "inviteeUnknown": "A participant's address isn't known on this server any more. Remove them and add them again.",
+      "tooManyAttendees": "This event invites more people than the server allows.",
+      "selfInvitation": "Self invitation not allowed"
+    },
+    "notSent": "The event was saved, but the invitation wasn't sent to: {{addresses}}",
+    "sendAgain": "Send again",
+    "sent": "Invitations sent",
+    "deleteDescription": "The event is deleted for good, and its participants are told.",
+    "partstat": {
+      "needs-action": "Not answered yet",
+      "accepted": "Attending",
+      "tentative": "Maybe attending",
+      "declined": "Not attending"
+    },
+    "settings": {
+      "sendIn": "Send in",
+      "appLanguage": "The app's language",
+      "sendInHint": "Event invitations and responses will be sent in this language.",
+      "autoAdd": "Add to calendar and mark as pending",
+      "autoAddHint": "Invitations you receive go into your calendar at once. You still need to reply for the organizer to see your response.",
+      "saved": "Preference saved",
+      "failed": "The preference wasn't saved."
+    },
+    "singleEdits": "This series has occurrences changed on their own: invitations to it are not supported yet."
   }
 }

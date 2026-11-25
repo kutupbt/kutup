@@ -378,7 +378,7 @@ pub(crate) const MAX_SHARE_B64: usize = 2048 / 3 * 4 + 4;
 /// The caller's active address `address_id` and its keys that may still
 /// verify (Mail's `FLAG_NOT_COMPROMISED`): what an author's parts are
 /// checked against.
-async fn address_keys(
+pub(crate) async fn address_keys(
     conn: &mut sqlx::PgConnection,
     user_id: Uuid,
     address_id: Uuid,
@@ -762,6 +762,8 @@ pub async fn delete(
     .bind(owner)
     .execute(&mut *tx)
     .await?;
+    // Attendees' copies of its invitations go first, each given back.
+    crate::handlers::calendar_invitations::refund_copies_homed_in(&mut tx, &[id]).await?;
     sqlx::query("DELETE FROM calendars WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)
@@ -804,6 +806,21 @@ pub struct EventView {
     /// The caller's own reminders for it; null: their calendar's defaults.
     #[schema(value_type = Option<Vec<crate::calendar_reminders::Reminder>>)]
     pub reminders: Option<Vec<crate::calendar_reminders::Reminder>>,
+    /// The shared row (Proton's `SharedEventID`): what answers name.
+    pub shared_event_id: Uuid,
+    /// This calendar is the event's home (the organizer's, or an event
+    /// without one); otherwise an attendee's own copy of an invitation.
+    pub home: bool,
+    /// Who signed the calendar parts when not the author: an attendee's
+    /// own copy is signed by the attendee (docs/plans/calendar-e4.md §6).
+    pub calendar_author_address: Option<String>,
+    /// The attendee part, when the event is an invitation (sealed under
+    /// the shared session key).
+    #[schema(value_type = Option<Object>)]
+    pub attendees: Option<cal::EventPartV1>,
+    /// Each attendee's row: their keyed token, optional, and their sealed
+    /// answer once given.
+    pub attendee_rows: Vec<crate::handlers::calendar_invitations::AttendeeRowView>,
 }
 
 /// Where the next page starts: after this event, by (start, id). The client
@@ -850,6 +867,12 @@ pub(crate) struct EventRow {
     revision: i64,
     modified_at: time::OffsetDateTime,
     reminders: Option<serde_json::Value>,
+    shared_event_id: Uuid,
+    home: bool,
+    calendar_author_address: Option<String>,
+    attendees_encrypted: Option<Vec<u8>>,
+    attendees_encrypted_signature: Option<String>,
+    attendee_rows: serde_json::Value,
 }
 
 /// The events as their caller sees them, with the caller's own reminders:
@@ -863,11 +886,17 @@ pub(crate) fn event_view_sql(caller: u8) -> String {
         e.calendar_signed, e.calendar_signed_signature,
         e.calendar_encrypted, e.calendar_encrypted_signature,
         se.start_utc, se.end_utc, se.full_day, se.range_end_utc, se.sequence, e.revision,
-        GREATEST(e.modified_at, se.modified_at) AS modified_at, r.reminders
+        GREATEST(e.modified_at, se.modified_at) AS modified_at, r.reminders,
+        se.id AS shared_event_id, se.home_calendar_id = e.calendar_id AS home,
+        ca.address AS calendar_author_address,
+        se.attendees_encrypted, se.attendees_encrypted_signature,
+        {} AS attendee_rows
    FROM calendar_events e
    JOIN calendar_shared_events se ON se.id = e.shared_event_id
    LEFT JOIN mail_addresses a ON a.id = se.author_address_id
-   LEFT JOIN calendar_event_reminders r ON r.event_id = e.id AND r.account_id = ${caller}"
+   LEFT JOIN mail_addresses ca ON ca.id = e.author_address_id
+   LEFT JOIN calendar_event_reminders r ON r.event_id = e.id AND r.account_id = ${caller}",
+        crate::handlers::calendar_invitations::ATTENDEE_ROWS_SQL
     )
 }
 
@@ -912,6 +941,17 @@ pub(crate) fn event_view(row: EventRow) -> EventView {
         reminders: row
             .reminders
             .and_then(|list| serde_json::from_value(list).ok()),
+        shared_event_id: row.shared_event_id,
+        home: row.home,
+        calendar_author_address: row.calendar_author_address,
+        attendees: row
+            .attendees_encrypted
+            .zip(row.attendees_encrypted_signature)
+            .map(|(data, signature)| cal::EventPartV1 {
+                data: STANDARD.encode(data),
+                signature,
+            }),
+        attendee_rows: crate::handlers::calendar_invitations::attendee_rows(row.attendee_rows),
     }
 }
 
@@ -1229,6 +1269,9 @@ pub enum EventChange {
         /// id, unless its SEQUENCE is ahead (`sequenceBehind`).
         #[serde(default)]
         overwrite: bool,
+        /// An event with an ORGANIZER: its attendees (docs/plans/calendar-e4.md).
+        #[serde(default)]
+        invitation: Option<crate::handlers::calendar_invitations::InvitationIn>,
     },
     /// `base_revision`: the event's stored revision the change was made
     /// from; another is `409 revisionConflict`.
@@ -1241,6 +1284,9 @@ pub enum EventChange {
         /// calendar's defaults, a list replaces them.
         #[serde(default, deserialize_with = "present")]
         reminders: Option<Option<Vec<crate::calendar_reminders::Reminder>>>,
+        /// An event with an ORGANIZER: its whole attendee list again.
+        #[serde(default)]
+        invitation: Option<crate::handlers::calendar_invitations::InvitationIn>,
     },
     /// Names the revision it was made from, as an update does, so a delete
     /// never removes a change another device just saved.
@@ -1357,6 +1403,10 @@ pub struct EventSyncResults {
 /// read from the shared signed part.
 struct Checked {
     event: kutup_crypto::calendar::SealedEvent,
+    /// ORGANIZER is the address that signed the event (the organizer's own
+    /// invitation); `Some(false)`: an outside organizer's invitation kept as
+    /// its attendee's own event; `None`: no organizer.
+    organized_by_author: Option<bool>,
     shared: SharedSigned,
     start: time::OffsetDateTime,
     end: time::OffsetDateTime,
@@ -1391,11 +1441,13 @@ fn from_seconds(seconds: i64) -> AppResult<time::OffsetDateTime> {
 
 /// Checks a sealed event for a calendar and its author's keys, and reads
 /// its columns, the series expanded once for its range end (bounded: the
-/// format's 1970–2037 range and 500 EXDATEs). No organizer yet (E4).
+/// format's 1970–2037 range and 500 EXDATEs). An organizer is the author's
+/// own address (E4).
 fn check_event(
     event: &SealedEventV1,
     calendar_public_key: &[u8],
     author_keys: &[Vec<u8>],
+    author_address: &str,
     max_count: i64,
 ) -> AppResult<Checked> {
     let event = event.to_event().map_err(crypto)?;
@@ -1412,9 +1464,10 @@ fn check_event(
     cal::check_sealed_shape(&event, calendar_public_key).map_err(crypto)?;
     let authors: Vec<&[u8]> = author_keys.iter().map(Vec::as_slice).collect();
     let (shared, calendar) = cal::check_signed_parts(&event, &authors).map_err(crypto)?;
-    if shared.organizer.is_some() {
-        return Err(AppError::bad_request("invitations come later (E4)"));
-    }
+    let organized_by_author = shared.organizer.as_deref().map(|organizer| {
+        kutup_crypto::calendar_event::canonical_email(organizer)
+            == kutup_crypto::calendar_event::canonical_email(author_address)
+    });
     // This calendar's own EXDATEs (Proton's calendar part) remove
     // occurrences of the shared series, and only those: each is one of its
     // occurrences, in its form; together with the shared ones at least one
@@ -1496,6 +1549,7 @@ fn check_event(
     let bytes = shared_bytes + own_bytes;
     Ok(Checked {
         event,
+        organized_by_author,
         shared,
         start,
         end,
@@ -1513,16 +1567,20 @@ async fn check_event_blocking(
     event: &SealedEventV1,
     calendar_public_key: &[u8],
     author_keys: &[Vec<u8>],
+    author_address: &str,
     max_count: i64,
 ) -> AppResult<Checked> {
-    let (event, public_key, author_keys) = (
+    let (event, public_key, author_keys, address) = (
         event.clone(),
         calendar_public_key.to_vec(),
         author_keys.to_vec(),
+        author_address.to_owned(),
     );
-    tokio::task::spawn_blocking(move || check_event(&event, &public_key, &author_keys, max_count))
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
+    tokio::task::spawn_blocking(move || {
+        check_event(&event, &public_key, &author_keys, &address, max_count)
+    })
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))?
 }
 
 /// `POST /api/v1/calendar/calendars/{id}/events/sync` — creates, changes and
@@ -1573,9 +1631,15 @@ pub async fn sync(
         .fetch_one(&mut *conn)
         .await?
     };
-    let author_keys = {
+    let (author_keys, author_address) = {
         let mut conn = state.pool.acquire().await?;
-        address_keys(&mut conn, user_id, input.address_id).await?
+        let keys = address_keys(&mut conn, user_id, input.address_id).await?;
+        let address: String =
+            sqlx::query_scalar("SELECT address FROM mail_addresses WHERE id = $1")
+                .bind(input.address_id)
+                .fetch_one(&mut *conn)
+                .await?;
+        (keys, address)
     };
     let max_events = CALENDAR_EVENTS_PER_CALENDAR.load(&state.pool).await?;
     let max_count = CALENDAR_MAX_COUNT.load(&state.pool).await?;
@@ -1590,7 +1654,7 @@ pub async fn sync(
             user_id,
             input.address_id,
             (&public_key, generation),
-            &author_keys,
+            (&author_keys, &author_address),
             max_events,
             max_count,
             most_reminders,
@@ -1648,21 +1712,58 @@ async fn apply(
     user_id: Uuid,
     address_id: Uuid,
     (public_key, generation): (&[u8], i32),
-    author_keys: &[Vec<u8>],
+    (author_keys, author_address): (&[Vec<u8>], &str),
     max_events: i64,
     max_count: i64,
     most_reminders: usize,
     change: &EventChange,
 ) -> AppResult<Option<Uuid>> {
+    use crate::handlers::calendar_invitations as invitations;
     // The parts checked first, before the calendar is locked.
     let checked = match change {
         EventChange::Create { id, .. } if id.get_version_num() != 4 => {
             return Err(AppError::bad_request("an event's id is a UUID v4"));
         }
-        EventChange::Create { event, .. } | EventChange::Update { event, .. } => {
-            Some(check_event_blocking(event, public_key, author_keys, max_count).await?)
-        }
+        EventChange::Create { event, .. } | EventChange::Update { event, .. } => Some(
+            check_event_blocking(event, public_key, author_keys, author_address, max_count).await?,
+        ),
         EventChange::Delete { .. } => None,
+    };
+    // An event with an ORGANIZER carries its attendees, and only one does;
+    // only the calendar's owner invites (never from a calendar shared with
+    // them, as Proton's).
+    let invitation = match (change, &checked) {
+        (
+            EventChange::Create { invitation, .. } | EventChange::Update { invitation, .. },
+            Some(checked),
+        ) => match (checked.shared.organizer.is_some(), invitation) {
+            (false, None) => None,
+            (true, Some(_)) | (false, Some(_)) if owner != user_id => {
+                return Err(coded(
+                    AppError::forbidden("invitations are sent from your own calendars"),
+                    "notOwnCalendar",
+                ))
+            }
+            (true, Some(invitation)) => {
+                // Kutup attendees get the event at once only from the
+                // organizer itself: an attendee's own copy of an outside
+                // invitation (ORGANIZER someone else) reaches no one.
+                if checked.organized_by_author != Some(true) && !invitation.invitees.is_empty() {
+                    return Err(coded(
+                        AppError::bad_request("only the organizer's own event reaches invitees"),
+                        "organizerNotAuthor",
+                    ));
+                }
+                Some(invitations::check_invitation(state, user_id, invitation).await?)
+            }
+            (true, None) | (false, Some(_)) => {
+                return Err(coded(
+                    AppError::bad_request("an event with an organizer carries its attendees"),
+                    "invitationMismatch",
+                ))
+            }
+        },
+        _ => None,
     };
     let mut tx = state.pool.begin().await?;
     // The calendar row orders the calendar's writes (the count, the UID),
@@ -1739,8 +1840,8 @@ async fn apply(
                 None => RemindersChange::Keep,
             };
             if *overwrite {
-                let same: Option<Uuid> = sqlx::query_scalar(
-                    "SELECT e.id FROM calendar_events e
+                let same: Option<(Uuid, bool)> = sqlx::query_as(
+                    "SELECT e.id, se.attendees_encrypted IS NOT NULL FROM calendar_events e
                        JOIN calendar_shared_events se ON se.id = e.shared_event_id
                       WHERE e.calendar_id = $1 AND se.home_calendar_id = $1 AND se.uid = $2
                         AND se.recurrence_id IS NOT DISTINCT FROM $3",
@@ -1750,13 +1851,24 @@ async fn apply(
                 .bind(checked.recurrence_id)
                 .fetch_optional(&mut *tx)
                 .await?;
-                if let Some(same) = same {
+                if let Some((same, invited)) = same {
+                    // An overwrite without the invitation would drop its
+                    // attendees and their copies (an import carries none):
+                    // an invitation is changed by its organizer, with its
+                    // attendees (security review M4).
+                    if invited && invitation.is_none() {
+                        return Err(coded(
+                            AppError::conflict("an invitation is not overwritten by an import"),
+                            "invitationOverwrite",
+                        ));
+                    }
                     rewrite(
                         &mut tx,
                         (calendar, owner, user_id, address_id),
                         same,
                         None,
                         &checked,
+                        invitation.as_ref(),
                     )
                     .await?;
                     reminders_then_alarms(&mut tx, same, user_id, change).await?;
@@ -1774,8 +1886,22 @@ async fn apply(
                 return Err(AppError::conflict("this calendar is full")
                     .with_details(serde_json::json!({ "code": "eventLimit" })));
             }
-            crate::storage_pool::charge_within_quota(&mut tx, owner, checked.bytes).await?;
+            let invitation_bytes = invitation.as_ref().map_or(0, |i| i.bytes());
+            crate::storage_pool::charge_within_quota(
+                &mut tx,
+                owner,
+                checked.bytes + invitation_bytes,
+            )
+            .await?;
             let id = insert(&mut tx, *id, calendar, user_id, address_id, &checked).await?;
+            if invitation.is_some() {
+                invitations::write_invitation(&mut tx, id, invitation.as_ref()).await?;
+                sqlx::query("UPDATE calendar_shared_events SET bytes = bytes + $2 WHERE id = $1")
+                    .bind(id)
+                    .bind(invitation_bytes)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             reminders_then_alarms(&mut tx, id, user_id, change).await?;
             series_alarms(&mut tx, calendar, &checked).await?;
             Some(id)
@@ -1798,6 +1924,7 @@ async fn apply(
                 *id,
                 Some(*base_revision),
                 &checked,
+                invitation.as_ref(),
             )
             .await?;
             let change = match reminders {
@@ -1811,10 +1938,11 @@ async fn apply(
         }
         EventChange::Delete { id, base_revision } => {
             debug_assert!(checked.is_none());
-            type Current = (i64, i64, Uuid, i64, bool, String, bool);
+            type Current = (i64, i64, Uuid, i64, bool, String, bool, Option<Uuid>, bool);
             let current: Option<Current> = sqlx::query_as(
                 "SELECT e.revision, e.bytes, se.id, se.bytes, se.home_calendar_id = e.calendar_id,
-                        se.uid, se.recurrence_id IS NOT NULL
+                        se.uid, se.recurrence_id IS NOT NULL,
+                        se.author_account_id, se.attendees_encrypted IS NOT NULL
                    FROM calendar_events e JOIN calendar_shared_events se ON se.id = e.shared_event_id
                   WHERE e.id = $1 AND e.calendar_id = $2
                   FOR UPDATE OF e, se",
@@ -1823,7 +1951,17 @@ async fn apply(
             .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            let Some((revision, own_bytes, shared_id, shared_bytes, home, uid, changed)) = current
+            let Some((
+                revision,
+                own_bytes,
+                shared_id,
+                shared_bytes,
+                home,
+                uid,
+                changed,
+                author,
+                invited,
+            )) = current
             else {
                 return Err(AppError::not_found("not found"));
             };
@@ -1833,9 +1971,21 @@ async fn apply(
                     revision,
                 ));
             }
+            // Deleting an invitation at home deletes every attendee's copy
+            // and answer: its organizer's (the owner who sent it) to do, as
+            // changing it is, not any member writing to the calendar
+            // (security review M3).
+            if home && invited && (author != Some(user_id) || owner != user_id) {
+                return Err(coded(
+                    AppError::forbidden("only the organizer deletes an invitation"),
+                    "notOrganizer",
+                ));
+            }
             // Deleted in its home calendar, the shared row goes (with every
-            // calendar's copy); elsewhere only this calendar's copy.
+            // calendar's copy: their owners get back what each held);
+            // elsewhere only this calendar's copy (an attendee's own).
             let bytes = if home {
+                invitations::refund_copies(&mut tx, shared_id).await?;
                 sqlx::query("DELETE FROM calendar_shared_events WHERE id = $1")
                     .bind(shared_id)
                     .execute(&mut *tx)
@@ -1868,30 +2018,35 @@ async fn apply(
 }
 
 /// Writes a checked event over the stored event `id` this calendar is home
-/// to, keeping its ids, creation time and every member's reminders: an
-/// update made from `base_revision`, or (none) an import overwriting the
-/// event with its UID (Proton's `Overwrite`).
+/// to, in place: its ids, creation time and every member's reminders stay,
+/// and so do the rows that hang off its shared row (an invitation's
+/// attendees, their answers, and the attendees' own copies, docs/plans/
+/// calendar-e4.md §6). An update made from `base_revision`, or (none) an
+/// import overwriting the event with its UID (Proton's `Overwrite`).
 async fn rewrite(
     tx: &mut Transaction<'_, Postgres>,
     (calendar, owner, user_id, address_id): (Uuid, Uuid, Uuid, Uuid),
     id: Uuid,
     base_revision: Option<i64>,
     checked: &Checked,
+    invitation: Option<&crate::handlers::calendar_invitations::CheckedInvitation>,
 ) -> AppResult<()> {
     type Current = (
         Uuid,
         String,
         i64,
-        time::OffsetDateTime,
         i64,
         i32,
         Option<time::OffsetDateTime>,
+        Option<Uuid>,
+        bool,
     );
-    // Only an event this calendar is home to is changed here (E1/E2:
-    // every event is; an attendee's copy comes with E4).
+    // Only an event this calendar is home to is changed here; an
+    // attendee's copy is the organizer's to change.
     let current: Option<Current> = sqlx::query_as(
-        "SELECT se.id, se.uid, (e.bytes + se.bytes)::bigint, e.created_at, e.revision,
-                se.sequence, se.recurrence_id
+        "SELECT se.id, se.uid, (e.bytes + se.bytes)::bigint, e.revision,
+                se.sequence, se.recurrence_id, se.author_account_id,
+                se.attendees_encrypted IS NOT NULL
            FROM calendar_events e JOIN calendar_shared_events se ON se.id = e.shared_event_id
           WHERE e.id = $1 AND e.calendar_id = $2 AND se.home_calendar_id = $2
           FOR UPDATE OF e, se",
@@ -1900,10 +2055,19 @@ async fn rewrite(
     .bind(calendar)
     .fetch_optional(&mut **tx)
     .await?;
-    let Some((shared_id, uid, old_bytes, created_at, revision, sequence, recurrence_id)) = current
+    let Some((shared_id, uid, old_bytes, revision, sequence, recurrence_id, author, invited)) =
+        current
     else {
         return Err(AppError::not_found("not found"));
     };
+    // An invitation is its organizer's (the owner who sent it) to change:
+    // a member writing to the calendar can't rewrite what attendees got.
+    if invited && (author != Some(user_id) || owner != user_id) {
+        return Err(coded(
+            AppError::forbidden("only the organizer changes an invitation"),
+            "notOrganizer",
+        ));
+    }
     if uid != checked.shared.uid {
         return Err(AppError::bad_request("an event keeps its UID"));
     }
@@ -1930,46 +2094,74 @@ async fn rewrite(
         return Err(AppError::conflict("an event's SEQUENCE never goes down")
             .with_details(serde_json::json!({ "code": "sequenceBehind" })));
     }
-    crate::storage_pool::charge_within_quota(tx, owner, checked.bytes - old_bytes).await?;
-    // Every member's own reminders outlive the rewrite below.
-    let kept: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
-        "SELECT account_id, reminders FROM calendar_event_reminders WHERE event_id = $1",
+    let invitation_bytes = invitation.map_or(0, |i| i.bytes());
+    crate::storage_pool::charge_within_quota(
+        tx,
+        owner,
+        checked.bytes + invitation_bytes - old_bytes,
+    )
+    .await?;
+    let event = &checked.event;
+    let text = |data: &[u8]| String::from_utf8(data.to_vec()).expect("checked as text");
+    let shared = &checked.shared;
+    sqlx::query(
+        "UPDATE calendar_shared_events SET author_address_id = $2, author_account_id = $3,
+                shared_signed = $4, shared_signed_signature = $5,
+                shared_encrypted = $6, shared_encrypted_signature = $7,
+                start_utc = $8, end_utc = $9, start_tz = $10, end_tz = $11, full_day = $12,
+                rrule = $13, range_end_utc = $14, sequence = $15, revision = revision + 1,
+                bytes = $16, modified_at = now()
+          WHERE id = $1",
+    )
+    .bind(shared_id)
+    .bind(address_id)
+    .bind(user_id)
+    .bind(text(&event.shared_signed.data))
+    .bind(&event.shared_signed.signature)
+    .bind(&event.shared_encrypted.data)
+    .bind(&event.shared_encrypted.signature)
+    .bind(checked.start)
+    .bind(checked.end)
+    .bind(shared.dtstart.tzid())
+    .bind(shared.dtend.as_ref().and_then(EventTime::tzid))
+    .bind(shared.dtstart.is_date())
+    .bind(&shared.rrule)
+    .bind(checked.range_end)
+    .bind(shared.sequence.min(i32::MAX as u32) as i32)
+    .bind(checked.shared_bytes + invitation_bytes)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "UPDATE calendar_events SET shared_key_packet = $2, calendar_key_packet = $3,
+                calendar_signed = $4, calendar_signed_signature = $5,
+                calendar_encrypted = $6, calendar_encrypted_signature = $7,
+                revision = $8, bytes = $9, modified_at = now()
+          WHERE id = $1",
     )
     .bind(id)
-    .fetch_all(&mut **tx)
-    .await?;
-    // The shared row goes, and the calendar's row with it.
-    sqlx::query("DELETE FROM calendar_shared_events WHERE id = $1")
-        .bind(shared_id)
-        .execute(&mut **tx)
-        .await?;
-    // Written again whole (its columns all come from the new
-    // parts), keeping its ids and when it was made.
-    insert_as(
-        tx,
-        Kept {
-            id,
-            shared_id,
-            created_at,
-            revision: revision + 1,
-        },
-        calendar,
-        user_id,
-        address_id,
-        checked,
+    .bind(&event.shared_key_packet)
+    .bind(&event.calendar_key_packet)
+    .bind(text(&event.calendar_signed.data))
+    .bind(&event.calendar_signed.signature)
+    .bind(
+        event
+            .calendar_encrypted
+            .as_ref()
+            .map(|part| part.data.clone()),
     )
+    .bind(
+        event
+            .calendar_encrypted
+            .as_ref()
+            .map(|part| part.signature.clone()),
+    )
+    .bind(revision + 1)
+    .bind(checked.own_bytes)
+    .execute(&mut **tx)
     .await?;
-    for (member, list) in kept {
-        sqlx::query(
-            "INSERT INTO calendar_event_reminders (event_id, account_id, reminders)
-             VALUES ($1, $2, $3)",
-        )
-        .bind(id)
-        .bind(member)
-        .bind(list)
-        .execute(&mut **tx)
-        .await?;
-    }
+    crate::handlers::calendar_invitations::write_invitation(tx, shared_id, invitation).await?;
+    // The attendees' copies follow the new times.
+    crate::handlers::calendar_invitations::recompute_copies(tx, shared_id).await?;
     Ok(())
 }
 
@@ -2075,6 +2267,22 @@ async fn insert_as(
     address_id: Uuid,
     checked: &Checked,
 ) -> AppResult<Uuid> {
+    // The unique key covers the calendar's own events only; an invitation's
+    // copy held here with this UID would be grouped with the new event, so
+    // it is refused too.
+    if crate::handlers::calendar_invitations::uid_from_another_home(
+        tx,
+        calendar,
+        &checked.shared.uid,
+        calendar,
+    )
+    .await?
+    {
+        return Err(
+            AppError::conflict("an event with this UID is in the calendar")
+                .with_details(serde_json::json!({ "code": "uidTaken" })),
+        );
+    }
     let event = &checked.event;
     let text = |data: &[u8]| String::from_utf8(data.to_vec()).expect("checked as text");
     let shared = &checked.shared;

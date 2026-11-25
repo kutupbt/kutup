@@ -513,6 +513,167 @@ pub struct EventParts {
     pub calendar_encrypted: Option<CalendarEncrypted>,
 }
 
+// ----- invitations (docs/plans/calendar-e4.md §3) -----
+
+/// The most attendees an attendee part lists (the site's
+/// `calendar.attendees_per_event` is at most this).
+pub const MAX_ATTENDEES: usize = 500;
+/// The longest display name (`CN`) kept, in characters.
+pub const MAX_ATTENDEE_NAME_CHARS: usize = 255;
+
+/// One invited person as the organizer lists them: no answer (answers are
+/// sealed rows of their own, docs/plans/calendar-e4.md Q-3), and never a
+/// token (every reader derives it).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttendeeV1 {
+    /// The address, lowercase, without `mailto:`.
+    pub email: String,
+    /// The display name, if the organizer gave one.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Proton's "Make this participant optional" (`ROLE=OPT-PARTICIPANT`).
+    #[serde(default)]
+    pub optional: bool,
+}
+
+/// The attendee part (calendar.md's `AttendeesEncrypted`): each attendee's
+/// `ATTENDEE` line, encrypted under the event's shared session key and
+/// signed by the organizer, beside the shared parts. One UID, as every
+/// other part.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttendeesPart {
+    pub uid: String,
+    pub attendees: Vec<AttendeeV1>,
+}
+
+/// An address as attendees and organizers are compared and tokens bind
+/// it: trimmed, `mailto:` dropped (any case), ASCII lowercase.
+pub fn canonical_email(value: &str) -> String {
+    let value = value.trim();
+    let value = match value.get(..7) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("mailto:") => &value[7..],
+        _ => value,
+    };
+    value.trim().to_ascii_lowercase()
+}
+
+/// Whether `email` is an address a part may carry (as ORGANIZER's).
+pub fn check_email(email: &str) -> Result<()> {
+    check_mailto(&format!("mailto:{email}"))?;
+    if canonical_email(email) != email {
+        return Err(CryptoError::InvalidInput(
+            "an attendee's address is lowercase, without mailto:".into(),
+        ));
+    }
+    Ok(())
+}
+
+impl AttendeesPart {
+    pub fn build(&self) -> Result<String> {
+        check_uid(&self.uid)?;
+        if self.attendees.is_empty() || self.attendees.len() > MAX_ATTENDEES {
+            return Err(CryptoError::InvalidInput(format!(
+                "an invitation has 1 to {MAX_ATTENDEES} attendees"
+            )));
+        }
+        let mut lines = vec![format!("UID:{}", escape(&self.uid))];
+        let mut seen = std::collections::HashSet::new();
+        for attendee in &self.attendees {
+            check_email(&attendee.email)?;
+            if !seen.insert(attendee.email.as_str()) {
+                return Err(CryptoError::InvalidInput(
+                    "an attendee is listed once".into(),
+                ));
+            }
+            let mut line = String::from("ATTENDEE");
+            if let Some(name) = &attendee.name {
+                if name.is_empty()
+                    || name.chars().count() > MAX_ATTENDEE_NAME_CHARS
+                    || name.chars().any(|c| c.is_control() || c == '"')
+                {
+                    return Err(CryptoError::InvalidInput(
+                        "an attendee's name is invalid".into(),
+                    ));
+                }
+                line.push_str(&format!(";CN=\"{name}\""));
+            }
+            line.push_str(if attendee.optional {
+                ";ROLE=OPT-PARTICIPANT"
+            } else {
+                ";ROLE=REQ-PARTICIPANT"
+            });
+            line.push_str(&format!(";RSVP=TRUE:mailto:{}", attendee.email));
+            lines.push(line);
+        }
+        Ok(wrap(&lines))
+    }
+
+    pub fn parse(text: &str) -> Result<Self> {
+        let props = read(text)?;
+        let mut part = AttendeesPart {
+            uid: String::new(),
+            attendees: Vec::new(),
+        };
+        for prop in &props {
+            match prop.name.as_str() {
+                "UID" => part.uid = unescape(&prop.value)?,
+                "ATTENDEE" => {
+                    let email = prop
+                        .value
+                        .strip_prefix("mailto:")
+                        .ok_or_else(|| CryptoError::InvalidInput("ATTENDEE is invalid".into()))?;
+                    let mut name = None;
+                    let mut optional = false;
+                    for param in split_params(&prop.params) {
+                        if let Some(cn) = param.strip_prefix("CN=") {
+                            name = Some(
+                                cn.strip_prefix('"')
+                                    .and_then(|cn| cn.strip_suffix('"'))
+                                    .ok_or_else(|| {
+                                        CryptoError::InvalidInput("CN is quoted".into())
+                                    })?
+                                    .to_owned(),
+                            );
+                        } else if param == "ROLE=OPT-PARTICIPANT" {
+                            optional = true;
+                        }
+                    }
+                    part.attendees.push(AttendeeV1 {
+                        email: email.to_owned(),
+                        name,
+                        optional,
+                    });
+                }
+                _ => return Err(not_in_part(prop)),
+            }
+        }
+        // Read only in the one form `build` writes.
+        canonical(text, part.build()?)?;
+        Ok(part)
+    }
+}
+
+/// A content line's parameters, split at `;` outside quotes.
+fn split_params(params: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut quoted, mut from) = (false, 0);
+    for (index, byte) in params.bytes().enumerate() {
+        match byte {
+            b'"' => quoted = !quoted,
+            b';' if !quoted => {
+                out.push(&params[from..index]);
+                from = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if from < params.len() {
+        out.push(&params[from..]);
+    }
+    out
+}
+
 // ----- the fields a client edits -----
 
 /// A time as a client sends and reads it.
@@ -1014,6 +1175,59 @@ fn missing(name: &str) -> CryptoError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_attendee_part_has_one_form() {
+        let part = AttendeesPart {
+            uid: "e4@kutup.dev".into(),
+            attendees: vec![
+                AttendeeV1 {
+                    email: "ayse@kutup.dev".into(),
+                    name: Some("Ayşe; Yılmaz".into()),
+                    optional: false,
+                },
+                AttendeeV1 {
+                    email: "bob@example.com".into(),
+                    name: None,
+                    optional: true,
+                },
+            ],
+        };
+        let text = part.build().unwrap();
+        assert_eq!(
+            text,
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:e4@kutup.dev\r\n\
+             ATTENDEE;CN=\"Ayşe; Yılmaz\";ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:ayse@kut\r\n up.dev\r\n\
+             ATTENDEE;ROLE=OPT-PARTICIPANT;RSVP=TRUE:mailto:bob@example.com\r\n\
+             END:VEVENT\r\nEND:VCALENDAR"
+        );
+        assert_eq!(AttendeesPart::parse(&text).unwrap(), part);
+        // One spelling only, one listing per person, valid names and
+        // addresses only.
+        assert!(AttendeesPart::parse(
+            &text.replace("RSVP=TRUE:mailto:bob", "RSVP=FALSE:mailto:bob")
+        )
+        .is_err());
+        let mut twice = part.clone();
+        twice.attendees.push(twice.attendees[0].clone());
+        assert!(twice.build().is_err());
+        let mut quote = part.clone();
+        quote.attendees[0].name = Some("a\"b".into());
+        assert!(quote.build().is_err());
+        let mut upper = part.clone();
+        upper.attendees[1].email = "Bob@example.com".into();
+        assert!(upper.build().is_err());
+        assert!(AttendeesPart {
+            uid: "x".into(),
+            attendees: vec![]
+        }
+        .build()
+        .is_err());
+        assert_eq!(
+            canonical_email(" MAILTO:Bob@Example.COM "),
+            "bob@example.com"
+        );
+    }
 
     fn stamp() -> Timestamp {
         "2026-10-21T08:00:00Z".parse().unwrap()

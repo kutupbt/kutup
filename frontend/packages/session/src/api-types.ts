@@ -346,6 +346,13 @@ export interface AdminSettings {
   /** An `.ics` import's largest file (bytes) and most components (Proton's 10 MB and 15,000). */
   calendarImportMaxBytes: number
   calendarImportMaxEvents: number
+  /** Invitations (docs/plans/calendar-e4.md). */
+  calendarAttendeesPerEvent: number
+  calendarInvitationCountMax: number
+  calendarBusyShownMax: number
+  calendarInvitationIcsMaxBytes: number
+  calendarInvitationsPerAccount: number
+  calendarInvitationsPerOrganizer: number
   /** Every device of an account, of every app (site_settings::DEVICES_PER_ACCOUNT). */
   devicesPerAccount: number
   /** How long a new device's row waits to be listed (site_settings::DEVICE_LISTING_GRACE_SECONDS). */

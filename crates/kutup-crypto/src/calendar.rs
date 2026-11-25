@@ -221,7 +221,46 @@ impl UnlockedCalendarKey {
         event: &SealedEvent,
         author_public_keys: &[&[u8]],
     ) -> Result<OpenedEvent> {
-        open_event_with(event, &self.secret, author_public_keys)
+        open_event_with(event, &self.secret, author_public_keys, author_public_keys)
+    }
+
+    /// Opens an event whose shared parts and calendar parts have different
+    /// authors: an invitation adopted into an attendee's calendar
+    /// (docs/plans/calendar-e4.md §6), its shared parts the organizer's and
+    /// its calendar parts the attendee's own.
+    pub fn open_event_by(
+        &self,
+        event: &SealedEvent,
+        shared_author_public_keys: &[&[u8]],
+        calendar_author_public_keys: &[&[u8]],
+    ) -> Result<OpenedEvent> {
+        open_event_with(
+            event,
+            &self.secret,
+            shared_author_public_keys,
+            calendar_author_public_keys,
+        )
+    }
+
+    /// Seals a new version of a stored event under the session keys it
+    /// already has: an invitation keeps its shared session key, which its
+    /// attendees' calendars and key packets hold (E4 §6), and the tokens
+    /// and answers derived from it.
+    pub fn seal_event_keeping(
+        &self,
+        parts: &EventParts,
+        author_secret_key: &[u8],
+        previous: &SealedEvent,
+    ) -> Result<SealedEvent> {
+        let shared = self.open_key_packet(&previous.shared_key_packet)?;
+        let calendar = self.open_key_packet(&previous.calendar_key_packet)?;
+        seal_event_to(
+            parts,
+            &self.public,
+            author_secret_key,
+            Some(&shared),
+            Some(&calendar),
+        )
     }
 
     /// Seals this calendar's name and description, bound to its id and key.
@@ -910,7 +949,7 @@ pub fn check_signed_parts(
     Ok((shared, calendar))
 }
 
-fn signed_by(signature: &str, data: &[u8], public_keys: &[&[u8]]) -> bool {
+pub(crate) fn signed_by(signature: &str, data: &[u8], public_keys: &[&[u8]]) -> bool {
     public_keys
         .iter()
         .any(|key| verify_detached(signature.as_bytes(), data, key).unwrap_or(false))
@@ -927,32 +966,37 @@ pub struct OpenedEvent {
 fn open_event_with(
     event: &SealedEvent,
     calendar_secret_key: &[u8],
-    author_public_keys: &[&[u8]],
+    shared_author_public_keys: &[&[u8]],
+    calendar_author_public_keys: &[&[u8]],
 ) -> Result<OpenedEvent> {
     let shared_key = open_key_packet(&event.shared_key_packet, calendar_secret_key)?;
     let calendar_key = open_key_packet(&event.calendar_key_packet, calendar_secret_key)?;
     let mut verified = true;
-    let mut read = |part: &EventPart, key: Option<&SessionKey>| -> Result<String> {
-        let data = match key {
-            Some(key) => decrypt_data_packet(key, &part.data)?,
-            None => Zeroizing::new(part.data.clone()),
+    let mut read =
+        |part: &EventPart, key: Option<&SessionKey>, authors: &[&[u8]]| -> Result<String> {
+            let data = match key {
+                Some(key) => decrypt_data_packet(key, &part.data)?,
+                None => Zeroizing::new(part.data.clone()),
+            };
+            verified &= signed_by(&part.signature, &data, authors);
+            String::from_utf8(data.to_vec())
+                .map_err(|_| CryptoError::InvalidInput("an event part is text".into()))
         };
-        verified &= signed_by(&part.signature, &data, author_public_keys);
-        String::from_utf8(data.to_vec())
-            .map_err(|_| CryptoError::InvalidInput("an event part is text".into()))
-    };
+    let (shared, own) = (shared_author_public_keys, calendar_author_public_keys);
     let parts = EventParts {
-        shared_signed: SharedSigned::parse(&read(&event.shared_signed, None)?)?,
+        shared_signed: SharedSigned::parse(&read(&event.shared_signed, None, shared)?)?,
         shared_encrypted: SharedEncrypted::parse(&read(
             &event.shared_encrypted,
             Some(&shared_key),
+            shared,
         )?)?,
-        calendar_signed: CalendarSigned::parse(&read(&event.calendar_signed, None)?)?,
+        calendar_signed: CalendarSigned::parse(&read(&event.calendar_signed, None, own)?)?,
         calendar_encrypted: event
             .calendar_encrypted
             .as_ref()
             .map(|part| {
-                read(part, Some(&calendar_key)).and_then(|text| CalendarEncrypted::parse(&text))
+                read(part, Some(&calendar_key), own)
+                    .and_then(|text| CalendarEncrypted::parse(&text))
             })
             .transpose()?,
     };
@@ -1160,14 +1204,14 @@ fn b64_decode(value: &str, what: &str) -> Result<Vec<u8>> {
 }
 
 impl EventPartV1 {
-    fn of(part: &EventPart) -> Self {
+    pub fn of(part: &EventPart) -> Self {
         EventPartV1 {
             data: STANDARD.encode(&part.data),
             signature: part.signature.clone(),
         }
     }
 
-    fn to_part(&self) -> Result<EventPart> {
+    pub fn to_part(&self) -> Result<EventPart> {
         if self.signature.len() > 4096 {
             return Err(CryptoError::InvalidInput("signature is too large".into()));
         }

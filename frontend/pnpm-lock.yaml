@@ -177,6 +177,9 @@ importers:
       '@kutup/calendar-core':
         specifier: workspace:*
         version: link:../../packages/calendar-core
+      '@kutup/contacts-core':
+        specifier: workspace:*
+        version: link:../../packages/contacts-core
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
@@ -481,6 +484,9 @@ importers:
       '@emoji-mart/data':
         specifier: 1.2.1
         version: 1.2.1
+      '@kutup/calendar-core':
+        specifier: workspace:*
+        version: link:../../packages/calendar-core
       '@kutup/contacts-core':
         specifier: workspace:*
         version: link:../../packages/contacts-core
@@ -855,6 +861,9 @@ importers:
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../crypto
+      '@kutup/i18n':
+        specifier: workspace:*
+        version: link:../i18n
       '@kutup/mail-core':
         specifier: workspace:*
         version: link:../mail-core

@@ -881,6 +881,14 @@ arrival, and direct sending. Phases, each with its own plan before code:
   calendars shared with accounts on other servers (after E5, Q-2).
   The goal is Proton Calendar parity: the gap list and its order are in
   [`plans/calendar-parity.md`](plans/calendar-parity.md).
+  E4 (invitations over Mail, [`plans/calendar-e4.md`](plans/calendar-e4.md),
+  "As built") is built on `feat/calendar-e4`. Left out of it: busy blocks
+  drawn on the grid while planning (a line under each participant instead),
+  changing one occurrence of an invitation on its own (its series changes
+  as a whole), counter-proposals (shown, as at Proton), a party crasher
+  adding themselves from Mail, inviting from a shared mailbox's address, and
+  a browser spec of an outside round trip (no stack has both a browser and
+  inbound SMTP).
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed
   2026-10-10; G1 done): distribution lists and shared mailboxes with
   their own storage quota, owner/manager/member roles and post policies;

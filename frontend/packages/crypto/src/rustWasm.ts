@@ -917,6 +917,34 @@ export interface OpaqueRegistrationHandle {
   free(): void
 }
 
+declare const __KUTUP_CRYPTO_CALENDAR_WASM__: string | undefined
+const CALENDAR_BASE =
+  typeof __KUTUP_CRYPTO_CALENDAR_WASM__ === 'string' && /\/[0-9a-f]{16}$/.test(__KUTUP_CRYPTO_CALENDAR_WASM__) ? `/${__KUTUP_CRYPTO_CALENDAR_WASM__}` : null
+let calendarPromise: Promise<CryptoWasmModule> | null = null
+
+/**
+ * The runtime with calendars: the app's own where it loads `crypto-calendar`
+ * (Calendar), else `crypto-calendar` beside it, loaded the first time it is
+ * needed (Mail, for an invitation: docs/plans/calendar-e4.md, Q-4). The two
+ * share no state: every call takes its keys.
+ */
+export async function getCalendarCryptoWasm(): Promise<CryptoWasmModule> {
+  if (!CALENDAR_BASE || CALENDAR_BASE === BASE) return getCryptoWasm()
+  if (!calendarPromise) {
+    const moduleUrl = `${CALENDAR_BASE}/kutup_crypto_wasm.js`
+    calendarPromise = retryLoad(async (n) => {
+      const url = n === 0 ? moduleUrl : freshUrl(moduleUrl, n)
+      const module = (await import(/* @vite-ignore */ url)) as CryptoWasmModule
+      await module.default({ module_or_path: `${CALENDAR_BASE}/kutup_crypto_wasm_bg.wasm` })
+      return module
+    })
+    calendarPromise.catch(() => {
+      calendarPromise = null
+    })
+  }
+  return calendarPromise
+}
+
 export async function getCryptoWasm(): Promise<CryptoWasmModule> {
   if (!modulePromise) {
     // A fetch cut off by a network change is tried again, the script under

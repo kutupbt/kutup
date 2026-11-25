@@ -45,11 +45,11 @@ pub struct ExportEventV1 {
 }
 
 #[inline(never)]
-fn text_line(name: &str, value: &str) -> String {
+pub(super) fn text_line(name: &str, value: &str) -> String {
     format!("{name}:{}", escape(value))
 }
 
-fn utc_text(instant: Timestamp) -> String {
+pub(super) fn utc_text(instant: Timestamp) -> String {
     instant.strftime("%Y%m%dT%H%M%SZ").to_string()
 }
 
@@ -227,7 +227,7 @@ fn offset_text(offset: Offset) -> String {
 /// in force when they begin, then each transition (RFC 5545 §3.6.5: its
 /// `DTSTART` the local time before it, in the offset it leaves).
 #[inline(never)]
-fn vtimezone(tzid: &str, from: i16, to: i16) -> Result<Vec<String>> {
+pub(super) fn vtimezone(tzid: &str, from: i16, to: i16) -> Result<Vec<String>> {
     let tz = time_zone(tzid)?;
     let range = |year: i16, end: bool| {
         let date = civil::date(

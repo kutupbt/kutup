@@ -21,6 +21,7 @@ import { download } from './attachments'
 import { openComposer } from './composerState'
 import { onReplyCommand } from './messageCommands'
 import { printDocument, printHtml } from './printMessage'
+import { InvitationWidgets } from './InvitationWidget'
 import { MailBody } from './MailBody'
 import { useGroupScope, useMailboxScope } from './mailboxScope'
 import { Padlock } from './Padlock'
@@ -367,6 +368,7 @@ export function MessageView({
               />
             )}
             {opened.data.offeredKey && from ? <OfferedKey address={from.address} name={from.name} offered={opened.data.offeredKey} /> : null}
+            {draft || group ? null : <InvitationWidgets account={account} message={message} parsed={opened.data.parsed} />}
             {source ? (
               <pre aria-label={t('read.htmlSource')} className="max-h-[32rem] overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted/40 p-3 font-mono text-xs">
                 {opened.data.parsed.html ?? opened.data.parsed.text ?? ''}

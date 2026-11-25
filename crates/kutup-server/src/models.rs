@@ -102,6 +102,13 @@ pub struct CalendarPublicSettings {
     pub sync_batch: i64,
     pub max_count: i64,
     pub reminders_per_event: i64,
+    /// Invitations (docs/plans/calendar-e4.md): the attendees one event
+    /// lists, the largest COUNT of one received, whose busy times the
+    /// editor shows at once, and the largest invitation file read.
+    pub attendees_per_event: i64,
+    pub invitation_count_max: i64,
+    pub busy_shown_max: i64,
+    pub invitation_ics_max_bytes: i64,
 }
 
 /// The weakest key derivation Kutup Pass sets a vault to (administrators'

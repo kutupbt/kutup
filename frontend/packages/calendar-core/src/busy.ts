@@ -2,7 +2,7 @@
 // nothing more. The server answers from the calendars whose member chose to
 // show their busy times, its recurrences expanded, and only to those the
 // rule allows (Proton's: the person's organization; Q-3). Where they're shown
-// (the participant row) comes with E4; this is the client for it.
+// is the event editor's participant row (E4c, docs/plans/calendar-e4.md §4).
 
 import { loadServerSettings } from '@kutup/session/apps'
 import api from '@kutup/session/client'
@@ -36,12 +36,20 @@ export class BusyWindowTooLong extends Error {
  * account), which is no error.
  */
 export async function loadBusy(address: string, start: string, end: string): Promise<BusyBlock[]> {
+  return (await loadAvailability(address, start, end)).busy
+}
+
+/**
+ * [`loadBusy`] and whether the person's busy times could be read at all
+ * (Proton's `IsDataAccessible`): false shows "Availability unknown".
+ */
+export async function loadAvailability(address: string, start: string, end: string): Promise<{ busy: BusyBlock[]; accessible: boolean }> {
   const from = Date.parse(start)
   const to = Date.parse(end)
   if (!(to > from)) throw new Error('the window ends before it starts')
   const days = await busyWindowDays()
   if (to - from > days * DAY_MS) throw new BusyWindowTooLong(days)
-  const { data } = await api.get<{ busy: BusyBlock[] }>('/calendar/busy', { params: { address: address.trim(), start, end } })
+  const { data } = await api.get<{ busy: BusyBlock[]; accessible?: boolean }>('/calendar/busy', { params: { address: address.trim(), start, end } })
   // Only what falls in the window, in order, overlaps merged: the server's
   // answer is a list of times, held to the shape asked for.
   const blocks = data.busy
@@ -56,5 +64,5 @@ export async function loadBusy(address: string, start: string, end: string): Pro
       merged.push({ ...block })
     }
   }
-  return merged
+  return { busy: merged, accessible: data.accessible ?? merged.length > 0 }
 }

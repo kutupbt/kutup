@@ -886,7 +886,72 @@ pub const CALENDAR_IMPORT_MAX_EVENTS: NumericSetting = NumericSetting {
     unit: SettingUnit::Count,
     per_account: true,
 };
-pub const CALENDAR_SETTINGS: [NumericSetting; 25] = [
+/// Invitations (docs/plans/calendar-e4.md): the attendees one event lists
+/// (Proton's 100; the attendee part's format takes 500).
+pub const CALENDAR_ATTENDEES_PER_EVENT: NumericSetting = NumericSetting {
+    key: "calendar.attendees_per_event",
+    field: "calendarAttendeesPerEvent",
+    default: 100,
+    min: 1,
+    max: 500,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+/// The largest COUNT of a repeating event an invitation received takes
+/// (Proton's 499).
+pub const CALENDAR_INVITATION_COUNT_MAX: NumericSetting = NumericSetting {
+    key: "calendar.invitation_count_max",
+    field: "calendarInvitationCountMax",
+    default: 499,
+    min: 1,
+    max: 499,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+/// The people whose busy times the event editor shows at once (Proton's 10).
+pub const CALENDAR_BUSY_SHOWN_MAX: NumericSetting = NumericSetting {
+    key: "calendar.busy_shown_max",
+    field: "calendarBusyShownMax",
+    default: 10,
+    min: 1,
+    max: 50,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+/// The largest `.ics` part of a message Mail reads as an invitation.
+pub const CALENDAR_INVITATION_ICS_MAX_BYTES: NumericSetting = NumericSetting {
+    key: "calendar.invitation_ics_max_bytes",
+    field: "calendarInvitationIcsMaxBytes",
+    default: MIB,
+    min: 16 * 1024,
+    max: 10 * MIB,
+    unit: SettingUnit::Bytes,
+    per_account: false,
+};
+/// Invitations from Kutup organizers one account holds at once (each puts
+/// an event in their calendar without a mail being opened): past it, new
+/// ones come by mail only.
+pub const CALENDAR_INVITATIONS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "calendar.invitations_per_account",
+    field: "calendarInvitationsPerAccount",
+    default: 2000,
+    min: 1,
+    max: 100_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+/// How many invitations one organizer may have open with one account at
+/// once (security review M5): one sender can't fill another's list.
+pub const CALENDAR_INVITATIONS_PER_ORGANIZER: NumericSetting = NumericSetting {
+    key: "calendar.invitations_per_organizer",
+    field: "calendarInvitationsPerOrganizer",
+    default: 100,
+    min: 1,
+    max: 100_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+pub const CALENDAR_SETTINGS: [NumericSetting; 31] = [
     CALENDARS_PER_ACCOUNT,
     CALENDAR_EVENTS_PER_CALENDAR,
     CALENDAR_SYNC_BATCH,
@@ -912,6 +977,12 @@ pub const CALENDAR_SETTINGS: [NumericSetting; 25] = [
     CALENDAR_KEY_GENERATIONS,
     CALENDAR_IMPORT_MAX_BYTES,
     CALENDAR_IMPORT_MAX_EVENTS,
+    CALENDAR_ATTENDEES_PER_EVENT,
+    CALENDAR_INVITATION_COUNT_MAX,
+    CALENDAR_BUSY_SHOWN_MAX,
+    CALENDAR_INVITATION_ICS_MAX_BYTES,
+    CALENDAR_INVITATIONS_PER_ACCOUNT,
+    CALENDAR_INVITATIONS_PER_ORGANIZER,
 ];
 
 /// How long a Chat link token, and the provisioning socket of the device

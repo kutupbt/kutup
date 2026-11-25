@@ -10,6 +10,7 @@ import { Button } from '@kutup/ui/components/button'
 import { CalendarSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
+import { useAutoAdd } from './invitations/useAutoAdd'
 import { CalendarPopovers } from './CalendarPopovers'
 import { draftCovers, ghostCovers, pressDays, pressShiftDays, type DaySpanGhost } from './DaySpan'
 import { EventChip } from './EventChip'
@@ -44,6 +45,7 @@ export function CalendarPage() {
     }),
   })
   const calendars = useCalendars()
+  useAutoAdd(calendars.data?.calendars)
   const events = useEvents(calendars.data?.calendars, range.data?.start ?? '', range.data?.end ?? '')
   const colors = useMemo(() => new Map((calendars.data?.calendars ?? []).map((c: Calendar) => [c.id, c.color])), [calendars.data])
   const placed = useQuery({

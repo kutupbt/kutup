@@ -2,12 +2,12 @@
 //! import's reading and rebuild and the export's writing, as
 //! `kutup_crypto::calendar_ics` does them. A runtime of its own, loaded the
 //! first time a file is imported or exported, so the calendar runtimes don't
-//! carry it; E4's invitations in Mail load it the same way
+//! carry it; E4's invitations (`itip`) in Calendar and Mail load it the same way
 //! (docs/plans/calendar-e4.md, Q-4). It holds no key: the events it reads
 //! are sealed by the crypto-calendar runtime, and the ones it writes were
 //! opened there.
 
-use kutup_crypto::calendar_ics::{export, import};
+use kutup_crypto::calendar_ics::{export, import, itip};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -39,4 +39,19 @@ pub fn calendar_import_ics(text: &str, options: JsValue) -> Result<JsValue, JsVa
 pub fn calendar_export_ics(calendar: JsValue) -> Result<String, JsValue> {
     let calendar: export::ExportCalendarV1 = from_js(calendar, "export")?;
     export::export(&calendar).map_err(js_error)
+}
+
+/// Reads an invitation (E4 §2): `{"read": {method, fields, organizer,
+/// attendees, note, …}}` or `{"refused": {error, reason, method}}`.
+#[wasm_bindgen(js_name = calendarReadInvitation)]
+pub fn calendar_read_invitation(text: &str, options: JsValue) -> Result<JsValue, JsValue> {
+    let options: itip::InvitationOptionsV1 = from_js(options, "invitation options")?;
+    to_js(&itip::read_invitation(text, &options).map_err(js_error)?)
+}
+
+/// Writes a REQUEST, REPLY or CANCEL (E4 §2).
+#[wasm_bindgen(js_name = calendarWriteInvitation)]
+pub fn calendar_write_invitation(invitation: JsValue) -> Result<String, JsValue> {
+    let invitation: itip::WriteInvitationV1 = from_js(invitation, "invitation")?;
+    itip::write_invitation(&invitation).map_err(js_error)
 }

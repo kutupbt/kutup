@@ -41,3 +41,4 @@ specs/173-mail-send-checks.spec.ts
 specs/174-mail-sieve.spec.ts
 specs/175-mail-export.spec.ts
 specs/200-mail-sieve-editor.spec.ts
+specs/221-mail-invitation-answer.spec.ts

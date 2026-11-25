@@ -26,6 +26,9 @@ import {
   type CalendarAccount,
   type SealedMetadata,
   type UnlockedCalendar,
+  type Attendee,
+  type AttendeeToken,
+  type EventPart,
 } from '@kutup/crypto/calendar'
 import { OlderThanSeenError, revisionGuard } from '@kutup/crypto/revisionGuard'
 import { useMailAccount, type MailAccount } from '@kutup/mail-core/api'
@@ -216,6 +219,23 @@ export interface EventRow {
   modifiedAt: string
   /** The caller's own reminders for it; null: the calendar's defaults. */
   reminders: Reminder[] | null
+  /** The shared row an invitation's answers name (docs/plans/calendar-e4.md). */
+  sharedEventId?: string
+  /** This calendar is the event's home; false: an attendee's own copy of an invitation. */
+  home?: boolean
+  /** Who signed an attendee's copy's calendar parts (the attendee). */
+  calendarAuthorAddress?: string | null
+  /** An invitation's attendee part, sealed. */
+  attendees?: EventPart | null
+  attendeeRows?: AttendeeRow[]
+}
+
+/** One attendee's row: their keyed token, and their sealed answer once given. */
+export interface AttendeeRow {
+  token: string
+  optional: boolean
+  answer: string | null
+  answerUpdatedAt: string | null
 }
 
 /** An event, opened. */
@@ -235,6 +255,20 @@ export interface CalendarEvent {
    * ones signed. An event that isn't is shown as such, never trusted.
    */
   verified: boolean
+  /** The shared row (answers name it). */
+  sharedEventId: string
+  /** The calendar is its home (the organizer's, or an event with no organizer); false: an attendee's own copy. */
+  home: boolean
+  /** The organizer's address, for an invitation (the address that signed its shared parts). */
+  organizer: string | null
+  /** The event as stored: a change of an invitation keeps its session keys. */
+  sealed: SealedEvent
+  /** An invitation's attendees, opened (null: none), the attendee part signed by the organizer, and each one's token. */
+  attendees: Attendee[] | null
+  attendeesVerified: boolean
+  tokens: AttendeeToken[]
+  attendeeRows: AttendeeRow[]
+  sequence: number
 }
 
 export const calendarsKey = ['calendar', 'calendars'] as const
@@ -287,7 +321,7 @@ async function unlock(session: Session, row: CalendarRow): Promise<{ newest: Unl
 }
 
 /** The keys an author's signature may be under: the account's own, or their address's checked keys. */
-async function authorKeys(account: MailAccount, address: string | null, owner?: CalendarOwnerRow): Promise<string[]> {
+export async function authorKeys(account: MailAccount, address: string | null, owner?: CalendarOwnerRow): Promise<string[]> {
   if (address === null) return []
   if (account.isOwnAddress(address)) return account.ownPublicKeys
   const keys = await addressKeys(address)
@@ -669,7 +703,11 @@ export async function openEvent(account: MailAccount, calendar: Calendar, row: E
   // The generation its key packets name: older events keep their own key.
   const key = calendar.keyring.get(await calendarEventKeyId(row.event)) ?? calendar.unlocked
   const signers = await authorKeys(account, row.authorAddress).catch(() => [])
-  const opened = key.openEvent(row.event, signers)
+  // An attendee's own copy: the shared parts are the organizer's, the
+  // calendar parts the attendee's (docs/plans/calendar-e4.md §6).
+  const home = row.home !== false
+  const ownSigners = home ? signers : await authorKeys(account, row.calendarAuthorAddress ?? null).catch(() => [])
+  const opened = key.openEventWith(row.event, row.attendees ?? null, signers, ownSigners)
   const times = await timesOf(opened.fields)
   // Signed by the address the server names as the author, with its checked keys.
   const knownAuthor = signers.length > 0
@@ -685,8 +723,47 @@ export async function openEvent(account: MailAccount, calendar: Calendar, row: E
     ...times,
     revision: row.revision,
     reminders: row.reminders ?? null,
-    verified: opened.verified && knownAuthor && asServed,
+    verified: opened.verified && knownAuthor && asServed && (home || ownSigners.length > 0),
+    sharedEventId: row.sharedEventId ?? row.id,
+    home,
+    // ORGANIZER is checked by the server to be the signing address; the
+    // client checks it again against the address whose keys verified.
+    organizer: organizerOf(opened.fields, row.authorAddress, knownAuthor),
+    sealed: row.event,
+    attendees: opened.attendees,
+    attendeesVerified: opened.attendeesVerified,
+    tokens: opened.tokens,
+    attendeeRows: row.attendeeRows ?? [],
+    sequence: opened.fields.sequence ?? 0,
   }
+}
+
+/**
+ * What an event that is no invitation holds beyond its fields (an event a
+ * public link serves, or one a test makes): no attendees, its own home.
+ */
+export function plainEventParts(id: string, event: SealedEvent | null = null): Pick<
+  CalendarEvent,
+  'sharedEventId' | 'home' | 'organizer' | 'sealed' | 'attendees' | 'attendeesVerified' | 'tokens' | 'attendeeRows' | 'sequence'
+> {
+  return {
+    sharedEventId: id,
+    home: true,
+    organizer: null,
+    sealed: event ?? ({} as SealedEvent),
+    attendees: null,
+    attendeesVerified: false,
+    tokens: [],
+    attendeeRows: [],
+    sequence: 0,
+  }
+}
+
+/** The organizer's address when the signed ORGANIZER is the address that signed the event; else none. */
+function organizerOf(fields: EventFields, author: string | null, known: boolean): string | null {
+  const organizer = fields.organizer?.replace(/^mailto:/i, '').toLowerCase() ?? null
+  if (!organizer || !known || !author || organizer !== author.toLowerCase()) return null
+  return organizer
 }
 
 /** Whether the server's range end is the one the signed fields give (a series' last end, null without end). */
@@ -798,7 +875,7 @@ interface SyncResult {
   code: string | null
 }
 
-async function syncOne(calendar: Calendar, addressId: string, change: unknown): Promise<EventRow | null> {
+export async function syncOne(calendar: Calendar, addressId: string, change: unknown): Promise<EventRow | null> {
   const { data } = await api.post<{ results: SyncResult[] }>(`/calendar/calendars/${calendar.id}/events/sync`, {
     addressId,
     changes: [change],

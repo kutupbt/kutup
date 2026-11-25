@@ -1463,6 +1463,56 @@ if (build === 'crypto') {
   assert.throws(() => crypto.calendarLocalToUtc('2026-10-29T09:30:00', 'Nowhere/Else'))
   // Which generation opens an event: the key its key packets name.
   assert.equal(crypto.calendarEventKeyId(v.event), unlocked.keyId)
+  // Invitations (docs/plans/calendar-e4.md §3, §6): the vectors' event,
+  // attendee part, tokens, invitee key packet and answer open as Rust
+  // wrote them; what the browser seals opens alike, and an attendee's
+  // adopted copy opens with each part's own author.
+  {
+    const iv = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/calendar-invitation-v1.json`, 'utf8'))
+    const ownerKey = { masterKeys: masterKeySet(mailVectors.masterKey), binding: mailVectors.binding, address: mailVectors.address, envelope: mailVectors.envelope, fingerprint: mailVectors.fingerprint }
+    const withAttendees = unlocked.openEventWith(iv.event, iv.attendees, [v.ownerPublicKey], [v.ownerPublicKey])
+    assert.equal(withAttendees.verified, true)
+    assert.equal(withAttendees.attendeesVerified, true)
+    assert.deepEqual(withAttendees.attendees.map((a) => a.email), ['bea@kutup.dev', 'guest@outside.example'])
+    assert.deepEqual(withAttendees.tokens, iv.tokens)
+    const rows = iv.tokens.map((t, i) => ({ token: t.token, answer: i === 0 ? iv.answer : null }))
+    const answers = unlocked.openAnswers(iv.event, iv.sharedEventId, rows, [v.ownerPublicKey])
+    assert.deepEqual(answers[0].answer, iv.answerJson)
+    assert.equal(answers[0].verified, true)
+    assert.equal(answers[1].answer, null)
+    // Moved to another row or event, it opens as nothing.
+    assert.equal(unlocked.openAnswers(iv.event, iv.sharedEventId, [{ token: iv.tokens[1].token, answer: iv.answer }], [v.ownerPublicKey])[0].answer, null)
+    assert.equal(unlocked.openAnswers(iv.event, 'another', rows, [v.ownerPublicKey])[0].answer, null)
+    // The invitee's key packet, opened with the address key.
+    const shared = { sharedSigned: iv.event.sharedSigned, sharedEncrypted: iv.event.sharedEncrypted, attendees: iv.attendees }
+    const invited = crypto.openInvitation(ownerKey, iv.inviteeKeyPacket, shared, [v.ownerPublicKey])
+    assert.equal(invited.view.verified, true)
+    assert.deepEqual(invited.view.tokens, iv.tokens)
+    assert.equal(invited.tokenFor('BEA@kutup.dev'), iv.tokens[0].token)
+    const mine = invited.sealAnswer(ownerKey, iv.sharedEventId, 'bea@kutup.dev', 'accepted', null, '2026-11-24T11:00:00Z')
+    assert.equal(mine.token, iv.tokens[0].token)
+    assert.equal(unlocked.openAnswers(iv.event, iv.sharedEventId, [mine], [v.ownerPublicKey])[0].answer.partstat, 'accepted')
+    // An adopted copy: the shared parts the organizer's, the calendar parts the attendee's.
+    const row = invited.adopt(unlocked, ownerKey, { dtstamp: '2026-11-24T11:00:00Z', transp: 'transparent' })
+    const copy = { sharedKeyPacket: row.sharedKeyPacket, calendarKeyPacket: row.calendarKeyPacket, sharedSigned: iv.event.sharedSigned, sharedEncrypted: iv.event.sharedEncrypted, calendarSigned: row.calendarSigned, calendarEncrypted: row.calendarEncrypted }
+    const openedCopy = unlocked.openEventWith(copy, iv.attendees, [v.ownerPublicKey], [v.ownerPublicKey])
+    assert.equal(openedCopy.verified, true)
+    assert.equal(openedCopy.fields.transp, 'transparent')
+    assert.equal(unlocked.openEventWith(copy, null, [v.ownerPublicKey], []).verified, false)
+    invited.free()
+    // What the browser seals: a new invitation, then a change under the same shared key.
+    const fields = { ...iv.fields, uid: 'browser-invite@kutup.dev' }
+    const people = [{ email: 'Bea@Kutup.dev', name: 'Bea', optional: false }]
+    const first = unlocked.sealInvitation(ownerKey, fields, people, [{ address: 'bea@kutup.dev', publicKey: v.ownerPublicKey }], null)
+    assert.equal(first.tokens[0].email, 'bea@kutup.dev')
+    assert.equal(first.invitees[0].address, 'bea@kutup.dev')
+    const again = unlocked.sealInvitation(ownerKey, { ...fields, summary: 'changed' }, people, [], first.event)
+    assert.deepEqual(again.tokens, first.tokens)
+    assert.equal(unlocked.openEventWith(again.event, again.attendees, [v.ownerPublicKey], [v.ownerPublicKey]).fields.summary, 'changed')
+    const plain = unlocked.sealInvitation(ownerKey, { ...fields, organizer: null }, [], [], null)
+    assert.equal(plain.attendees, null)
+  }
+
   unlocked.free()
 
   // Sharing (E3a, docs/plans/calendar-e3.md): a member opens the owner's
