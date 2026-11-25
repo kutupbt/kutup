@@ -970,3 +970,54 @@ about 110% of its first size (310,617); its checks are
 
 An imported series is drawn at every occurrence and edited with the E2
 app's "this / this and following / all" (§9 above).
+
+## E5: calendars from a URL, Google import, meetings (plan, 2026-11-25)
+
+The user approved this plan on 2026-11-25 (refresh: 6 hours, admin-editable;
+feed events signed by a server key; order E5a, E5c, E5b).
+
+### E5a: a calendar from a URL (Proton's "Add calendar from URL")
+
+- **What it is.** A read-only calendar whose events come from someone else's
+  public `.ics` feed (a holidays feed, Google's "secret address in iCal
+  format"). Kutup's server is a client of that feed: it fetches it, reads it
+  with the same Rust reader the browser import uses (`calendar_ics`), and
+  seals every event to the calendar's **public** key (`seal_event_to`), so
+  it writes events it can never read back. The calendar can't be edited or
+  shared, as Proton's; its events count against the owner's storage.
+- **Who signs.** A server feed key (an OpenPGP key the server makes once and
+  keeps, its public half published to clients): the app shows these events
+  as "from a subscription", not as verified by a person. The server reads the
+  feed anyway (it is public), so the signature guards against anyone else
+  writing into the calendar, not against the server.
+- **Fetching safely.** `https` only; the address checked by `ssrf.rs` (no
+  private, loopback, link-local or metadata addresses) on every DNS answer
+  and after every redirect (a few at most); a size and a time limit; ETag
+  and Last-Modified honoured. Every limit is an admin setting:
+  `calendar.feed_refresh_hours` (6), `calendar.feeds_per_account` (per
+  account), `calendar.feed_max_bytes`, `calendar.feed_max_events`,
+  `calendar.feed_timeout_seconds`.
+- **Refreshing.** Every `calendar.feed_refresh_hours`; a feed whose content
+  hasn't changed costs nothing. Each refresh replaces the calendar's events
+  by UID and RECURRENCE-ID (new sealed, changed resealed, gone deleted), in
+  one transaction.
+- **Statuses, as Proton's** (`subscribe/helpers.ts`): "Calendar is syncing"
+  before the first fetch; "More than 12 hours passed since last update"
+  past 12 hours; and per failure: unreachable, too big, not a calendar,
+  unsupported, temporarily unavailable.
+- **The URL** is stored as written (the server fetches it), shown to its
+  owner, never logged in full (the path and query can carry a secret, as
+  Google's does).
+
+### E5c: Kutup meeting links in events
+
+"Add Kutup meeting" in the event editor makes a Chat call link (its title
+encrypted, as Proton Meet's) and puts it in the event; it replaces Chat's
+`.ics` download, and a repeating meeting is a repeating event.
+
+### E5b: import from Google (D-3: in the browser)
+
+OAuth with PKCE in the browser, Google's Calendar API read from there, every
+event sealed before upload through the `.ics` import's path. Google's token
+never reaches Kutup's server. Off until the operator registers a Google
+OAuth client (its id is a setting); the button isn't shown before.
