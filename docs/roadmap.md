@@ -315,6 +315,30 @@ newest version as it is, `catchUp`), so the rotation must cover versions
 too: a version saved under an older document key after the rotation's
 position doesn't count.
 
+### Keyboard shortcuts in every app (Proton parity)
+
+Asked by the user (2026-11-25): every app gets Proton's shortcuts, as Mail
+has them now. Rules for all of them, as Proton's:
+- **One account setting turns them all off** ("Keyboard shortcuts", as
+  Proton's General setting, kept with the other UI preferences so it
+  follows the account), on by default.
+- **Never while typing:** no shortcut fires in a field, an editor or an
+  open dialog (Escape aside).
+- **`?` shows the app's list** (Proton's shortcuts modal), with the
+  setting's switch in it.
+- **Each app copies Proton's own set** (`MailShortcutsModal`,
+  `CalendarShortcutsModal`, Drive's and Pass's); where Proton has none,
+  only the list and Escape.
+
+Today:
+- **Mail:** Proton's set and the overlay; the setting is missing.
+- **Drive:** arrows, Enter, Space (Quick look), Escape; no list.
+- **Calendar:** `N` and Escape. To add: `D` `W` `M` (views), `T` (today),
+  arrows and `J` `K` (previous, next), `/` (search, with encrypted search),
+  `?`, and the setting (calendar-parity.md, gap 10).
+- **Photos:** the viewer's keys; no list.
+- **Contacts, Pass:** none.
+
 ### Security log: sign-ins and 2FA events (Proton parity)
 
 `account_security_events` (`GET /api/v1/account/security-events`) records what
