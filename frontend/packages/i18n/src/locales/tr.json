@@ -608,6 +608,8 @@
       "replyNoEvent": "Bu yanıt artık var olmayan bir etkinlik için.",
       "replyMismatch": "Bu yanıt davetinizin ayrıntılarıyla uyuşmuyor.",
       "replyNotFromAttendee": "Bu yanıt, yanıtladığı adresten gelmiyor.",
+      "replyUnverifiedSender": "Bu yanıtın kendi adresinden gönderildiği doğrulanamadı; kaydedilmedi.",
+      "notFromOrganizer": "Bu iletinin düzenleyiciden geldiği doğrulanamadı; takviminiz değiştirilmedi. Eklemek ya da güncellemek için daveti yanıtlayın.",
       "partyCrasher": "E-posta adresiniz asıl katılımcı listesinde yok.",
       "partyCrasherKutup": "E-posta adresiniz asıl katılımcı listesinde yok, bu yüzden yanıt veremezsiniz.",
       "partyCrasherOrganizer": "{{email}} katılımcı listesinde yok.",

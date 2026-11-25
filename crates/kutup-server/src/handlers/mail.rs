@@ -84,6 +84,9 @@ pub struct MailMessage {
     /// From a list that offers a way out (List-Unsubscribe, noted on arrival):
     /// moving it to Spam may unsubscribe (Proton's SpamAction).
     pub unsubscribable: bool,
+    /// Its From is the sender's own: DMARC passed on arrival, or a Kutup
+    /// account sent it. Mail applies calendar changes on view only then.
+    pub from_authenticated: bool,
     /// The reader sent the read receipt its sender asked for (Proton's
     /// "Read receipt sent").
     pub receipt_sent: bool,
@@ -272,6 +275,7 @@ pub(crate) struct Row {
     attachment_count: i32,
     unsubscribed: bool,
     unsubscribable: bool,
+    from_authenticated: bool,
     receipt_sent: bool,
     scheduled_at: Option<OffsetDateTime>,
     outbox_id: Option<Uuid>,
@@ -286,7 +290,7 @@ pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_f
     ARRAY(SELECT l.label_id FROM mail_message_labels l WHERE l.message_id = mail_messages.id) AS labels,
     seen, starred, protection,
     size_bytes, received_at, sent_at, headers, attachment_count, unsubscribed,
-    unsubscribable, receipt_sent,
+    unsubscribable, from_authenticated, receipt_sent,
     (SELECT o.deliver_at FROM mail_outbox o WHERE o.draft_id = mail_messages.id AND o.scheduled
         AND o.state = 'pending') AS scheduled_at,
     (SELECT o.id FROM mail_outbox o WHERE o.draft_id = mail_messages.id AND o.scheduled
@@ -331,6 +335,7 @@ impl Row {
             attachment_count: row.attachment_count,
             unsubscribed: row.unsubscribed,
             unsubscribable: row.unsubscribable,
+            from_authenticated: row.from_authenticated,
             receipt_sent: row.receipt_sent,
             attachments: headers.attachments,
             scheduled_at: row.scheduled_at,

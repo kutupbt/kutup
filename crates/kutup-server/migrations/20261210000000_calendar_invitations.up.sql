@@ -31,3 +31,9 @@ CREATE TABLE calendar_invite_settings (
     auto_add boolean NOT NULL DEFAULT true,
     updated_at timestamp with time zone NOT NULL DEFAULT now()
 );
+
+-- Whether a received message's From passed DMARC (or a Kutup account sent
+-- it), as the receiver judged on arrival: Mail applies a calendar update,
+-- cancellation or reply on view only from such a sender (calendar-e4.md,
+-- security review H2).
+ALTER TABLE mail_messages ADD COLUMN from_authenticated boolean NOT NULL DEFAULT false;

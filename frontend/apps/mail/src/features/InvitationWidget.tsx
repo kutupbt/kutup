@@ -42,6 +42,8 @@ export function InvitationWidgets({ account, message, parsed }: { account: MailA
   const sender = message.from?.address && parsed.from?.address && message.from.address.toLowerCase() === parsed.from.address.toLowerCase() ? parsed.from.address : null
   const carrying: CarryingMessage = {
     from: sender,
+    authenticated: message.fromAuthenticated === true,
+    receivedAt: message.receivedAt,
     date: parsed.date ? parsed.date.toISOString() : message.receivedAt,
     subject: parsed.subject || message.subject,
     messageId: parsed.messageId,
@@ -88,7 +90,7 @@ function InvitationWidget({ account, text, message, messageId }: { account: Mail
       const first = await widgetState({ account, calendars: list, outcome, message })
       // What Proton's widget does on its own: an update or cancellation
       // applied, an outside reply written, a new one added as pending.
-      const changed = await applyOnView({ session, account, calendars: list, state: first, autoAdd: settings.data!.autoAdd }).catch(() => false)
+      const changed = await applyOnView({ session, account, calendars: list, state: first, autoAdd: settings.data!.autoAdd, message }).catch(() => false)
       // A reply older than the answer stored: out of date (Proton's).
       if (changed === 'stale' && first.kind === 'organizer') return { ...first, status: 'outdated' }
       return changed ? widgetState({ account, calendars: list, outcome, message }) : first
@@ -241,6 +243,7 @@ function InvitationWidget({ account, text, message, messageId }: { account: Mail
       noEvent: t('invitation.widget.replyNoEvent'),
       partyCrasher: t('invitation.widget.partyCrasherOrganizer', { email: s.attendee.email }),
       notFromAttendee: t('invitation.widget.replyNotFromAttendee'),
+      unverifiedSender: t('invitation.widget.replyUnverifiedSender'),
       occurrence: `${t('invitation.widget.repliedOccurrence', { name })} ${t('invitation.widget.occurrenceNotApplied')}`,
       counter: t('invitation.widget.counter', { name }),
     }
@@ -286,6 +289,11 @@ function InvitationWidget({ account, text, message, messageId }: { account: Mail
         {statusText}
       </p>
       {s.timing !== 'upcoming' ? <p className="text-xs text-muted-foreground">{s.timing === 'ended' ? t('invitation.widget.ended') : t('invitation.widget.inProgress')}</p> : null}
+      {!s.fromOrganizer && !s.kutup && (s.status === 'updated' || s.status === 'cancelled' || (s.status === 'new' && !s.stored)) ? (
+        <Alert variant="warn" data-testid="invitation-unverified">
+          {t('invitation.widget.notFromOrganizer')}
+        </Alert>
+      ) : null}
       {crasher ? <Alert variant="warn">{s.kutup ? t('invitation.widget.partyCrasherKutup') : t('invitation.widget.partyCrasher')}</Alert> : null}
       {canAnswer ? (
         owned.length === 0 ? (

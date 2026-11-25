@@ -2236,6 +2236,20 @@ async fn insert_as(
     address_id: Uuid,
     checked: &Checked,
 ) -> AppResult<Uuid> {
+    // The unique key covers the calendar's own events only; an invitation's
+    // copy held here with this UID would be grouped with the new event, so
+    // it is refused too.
+    if crate::handlers::calendar_invitations::uid_from_another_home(
+        tx,
+        calendar,
+        &checked.shared.uid,
+        calendar,
+    )
+    .await?
+    {
+        return Err(AppError::conflict("an event with this UID is in the calendar")
+            .with_details(serde_json::json!({ "code": "uidTaken" })));
+    }
     let event = &checked.event;
     let text = |data: &[u8]| String::from_utf8(data.to_vec()).expect("checked as text");
     let shared = &checked.shared;

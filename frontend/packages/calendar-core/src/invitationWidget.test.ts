@@ -17,8 +17,10 @@ interface Store {
   replyOutcome: 'applied' | 'stale'
   invited: unknown[]
   opened: unknown
+  openedByRow?: (row: { uid: string; organizer?: string }) => unknown
+  kutupAddresses: string[]
 }
-const store = vi.hoisted((): Store => ({ series: new Map(), syncs: [], replies: [], replyOutcome: 'applied', invited: [], opened: null }))
+const store = vi.hoisted((): Store => ({ series: new Map(), syncs: [], replies: [], replyOutcome: 'applied', invited: [], opened: null, kutupAddresses: [] }))
 vi.mock('./api', () => ({
   activeAddressId: () => Promise.resolve('a1'),
   beforeEventWrite: () => Promise.resolve(),
@@ -41,7 +43,10 @@ vi.mock('./invitations', async (actual) => {
       return Promise.resolve(store.replyOutcome)
     },
     loadInvitedRows: () => Promise.resolve(store.invited),
-    openInvitedEvent: () => Promise.resolve(store.opened),
+    openInvitedEvent: (_account: unknown, row: { uid: string; organizer?: string }) =>
+      Promise.resolve(store.openedByRow?.(row) ?? store.opened),
+    kutupInvitees: (_account: unknown, attendees: { email: string }[]) =>
+      Promise.resolve(attendees.filter((a) => store.kutupAddresses.includes(a.email)).map((a) => ({ address: a.email, publicKey: 'k' }))),
     invitationLimits: () => Promise.resolve({ attendeesPerEvent: 100, invitationCountMax: 499, busyShownMax: 10, invitationIcsMaxBytes: 1 << 20 }),
   }
 })
@@ -131,7 +136,14 @@ function invitation(method: Invitation['method'], over: Partial<Invitation> = {}
   }
 }
 
-const message = { from: 'zeynep@outside.example', date: '2026-11-20T08:00:00Z', subject: 'Invitation', messageId: 'm1@outside.example' }
+const message = {
+  from: 'zeynep@outside.example',
+  authenticated: true,
+  receivedAt: '2026-11-20T08:00:05Z',
+  date: '2026-11-20T08:00:00Z',
+  subject: 'Invitation',
+  messageId: 'm1@outside.example',
+}
 
 beforeEach(() => {
   store.series.clear()
@@ -140,6 +152,8 @@ beforeEach(() => {
   store.replyOutcome = 'applied'
   store.invited = []
   store.opened = null
+  store.openedByRow = undefined
+  store.kutupAddresses = []
 })
 
 describe("the attendee's side", () => {
@@ -148,7 +162,7 @@ describe("the attendee's side", () => {
     store.series.set('c1:u1', [stored({ organizer: me }, { organizer: `mailto:${me}` })])
     const state = await widgetState({ account, calendars: [calendar], outcome: invitation('CANCEL', {}, { sequence: 9 }), message })
     expect(state.kind === 'attendee' && state.stored).toBe(null)
-    expect(await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false })).toBe(false)
+    expect(await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false, message })).toBe(false)
     expect(store.syncs).toEqual([])
   })
 
@@ -161,10 +175,10 @@ describe("the attendee's side", () => {
     store.series.set('c1:u1', [stored()])
     const retitled = await widgetState({ account, calendars: [calendar], outcome: invitation('REQUEST', {}, { dtstamp: '2026-11-21T08:00:00Z', summary: 'Coffee, room 2' }), message })
     expect(retitled.kind === 'attendee' && retitled.status).toBe('updated')
-    expect(await applyOnView({ session, account, calendars: [calendar], state: retitled, autoAdd: false })).toBe(true)
+    expect(await applyOnView({ session, account, calendars: [calendar], state: retitled, autoAdd: false, message })).toBe(true)
     expect(store.syncs).toMatchObject([{ update: { id: 'e1', invitation: { resetAnswers: false } } }])
     const moved = await widgetState({ account, calendars: [calendar], outcome: invitation('REQUEST', {}, { sequence: 1, start: { utc: '2027-01-11T10:00:00Z' } }), message })
-    await applyOnView({ session, account, calendars: [calendar], state: moved, autoAdd: false })
+    await applyOnView({ session, account, calendars: [calendar], state: moved, autoAdd: false, message })
     expect(store.syncs[1]).toMatchObject({ update: { invitation: { resetAnswers: true } } })
   })
 
@@ -172,12 +186,12 @@ describe("the attendee's side", () => {
     store.series.set('c1:u1', [stored({}, { sequence: 2 })])
     const old = await widgetState({ account, calendars: [calendar], outcome: invitation('REQUEST', {}, { sequence: 1 }), message })
     expect(old.kind === 'attendee' && old.status).toBe('outdated')
-    expect(await applyOnView({ session, account, calendars: [calendar], state: old, autoAdd: true })).toBe(false)
+    expect(await applyOnView({ session, account, calendars: [calendar], state: old, autoAdd: true, message })).toBe(false)
     store.series.clear()
     const fresh = await widgetState({ account, calendars: [calendar], outcome: invitation('REQUEST'), message })
-    expect(await applyOnView({ session, account, calendars: [calendar], state: fresh, autoAdd: false })).toBe(false)
+    expect(await applyOnView({ session, account, calendars: [calendar], state: fresh, autoAdd: false, message })).toBe(false)
     expect(store.syncs).toEqual([])
-    expect(await applyOnView({ session, account, calendars: [calendar], state: fresh, autoAdd: true })).toBe(true)
+    expect(await applyOnView({ session, account, calendars: [calendar], state: fresh, autoAdd: true, message })).toBe(true)
     expect(store.syncs).toMatchObject([{ create: { invitation: { invitees: [] } } }])
   })
 
@@ -186,6 +200,38 @@ describe("the attendee's side", () => {
     store.opened = { verified: true, organizer: 'someone@kutup.test', fields: fields(), invitation: { free: vi.fn() }, row: { copies: [] } }
     const state = await widgetState({ account, calendars: [calendar], outcome: invitation('REQUEST'), message })
     expect(state.kind === 'attendee' && state.kutup).toBe(null)
+  })
+
+  // Security review H2: a co-attendee or anyone knowing the UID writes
+  // ORGANIZER as the real organizer; only a DMARC-verified mail from the
+  // organizer itself changes the calendar on view.
+  it('changes nothing on view unless the mail verifiably comes from the organizer', async () => {
+    store.series.set('c1:u1', [stored()])
+    const outcome = invitation('CANCEL', {}, { sequence: 3 })
+    const coAttendee = await widgetState({ account, calendars: [calendar], outcome, message: { ...message, from: 'mallory@outside.example' } })
+    const spoofed = await widgetState({ account, calendars: [calendar], outcome, message: { ...message, authenticated: false } })
+    for (const state of [coAttendee, spoofed]) {
+      expect(state.kind === 'attendee' && state.fromOrganizer).toBe(false)
+      expect(await applyOnView({ session, account, calendars: [calendar], state, autoAdd: true, message })).toBe(false)
+    }
+    expect(store.syncs).toEqual([])
+    const real = await widgetState({ account, calendars: [calendar], outcome, message })
+    expect(real.kind === 'attendee' && real.fromOrganizer).toBe(true)
+    expect(await applyOnView({ session, account, calendars: [calendar], state: real, autoAdd: false, message })).toBe(true)
+  })
+
+  it('takes a Kutup invitation as cancelled only from its signed state, not a mail (L1)', async () => {
+    store.invited = [{ uid: 'u1' }]
+    store.opened = { verified: true, organizer: 'zeynep@outside.example', fields: fields(), invitation: { free: vi.fn() }, row: { copies: [] } }
+    const state = await widgetState({ account, calendars: [calendar], outcome: invitation('CANCEL'), message })
+    expect(state.kind === 'attendee' && state.status).toBe('new')
+  })
+
+  it('finds a Kutup invitation among rows of several organizers sharing a UID (L2)', async () => {
+    store.invited = [{ uid: 'u1', organizer: 'mallory@kutup.test' }, { uid: 'u1', organizer: 'zeynep@outside.example' }]
+    store.openedByRow = (row) => ({ verified: true, organizer: row.organizer, fields: fields(), invitation: { free: vi.fn() }, row: { copies: [] } })
+    const state = await widgetState({ account, calendars: [calendar], outcome: invitation('REQUEST'), message })
+    expect(state.kind === 'attendee' && state.kutup?.organizer).toBe('zeynep@outside.example')
   })
 })
 
@@ -198,10 +244,10 @@ describe("the organizer's side", () => {
     store.series.set('c1:u1', [mine()])
     const state = await widgetState({ account, calendars: [calendar], outcome: reply(), message })
     expect(state.kind === 'organizer' && state.status).toBe('applied')
-    expect(await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false })).toBe(true)
+    expect(await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false, message })).toBe(true)
     expect(store.replies).toMatchObject([{ email: 'zeynep@outside.example', partstat: 'accepted' }])
     store.replyOutcome = 'stale'
-    expect(await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false })).toBe('stale')
+    expect(await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false, message })).toBe('stale')
   })
 
   it("never applies a reply sent by someone other than its attendee, a party crasher's, or a marked Kutup one", async () => {
@@ -217,8 +263,33 @@ describe("the organizer's side", () => {
     expect(crasher.kind === 'organizer' && crasher.status).toBe('partyCrasher')
     const marked = await widgetState({ account, calendars: [calendar], outcome: reply({ kutupReply: true }), message })
     expect(marked.kind === 'organizer' && marked.status).toBe('kutupReply')
-    for (const state of [forged, crasher, marked]) await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false })
+    for (const state of [forged, crasher, marked]) await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false, message })
     expect(store.replies).toEqual([])
+  })
+
+  it('records a reply only from a DMARC-verified sender (H2)', async () => {
+    store.series.set('c1:u1', [mine()])
+    const state = await widgetState({ account, calendars: [calendar], outcome: reply(), message: { ...message, authenticated: false } })
+    expect(state.kind === 'organizer' && state.status).toBe('unverifiedSender')
+    expect(await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false, message })).toBe(false)
+    expect(store.replies).toEqual([])
+  })
+
+  it("never writes a Kutup attendee's row from a mail: they answer in it themselves (H2)", async () => {
+    store.series.set('c1:u1', [mine()])
+    store.kutupAddresses = ['zeynep@outside.example']
+    const state = await widgetState({ account, calendars: [calendar], outcome: reply(), message })
+    expect(await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false, message })).toBe(false)
+    expect(store.replies).toEqual([])
+  })
+
+  it('dates a reply no later than its arrival (H2: a reply dated ahead would make the real answer look stale)', async () => {
+    store.series.set('c1:u1', [mine()])
+    const ahead = reply()
+    if ('read' in ahead) ahead.read.fields = { ...ahead.read.fields, dtstamp: '2026-11-21T07:00:00Z' }
+    const state = await widgetState({ account, calendars: [calendar], outcome: ahead, message })
+    await applyOnView({ session, account, calendars: [calendar], state, autoAdd: false, message })
+    expect(store.replies).toMatchObject([{ dtstamp: '2026-11-20T08:00:05.000Z' }])
   })
 
   it('only reaches an event this account organizes', async () => {

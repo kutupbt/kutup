@@ -1,3 +1,4 @@
+ALTER TABLE mail_messages DROP COLUMN from_authenticated;
 DROP TABLE calendar_invite_settings;
 ALTER TABLE calendar_events DROP COLUMN author_address_id;
 ALTER TABLE calendar_event_invitees DROP CONSTRAINT calendar_event_invitees_attendee_fkey;

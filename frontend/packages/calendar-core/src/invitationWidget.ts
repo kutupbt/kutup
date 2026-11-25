@@ -28,6 +28,7 @@ import {
   canonicalEmail,
   defaultCalendar,
   invitationLimits,
+  kutupInvitees,
   loadInvitedRows,
   openInvitedEvent,
   putAnswer,
@@ -58,6 +59,10 @@ export function calendarParts(attachments: { filename: string; mimeType: string;
 export interface CarryingMessage {
   /** The sender's address (the From the message was delivered with). */
   from: string | null
+  /** The From passed DMARC on arrival, or a Kutup account sent it. */
+  authenticated: boolean
+  /** When the server received it (not the sender's own Date). */
+  receivedAt: string | null
   date: string | null
   subject: string
   messageId: string | null
@@ -81,6 +86,12 @@ export type WidgetState =
       stored: Stored | null
       kutup: InvitedEvent | null
       status: 'new' | 'updated' | 'outdated' | 'cancelled'
+      /**
+       * The mail verifiably comes from the invitation's organizer (its From
+       * is the ORGANIZER and passed DMARC): only then does Mail apply an
+       * update or a cancellation, or add it, on its own.
+       */
+      fromOrganizer: boolean
       /** This account's answer as its calendar holds it. */
       answer: Partstat | null
       timing: 'upcoming' | 'inProgress' | 'ended'
@@ -90,7 +101,7 @@ export type WidgetState =
       invitation: Invitation
       attendee: InvitationAttendee
       stored: Stored | null
-      status: 'applied' | 'kutupReply' | 'outdated' | 'noEvent' | 'partyCrasher' | 'notFromAttendee' | 'occurrence' | 'counter'
+      status: 'applied' | 'kutupReply' | 'outdated' | 'noEvent' | 'partyCrasher' | 'notFromAttendee' | 'unverifiedSender' | 'occurrence' | 'counter'
     }
 
 /** The widget's error text key for a refusal, as Proton's `getICSInvitationErrorMessage`. */
@@ -223,6 +234,9 @@ export async function widgetState(args: {
     const stored = await findStored(account, calendars.filter((c) => c.owned), invitation.fields)
     const base = { kind: 'organizer' as const, invitation, attendee, stored }
     if (!message.from || canonicalEmail(message.from) !== attendee.email) return { ...base, status: 'notFromAttendee' }
+    // A From header alone is anyone's to write: the answer counts only from a
+    // sender DMARC vouched for.
+    if (!message.authenticated) return { ...base, status: 'unverifiedSender' }
     // Only an event this account organizes, at its home, signed by it.
     if (!stored || !stored.event.home || stored.event.organizer === null || !account.isOwnAddress(stored.event.organizer)) {
       // A reply to one occurrence of a series this account holds.
@@ -247,12 +261,15 @@ export async function widgetState(args: {
   let kutup: InvitedEvent | null = null
   if (!stored || stored.event.home === false) {
     try {
-      const row = (await loadInvitedRows()).find((r) => r.uid === invitation.fields.uid)
-      if (row) {
+      // Every row with the UID: another organizer may use the same one.
+      for (const row of (await loadInvitedRows()).filter((r) => r.uid === invitation.fields.uid)) {
         const opened = await openInvitedEvent(account, row)
         // The mail only finds it: it counts when its signed organizer is the one the mail names.
-        if (opened.verified && opened.organizer === organizer && sameRecurrence(opened.fields.recurrenceId, invitation.fields.recurrenceId)) kutup = opened
-        else opened.invitation.free()
+        if (opened.verified && opened.organizer === organizer && sameRecurrence(opened.fields.recurrenceId, invitation.fields.recurrenceId)) {
+          kutup = opened
+          break
+        }
+        opened.invitation.free()
       }
     } catch {
       kutup = null
@@ -260,7 +277,10 @@ export async function widgetState(args: {
   }
   const known = stored?.event.fields ?? kutup?.fields ?? null
   let status: 'new' | 'updated' | 'outdated' | 'cancelled' = 'new'
-  if (invitation.method === 'CANCEL') status = 'cancelled'
+  // A Kutup invitation is cancelled when its signed state says so, never by
+  // a mail's METHOD alone (anyone can send a CANCEL naming its UID).
+  if (kutup) status = kutup.fields.status === 'cancelled' ? 'cancelled' : 'new'
+  else if (invitation.method === 'CANCEL') status = 'cancelled'
   else if (known && isOutdated(invitation.fields, known)) status = 'outdated'
   // An update: a higher SEQUENCE (the event moved), or the same and a newer
   // DTSTAMP (its title, place or description changed, the answer kept).
@@ -270,7 +290,8 @@ export async function widgetState(args: {
     const mine = (await attendeeAnswers(account, stored.calendar, stored.event).catch(() => [])).find((a) => account.isOwnAddress(a.email))
     answer = mine && mine.partstat !== 'needs-action' ? mine.partstat : null
   }
-  return { kind: 'attendee', invitation, me, stored, kutup, status, answer, timing: timing(invitation.fields) }
+  const fromOrganizer = message.authenticated && !!message.from && canonicalEmail(message.from) === organizer
+  return { kind: 'attendee', invitation, me, stored, kutup, status, fromOrganizer, answer, timing: timing(invitation.fields) }
 }
 
 // ----- actions -----
@@ -385,11 +406,18 @@ export async function applyOnView(args: {
   calendars: Calendar[]
   state: WidgetState
   autoAdd: boolean
+  message: CarryingMessage
 }): Promise<boolean | 'stale'> {
-  const { session, account, calendars, state } = args
+  const { session, account, calendars, state, message } = args
   if (state.kind === 'organizer') {
     if (state.status !== 'applied' && !(state.status === 'counter' && state.attendee.partstat !== 'needs-action')) return false
     if (!state.stored || state.attendee.partstat === 'needs-action' || state.attendee.partstat === 'delegated') return false
+    // A Kutup attendee answers in their own row, signed; a mail never writes it.
+    if ((await kutupInvitees(account, [{ email: state.attendee.email, name: null }]).catch(() => [null])).length > 0) return false
+    // Dated no later than its arrival: a reply dated ahead would make the
+    // attendee's real answer look stale until then.
+    const arrived = message.receivedAt ? Date.parse(message.receivedAt) : Date.now()
+    const dated = Math.min(Date.parse(state.invitation.fields.dtstamp), arrived)
     return applyReply({
       account,
       calendar: state.stored.calendar,
@@ -397,7 +425,7 @@ export async function applyOnView(args: {
       email: state.attendee.email,
       partstat: state.attendee.partstat,
       note: state.invitation.note,
-      dtstamp: state.invitation.fields.dtstamp,
+      dtstamp: new Date(dated).toISOString(),
     }).then((outcome) => (outcome === 'stale' ? 'stale' : true))
   }
   if (state.kind !== 'attendee' || state.kutup || !state.me) {
@@ -405,6 +433,9 @@ export async function applyOnView(args: {
     return false
   }
   if (state.status === 'outdated') return false
+  // Only what verifiably comes from the organizer changes the calendar by
+  // itself; anything else the person applies by answering.
+  if (!state.fromOrganizer) return false
   if (state.stored && state.stored.event.home) {
     if (state.status === 'cancelled') {
       if (state.stored.event.fields.status === 'cancelled') return false

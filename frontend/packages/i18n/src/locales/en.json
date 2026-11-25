@@ -608,6 +608,8 @@
       "replyNoEvent": "This response is for an event that no longer exists.",
       "replyMismatch": "This response doesn't match your invitation details.",
       "replyNotFromAttendee": "This response doesn't come from the address it answers for.",
+      "replyUnverifiedSender": "This response couldn't be verified as sent from its address, so it wasn't recorded.",
+      "notFromOrganizer": "This message couldn't be verified as sent by the organizer, so your calendar wasn't changed. Answer the invitation to add or update it.",
       "partyCrasher": "Your email address is not in the original participants list.",
       "partyCrasherKutup": "Your email address is not in the original participants list, so you can't answer.",
       "partyCrasherOrganizer": "{{email}} is not in the participants list.",

@@ -86,6 +86,8 @@ export interface MailMessage {
   unsubscribed?: boolean
   /** From a list that offers a way out (noted on arrival): moving it to Spam may unsubscribe (Proton's SpamAction). */
   unsubscribable?: boolean
+  /** Its From is the sender's own: DMARC passed on arrival, or a Kutup account sent it. */
+  fromAuthenticated?: boolean
   /** The reader sent the read receipt the sender asked for. */
   receiptSent?: boolean
   /** Its attached files, for the list. */

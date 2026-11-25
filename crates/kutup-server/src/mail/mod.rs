@@ -699,10 +699,10 @@ pub(crate) async fn insert_message(
              size_bytes, sent_at, headers, message_id_hash, in_reply_to_hash,
              references_hashes, search_tokens,
              attachment_count, external_recipients, group_id, key_packet, sent_by_account_id, unsubscribable,
-             expires_at, notify_at, forwarded)
+             expires_at, notify_at, forwarded, from_authenticated)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
                  $18, $19, $20, $21, $22, $23,
-                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END, $24)
+                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END, $24, $25)
          ON CONFLICT (address_id, message_id_hash)
              WHERE direction = 'inbound' AND message_id_hash IS NOT NULL
          DO NOTHING
@@ -732,6 +732,7 @@ pub(crate) async fn insert_message(
     .bind(readable.list_unsubscribe)
     .bind(readable.expires_at)
     .bind(message.forwarded_from.is_some())
+    .bind(readable.from_authenticated)
     .fetch_optional(&mut **tx)
     .await?;
     if inserted.is_none() {

@@ -752,6 +752,32 @@ pub struct AdoptIn {
     pub calendar_encrypted: Option<EventPartV1>,
 }
 
+/// Whether `calendar` holds an event with `uid` that comes from a home
+/// calendar other than `home` (the owner's own events have this calendar as
+/// home; an invitation's copy has the organizer's). Events are found and
+/// grouped by UID within a calendar (a series and its changed occurrences,
+/// replies), so every event with one UID there must come from one home: a
+/// copy carrying the UID of the owner's own meeting would take its
+/// occurrences over, and the owner's new event would join another
+/// organizer's series.
+pub(crate) async fn uid_from_another_home(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    calendar: Uuid,
+    uid: &str,
+    home: Uuid,
+) -> AppResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM calendar_events e
+           JOIN calendar_shared_events se ON se.id = e.shared_event_id
+          WHERE e.calendar_id = $1 AND se.uid = $2 AND se.home_calendar_id <> $3)",
+    )
+    .bind(calendar)
+    .bind(uid)
+    .bind(home)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
 /// `POST /api/v1/calendar/calendars/{id}/events/adopt` — an invitee's own
 /// copy of an event they were invited to, in a calendar they own (Q-6:
 /// never one shared with them): its key packets to the calendar's newest
@@ -807,8 +833,8 @@ pub async fn adopt(
             "an invitation goes into a calendar of your own",
         ));
     }
-    let shared: Option<(String, String)> = sqlx::query_as(
-        "SELECT se.uid, se.shared_signed FROM calendar_event_invitees i
+    let shared: Option<(String, String, Uuid)> = sqlx::query_as(
+        "SELECT se.uid, se.shared_signed, se.home_calendar_id FROM calendar_event_invitees i
            JOIN calendar_shared_events se ON se.id = i.shared_event_id
           WHERE i.shared_event_id = $1 AND i.invitee_account_id = $2",
     )
@@ -816,7 +842,7 @@ pub async fn adopt(
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((uid, shared_signed)) = shared else {
+    let Some((uid, shared_signed, home)) = shared else {
         return Err(AppError::not_found("not found"));
     };
     let keys: Vec<&[u8]> = author_keys.iter().map(Vec::as_slice).collect();
@@ -885,6 +911,12 @@ pub async fn adopt(
         return Err(coded(
             AppError::conflict("the event is in one of your calendars already"),
             "alreadyAdopted",
+        ));
+    }
+    if uid_from_another_home(&mut tx, calendar, &uid, home).await? {
+        return Err(coded(
+            AppError::conflict("this calendar holds another event with this event's UID"),
+            "uidTaken",
         ));
     }
     let count: i64 =
