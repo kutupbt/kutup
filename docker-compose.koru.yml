@@ -62,7 +62,9 @@ services:
       CHAT_SFU_TURN_DOMAIN: ${CHAT_SFU_TURN_DOMAIN:-}
       CHAT_TURN_URLS: ${CHAT_TURN_URLS:-}
     volumes:
-      - ./nginx/certs:/certs:ro
+      # Writable for KORU_TLS=acme, whose export keeps the certificate here
+      # for every service that reads it (koru/render.sh).
+      - ./nginx/certs:/certs
       # The ACME account and certificates (KORU_TLS=acme).
       - koru_state:/var/lib/koru
     # The configuration is written at start into a memory file system.

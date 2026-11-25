@@ -108,19 +108,18 @@ the `koru` container, restore the edge lines of `.env` from the backup, and
 
 - **Certificate renewal stopped with the switch.** It ran through
   `docker-compose.acme.yml` and nginx's ACME webroot, which Koru does not
-  serve. The certificate on kutup.dev is valid until 2027-01-20. The fix
-  keeps certbot rather than moving to Koru's own ACME, because three other
-  services read the same files: with Koru's ACME, coturn, LiveKit and
-  Stalwart would all have to read Koru's state volume, and Stalwart's setup
-  would have to change. Instead `docker-compose.koru-certbot.yml` runs the
-  same certbot (same account and volumes), Koru answers its HTTP-01
-  challenges from the shared webroot (on every site, since Let's Encrypt
-  follows Koru's redirect to HTTPS, and on a plain-HTTP catch-all for the
-  TURN names, which have no site), certbot writes the key owned by Koru's
-  user, and a systemd path unit reloads Koru and restarts the relays when
-  the certificate changes; Stalwart already watches the files. To do on
-  kutup.dev: add the file to `COMPOSE_FILE`, install the path unit, and run
-  `certbot renew --dry-run` against the staging service.
+  serve. The certificate on kutup.dev is valid until 2027-01-20. Three
+  other services read the same files (coturn, LiveKit, Stalwart), so the
+  first fix kept certbot behind Koru (#449: Koru answers its challenges from
+  the shared webroot). Koru then gained a certificate export at Kutup's
+  request (2026-11-25), so the chosen fix is Koru's own ACME: one
+  certificate for every name, exported into `nginx/certs/` where everyone
+  already reads it, the existing files serving until Koru's first
+  certificate replaces them, and a systemd path unit reloading Koru and the
+  relays on each new one (Stalwart watches the files). One ACME client
+  instead of two, and no shared webroot. To do on kutup.dev: the switch,
+  straight to production Let's Encrypt (staging would replace the files
+  with an untrusted certificate; a failed order leaves them as they are).
 - **Block mode** after some days in detect mode, once the events show only
   attacks. `/api/csp-report` bodies (URLs and script samples) are a likely
   false positive to check first.

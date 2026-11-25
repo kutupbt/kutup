@@ -126,10 +126,14 @@ def main() -> None:
     check(sfu["read_timeout_secs"] == 3600 and sfu["upstreams"] == ["http://host.docker.internal:7880"], "SFU socket for the whole call")
 
     acme = config(KORU_TLS="acme", KORU_MODE="block", KUTUP_ACME_STAGING="1", KUTUP_ACME_EMAIL="ops@example.org")
-    check(all("tls" not in s for s in acme["site"]), "acme: sites take the [server.acme] certificate")
+    check(all(s.get("tls") == {"cert": "/certs/fullchain.pem", "key": "/certs/privkey.pem"}
+              for s in acme["site"]), "acme: sites read the exported files, as with files")
     certs = acme["server"]["acme"]["certificate"]
-    check("editor.example.org" in certs[0]["hosts"] and "sfu.example.org" in certs[0]["hosts"], "acme: web names")
-    check(certs[1]["hosts"] == ["turn.example.org", "sfu-turn.example.org"], "acme: relay names apart")
+    check(len(certs) == 1, "acme: one certificate, as certbot's")
+    for name in ("editor.example.org", "sfu.example.org", "turn.example.org", "sfu-turn.example.org"):
+        check(name in certs[0]["hosts"], f"acme: {name} on it")
+    check(certs[0].get("export") == {"dir": "/certs", "owner": "65532:65532", "mode": "0600"},
+          "acme: exported to /certs for the relays and Stalwart, owned by Koru's user")
     check("staging" in acme["server"]["acme"]["directory"], "acme: staging")
     check(all(s["mode"] == "block" for s in acme["site"]), "KORU_MODE=block")
 
