@@ -764,7 +764,11 @@ fn invitations_between_kutup_users() {
 
     // Security review H1: in one calendar every event with a UID comes from
     // one home, so Bea's own event can't take the invitation's UID there.
-    let own = seal_plain(&bea_key, &bea, &fields(&uid, None, "2026-12-11T10:00:00", 0));
+    let own = seal_plain(
+        &bea_key,
+        &bea,
+        &fields(&uid, None, "2026-12-11T10:00:00", 0),
+    );
     let r = sync(
         &c,
         &base,
@@ -772,11 +776,19 @@ fn invitations_between_kutup_users() {
         &bea_cal,
         json!({ "create": { "id": uuid::Uuid::new_v4(), "event": own } }),
     );
-    assert_eq!((r["status"].as_u64(), r["code"].as_str()), (Some(409), Some("uidTaken")), "{r}");
+    assert_eq!(
+        (r["status"].as_u64(), r["code"].as_str()),
+        (Some(409), Some("uidTaken")),
+        "{r}"
+    );
 
     // Security review M4: an import overwriting the invitation would strip
     // its attendees and their copies: refused.
-    let import = seal_plain(&ada_key, &ada, &fields(&uid, None, "2026-12-12T10:00:00", 0));
+    let import = seal_plain(
+        &ada_key,
+        &ada,
+        &fields(&uid, None, "2026-12-12T10:00:00", 0),
+    );
     let r = sync(
         &c,
         &base,

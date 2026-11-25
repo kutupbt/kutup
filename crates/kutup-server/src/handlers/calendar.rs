@@ -1951,8 +1951,17 @@ async fn apply(
             .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            let Some((revision, own_bytes, shared_id, shared_bytes, home, uid, changed, author, invited)) =
-                current
+            let Some((
+                revision,
+                own_bytes,
+                shared_id,
+                shared_bytes,
+                home,
+                uid,
+                changed,
+                author,
+                invited,
+            )) = current
             else {
                 return Err(AppError::not_found("not found"));
             };
@@ -2269,8 +2278,10 @@ async fn insert_as(
     )
     .await?
     {
-        return Err(AppError::conflict("an event with this UID is in the calendar")
-            .with_details(serde_json::json!({ "code": "uidTaken" })));
+        return Err(
+            AppError::conflict("an event with this UID is in the calendar")
+                .with_details(serde_json::json!({ "code": "uidTaken" })),
+        );
     }
     let event = &checked.event;
     let text = |data: &[u8]| String::from_utf8(data.to_vec()).expect("checked as text");

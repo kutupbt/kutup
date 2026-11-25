@@ -472,9 +472,14 @@ pub(crate) async fn write_invitation(
             .bind(organizer)
             .fetch_one(&mut **tx)
             .await?;
-            if held >= CALENDAR_INVITATIONS_PER_ACCOUNT.load_for(&mut **tx, *account).await?
+            if held
+                >= CALENDAR_INVITATIONS_PER_ACCOUNT
+                    .load_for(&mut **tx, *account)
+                    .await?
                 || from_organizer
-                    >= CALENDAR_INVITATIONS_PER_ORGANIZER.load_for(&mut **tx, *account).await?
+                    >= CALENDAR_INVITATIONS_PER_ORGANIZER
+                        .load_for(&mut **tx, *account)
+                        .await?
             {
                 continue;
             }
@@ -731,8 +736,12 @@ pub async fn leave(
     .await?;
     let bytes: i64 = gone.iter().sum();
     if bytes != 0 {
-        crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(user_id), -bytes)
-            .await?;
+        crate::storage_pool::charge(
+            &mut *tx,
+            crate::storage_pool::Payer::Account(user_id),
+            -bytes,
+        )
+        .await?;
     }
     sqlx::query(
         "DELETE FROM calendar_event_invitees WHERE shared_event_id = $1 AND invitee_account_id = $2",
