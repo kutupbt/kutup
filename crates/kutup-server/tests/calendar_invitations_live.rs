@@ -165,6 +165,14 @@ struct Sealed {
     sealed: cal::SealedEvent,
 }
 
+/// A plain event (no organizer, no attendees), as an import makes one.
+fn seal_plain(calendar: &UnlockedCalendarKey, author: &Person, fields: &EventFieldsV1) -> Value {
+    let sealed = calendar
+        .seal_event(&fields.to_parts().unwrap(), &author.secret_key, None, None)
+        .unwrap();
+    serde_json::to_value(SealedEventV1::of(&sealed)).unwrap()
+}
+
 fn seal_invitation(
     calendar: &UnlockedCalendarKey,
     organizer: &Person,
@@ -756,39 +764,25 @@ fn invitations_between_kutup_users() {
 
     // Security review H1: in one calendar every event with a UID comes from
     // one home, so Bea's own event can't take the invitation's UID there.
-    let own = seal_invitation(
-        &bea_key,
-        &bea,
-        &fields(&uid, None, "2026-12-11T10:00:00", 0),
-        &[],
-        &[],
-        None,
-    );
+    let own = seal_plain(&bea_key, &bea, &fields(&uid, None, "2026-12-11T10:00:00", 0));
     let r = sync(
         &c,
         &base,
         &bea,
         &bea_cal,
-        json!({ "create": { "id": uuid::Uuid::new_v4(), "event": own.event } }),
+        json!({ "create": { "id": uuid::Uuid::new_v4(), "event": own } }),
     );
     assert_eq!((r["status"].as_u64(), r["code"].as_str()), (Some(409), Some("uidTaken")), "{r}");
 
     // Security review M4: an import overwriting the invitation would strip
     // its attendees and their copies: refused.
-    let import = seal_invitation(
-        &ada_key,
-        &ada,
-        &fields(&uid, None, "2026-12-12T10:00:00", 0),
-        &[],
-        &[],
-        None,
-    );
+    let import = seal_plain(&ada_key, &ada, &fields(&uid, None, "2026-12-12T10:00:00", 0));
     let r = sync(
         &c,
         &base,
         &ada,
         &ada_cal,
-        json!({ "create": { "id": uuid::Uuid::new_v4(), "event": import.event, "overwrite": true } }),
+        json!({ "create": { "id": uuid::Uuid::new_v4(), "event": import, "overwrite": true } }),
     );
     assert_eq!(r["code"], "invitationOverwrite", "{r}");
 
@@ -903,7 +897,8 @@ fn an_outside_invitation_kept_by_its_attendee_and_the_settings() {
         .json()
         .unwrap()
     };
-    assert_eq!(get(), json!({ "inviteLocale": null, "autoAdd": true }));
+    // Off until turned on, as Proton's (security review M5).
+    assert_eq!(get(), json!({ "inviteLocale": null, "autoAdd": false }));
     let put = |body: Value| {
         bearer(
             c.put(format!("{base}/api/v1/calendar/settings/invitations")),

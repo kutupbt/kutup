@@ -37,6 +37,14 @@ test('calendar invitations: a Kutup attendee gets the event at once, answers it,
   const ada = await calendarAccount(browser, 'calinvada', PASSWORD)
   const bea = await calendarAccount(browser, 'calinvbea', PASSWORD)
 
+  // Bea turns on "Add to calendar and mark as pending" (off by default, as Proton's).
+  await bea.page.getByRole('button', { name: 'Settings' }).first().click()
+  const settings = bea.page.getByRole('dialog', { name: 'Settings' })
+  await expect(settings.getByTestId('settings-auto-add')).not.toBeChecked()
+  await settings.getByTestId('settings-auto-add').click()
+  await expect(bea.page.getByText('Preference saved')).toBeVisible({ timeout: 30_000 })
+  await bea.page.keyboard.press('Escape')
+
   // Ada invites Bea.
   await newEventWith(ada.page, 10, 'Plan the trip', bea.account.address)
   await expect(eventsToday(ada.page).filter({ hasText: 'Plan the trip' })).toBeVisible({ timeout: 30_000 })

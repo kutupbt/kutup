@@ -17,11 +17,10 @@ test('mail invitations: answered from the widget, the reply read by the organize
   const ada = await calendarAccount(browser, 'mailinvada', PASSWORD)
   const bea = await calendarAccount(browser, 'mailinvbea', PASSWORD)
 
-  // Bea turns off "Add to calendar and mark as pending".
+  // "Add to calendar and mark as pending" is off until turned on (as Proton's).
   await bea.page.getByRole('button', { name: 'Settings' }).first().click()
   const settings = bea.page.getByRole('dialog', { name: 'Settings' })
-  await settings.getByTestId('settings-auto-add').click()
-  await expect(bea.page.getByText('Preference saved')).toBeVisible({ timeout: 30_000 })
+  await expect(settings.getByTestId('settings-auto-add')).not.toBeChecked()
   await bea.page.keyboard.press('Escape')
 
   // Ada invites her.
