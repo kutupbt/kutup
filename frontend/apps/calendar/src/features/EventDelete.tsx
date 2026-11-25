@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { EventRefusedError, PERMISSION, deleteEvent, loadSeries, useCalendarMutation, useCalendars } from '@kutup/calendar-core/api'
-import { answerFromCopy, attendeeAnswers, cancelMessage, loadInviteSettings, sendLanguage, sendMessages } from '@kutup/calendar-core/invitations'
+import { answerFromCopy, attendeeAnswers, cancelMessage, leaveInvitation, loadInviteSettings, sendLanguage, sendMessages } from '@kutup/calendar-core/invitations'
 import { useMailAccount, usePinnedKeys } from '@kutup/mail-core/api'
 import { useRequiredSession } from '@kutup/session/store'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
@@ -87,7 +87,10 @@ export function EventDeleteFlow() {
       }
     }
     const cancel = cancelMessage(me, event, lng)
-    await deleteEvent(session, me, calendar, event)
+    // A Kutup invitation's copy: leaving removes it and the invitation from
+    // this account's list (security review M5); anything else is deleted.
+    if (event.home === false) await leaveInvitation(event.sharedEventId)
+    else await deleteEvent(session, me, calendar, event)
     if (cancel) {
       const failures = await sendMessages(me, pinned ?? (() => undefined), [cancel])
       if (failures.length) toast.error(t('invitations.notSent', { addresses: failures.map((f) => f.address).join(', ') }))

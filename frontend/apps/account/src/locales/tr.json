@@ -1079,6 +1079,8 @@
         "calendarInvitationIcsMaxBytesHint": "Postanın davet olarak okuduğu bir iletinin en büyük .ics bölümü.",
         "calendarInvitationsPerAccount": "Hesap başına tutulan davet",
         "calendarInvitationsPerAccountHint": "Bu sunucudaki kişilerden gelip bir hesabın takviminde aynı anda görünen davetler; sınırı aşınca yenileri yalnızca postayla gelir.",
+        "calendarInvitationsPerOrganizer": "Bir düzenleyiciden gelen davet",
+        "calendarInvitationsPerOrganizerHint": "Bu sunucudaki bir kişinin bir hesabın takviminde aynı anda bulundurabileceği davetler; sınırı aşınca davetleri yalnızca e-postayla gelir.",
         "calendarMaxCount": "Sayıyla en çok tekrar",
         "calendarMaxCountHint": "Yinelenen bir etkinliğin alabileceği en büyük COUNT (Proton'unki 49).",
         "calendarRemindersPerEvent": "Etkinlik başına hatırlatıcı",

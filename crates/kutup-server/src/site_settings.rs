@@ -938,9 +938,20 @@ pub const CALENDAR_INVITATIONS_PER_ACCOUNT: NumericSetting = NumericSetting {
     min: 1,
     max: 100_000,
     unit: SettingUnit::Count,
-    per_account: false,
+    per_account: true,
 };
-pub const CALENDAR_SETTINGS: [NumericSetting; 30] = [
+/// How many invitations one organizer may have open with one account at
+/// once (security review M5): one sender can't fill another's list.
+pub const CALENDAR_INVITATIONS_PER_ORGANIZER: NumericSetting = NumericSetting {
+    key: "calendar.invitations_per_organizer",
+    field: "calendarInvitationsPerOrganizer",
+    default: 100,
+    min: 1,
+    max: 100_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+pub const CALENDAR_SETTINGS: [NumericSetting; 31] = [
     CALENDARS_PER_ACCOUNT,
     CALENDAR_EVENTS_PER_CALENDAR,
     CALENDAR_SYNC_BATCH,
@@ -971,6 +982,7 @@ pub const CALENDAR_SETTINGS: [NumericSetting; 30] = [
     CALENDAR_BUSY_SHOWN_MAX,
     CALENDAR_INVITATION_ICS_MAX_BYTES,
     CALENDAR_INVITATIONS_PER_ACCOUNT,
+    CALENDAR_INVITATIONS_PER_ORGANIZER,
 ];
 
 /// How long a Chat link token, and the provisioning socket of the device

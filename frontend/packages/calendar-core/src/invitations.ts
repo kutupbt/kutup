@@ -359,6 +359,15 @@ function answersOf(attendees: Attendee[], tokens: { email: string; token: string
   })
 }
 
+/**
+ * Leaves a Kutup invitation: this account's copy and its invitee row go, so
+ * it stops counting against the account's limits and isn't listed again;
+ * the answer row stays with the last answer given (decline first).
+ */
+export async function leaveInvitation(sharedEventId: string): Promise<void> {
+  await api.delete(`/calendar/invitations/events/${encodeURIComponent(sharedEventId)}`)
+}
+
 /** Writes an answer row (`409 answerStale` when a newer one is stored). */
 export async function putAnswer(sharedEventId: string, token: string, answer: string, updatedAt: string): Promise<void> {
   await api.put(`/calendar/shared-events/${encodeURIComponent(sharedEventId)}/attendees/${encodeURIComponent(token)}`, { answer, updatedAt })
@@ -590,12 +599,21 @@ export function defaultCalendar(calendars: Calendar[]): Calendar | null {
  * listed invitation not in a calendar yet, and not declined, adopted into
  * the default calendar. Returns how many were added.
  */
+/** Invitations already looked at on this page, by shared event and the state it was looked at in. */
+const lookedAt = new Set<string>()
+
 export async function addPendingInvitations(session: Session, account: MailAccount, calendars: Calendar[]): Promise<number> {
   const target = defaultCalendar(calendars)
   if (!target) return 0
   let added = 0
   for (const row of await loadInvitedRows()) {
     if (row.copies.length > 0) continue
+    // Each listed invitation is opened once per change, not at every look
+    // (security review M5): one declined, unverified or failing stays
+    // skipped until its organizer changes it.
+    const seen = `${row.sharedEventId}:${row.sequence}:${row.sharedSigned.signature}:${row.attendees?.signature ?? ''}`
+    if (lookedAt.has(seen)) continue
+    lookedAt.add(seen)
     let invited: InvitedEvent | null = null
     try {
       invited = await openInvitedEvent(account, row)

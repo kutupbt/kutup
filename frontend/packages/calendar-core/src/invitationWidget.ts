@@ -315,14 +315,16 @@ async function storeOutside(
 ): Promise<Stored> {
   await beforeEventWrite(session)
   const existing = stored?.event
+  // An older copy of the invitation (a lower SEQUENCE, or the same and an
+  // older DTSTAMP) never replaces what is stored (security review L4).
+  const older = !!existing && isOutdated(invitation.fields, existing.fields)
   const fields: EventFields = {
-    ...(existing ? { ...existing.fields } : {}),
-    ...invitation.fields,
+    ...(older && existing ? existing.fields : { ...(existing ? existing.fields : {}), ...invitation.fields }),
     comment: existing?.fields.comment ?? null,
     organizer: invitation.organizer ? `mailto:${invitation.organizer.email}` : null,
   }
   // A cancellation lists only whom it cancels: the event keeps its list.
-  const attendees = keepAttendees && existing?.attendees ? existing.attendees : attendeesOf(invitation)
+  const attendees = (keepAttendees || older) && existing?.attendees ? existing.attendees : attendeesOf(invitation)
   const sealed = calendar.unlocked.sealInvitation(account.key, fields, attendees, [], existing?.sealed ?? null)
   const tokenOf = new Map(sealed.tokens.map((t) => [t.email, t.token]))
   const invitationIn = sealed.attendees

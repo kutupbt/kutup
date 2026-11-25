@@ -1354,6 +1354,10 @@ fn build_router(state: AppState) -> Router {
             get(handlers::calendar_invitations::invitations),
         )
         .route(
+            "/api/v1/calendar/invitations/events/:id",
+            delete(handlers::calendar_invitations::leave),
+        )
+        .route(
             "/api/v1/calendar/settings/invitations",
             get(handlers::calendar_invitations::settings)
                 .put(handlers::calendar_invitations::update_settings),

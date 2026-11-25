@@ -88,6 +88,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::calendar_invitations::adopt,
         crate::handlers::calendar_invitations::answer,
         crate::handlers::calendar_invitations::invitations,
+        crate::handlers::calendar_invitations::leave,
         crate::handlers::calendar_invitations::settings,
         crate::handlers::calendar_invitations::update_settings,
         crate::handlers::calendar_sharing::keys,

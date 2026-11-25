@@ -39,7 +39,7 @@ use crate::handlers::trusted_uuid;
 use crate::middleware::AuthAccount;
 use crate::site_settings::{
     CALENDAR_ATTENDEES_PER_EVENT, CALENDAR_EVENTS_PAGE, CALENDAR_EVENTS_PER_CALENDAR,
-    CALENDAR_INVITATIONS_PER_ACCOUNT,
+    CALENDAR_INVITATIONS_PER_ACCOUNT, CALENDAR_INVITATIONS_PER_ORGANIZER,
 };
 use crate::AppState;
 
@@ -432,7 +432,13 @@ pub(crate) async fn write_invitation(
         .execute(&mut **tx)
         .await?;
     }
-    let most = CALENDAR_INVITATIONS_PER_ACCOUNT.load(&mut **tx).await?;
+    let organizer: Option<Uuid> = sqlx::query_scalar(
+        "SELECT c.owner_account_id FROM calendar_shared_events se
+           JOIN calendars c ON c.id = se.home_calendar_id WHERE se.id = $1",
+    )
+    .bind(shared_id)
+    .fetch_optional(&mut **tx)
+    .await?;
     for (account, address, packet, token) in &invitation.invitees {
         let existing: Option<bool> = sqlx::query_scalar(
             "SELECT true FROM calendar_event_invitees
@@ -444,15 +450,32 @@ pub(crate) async fn write_invitation(
         .await?;
         if existing.is_none() {
             // An account takes at most `calendar.invitations_per_account`
-            // invitations at once: past it, the event doesn't appear in
-            // their calendar (the invitation mail still comes).
-            let held: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM calendar_event_invitees WHERE invitee_account_id = $1",
+            // invitations at once, and from one organizer at most
+            // `calendar.invitations_per_organizer` (both per account): past
+            // them, the event doesn't appear in their calendar (the
+            // invitation mail still comes). The account's row is locked, so
+            // organizers inviting it at once count one after the other
+            // (security review L5).
+            sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
+                .bind(account)
+                .execute(&mut **tx)
+                .await?;
+            let (held, from_organizer): (i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*),
+                        COUNT(*) FILTER (WHERE c.owner_account_id = $2)
+                   FROM calendar_event_invitees i
+                   JOIN calendar_shared_events se ON se.id = i.shared_event_id
+                   JOIN calendars c ON c.id = se.home_calendar_id
+                  WHERE i.invitee_account_id = $1",
             )
             .bind(account)
+            .bind(organizer)
             .fetch_one(&mut **tx)
             .await?;
-            if held >= most {
+            if held >= CALENDAR_INVITATIONS_PER_ACCOUNT.load_for(&mut **tx, *account).await?
+                || from_organizer
+                    >= CALENDAR_INVITATIONS_PER_ORGANIZER.load_for(&mut **tx, *account).await?
+            {
                 continue;
             }
         }
@@ -663,6 +686,63 @@ struct InvitedRow {
     sequence: i32,
     copies: serde_json::Value,
     attendee_rows: serde_json::Value,
+}
+
+/// `DELETE /api/v1/calendar/invitations/events/{id}` — this account leaves an
+/// invitation (security review M5): its copy goes (the storage back) and its
+/// invitee row, so the invitation stops counting against its limits and is
+/// not listed again. Its attendee row stays, with the last answer it gave
+/// (the client declines first); the organizer may invite it again.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/calendar/invitations/events/{id}",
+    tag = "calendar",
+    security(("BearerAuth" = [])),
+    params(("id" = Uuid, Path, description = "The shared event")),
+    responses((status = 204), (status = 404))
+)]
+pub async fn leave(
+    State(state): State<AppState>,
+    user: AuthAccount,
+    Path(shared_id): Path<Uuid>,
+) -> AppResult<axum::http::StatusCode> {
+    let user_id = trusted_uuid(&user.account_id)?;
+    let mut tx = state.pool.begin().await?;
+    let invited: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM calendar_event_invitees
+          WHERE shared_event_id = $1 AND invitee_account_id = $2)",
+    )
+    .bind(shared_id)
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !invited {
+        return Err(AppError::not_found("not found"));
+    }
+    let gone: Vec<i64> = sqlx::query_scalar(
+        "DELETE FROM calendar_events e USING calendars c, calendar_shared_events se
+          WHERE e.shared_event_id = $1 AND c.id = e.calendar_id AND se.id = e.shared_event_id
+            AND e.calendar_id <> se.home_calendar_id AND c.owner_account_id = $2
+          RETURNING e.bytes",
+    )
+    .bind(shared_id)
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let bytes: i64 = gone.iter().sum();
+    if bytes != 0 {
+        crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(user_id), -bytes)
+            .await?;
+    }
+    sqlx::query(
+        "DELETE FROM calendar_event_invitees WHERE shared_event_id = $1 AND invitee_account_id = $2",
+    )
+    .bind(shared_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// `GET /api/v1/calendar/invitations/events` — the events this account was
@@ -1032,7 +1112,10 @@ pub async fn settings(
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await?;
-    let (invite_locale, auto_add) = row.unwrap_or((None, true));
+    // Off until the person turns it on, as Proton's "Add to calendar and
+    // mark as pending" (security review M5: anyone could otherwise fill a
+    // calendar with invitations).
+    let (invite_locale, auto_add) = row.unwrap_or((None, false));
     Ok(Json(InviteSettings {
         invite_locale,
         auto_add,

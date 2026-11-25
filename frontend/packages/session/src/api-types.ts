@@ -352,6 +352,7 @@ export interface AdminSettings {
   calendarBusyShownMax: number
   calendarInvitationIcsMaxBytes: number
   calendarInvitationsPerAccount: number
+  calendarInvitationsPerOrganizer: number
   /** Every device of an account, of every app (site_settings::DEVICES_PER_ACCOUNT). */
   devicesPerAccount: number
   /** How long a new device's row waits to be listed (site_settings::DEVICE_LISTING_GRACE_SECONDS). */

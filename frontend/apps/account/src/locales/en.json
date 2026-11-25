@@ -1079,6 +1079,8 @@
         "calendarInvitationIcsMaxBytesHint": "The biggest .ics part of a message Mail reads as an invitation.",
         "calendarInvitationsPerAccount": "Invitations held per account",
         "calendarInvitationsPerAccountHint": "Invitations from people on this server that appear in one account's calendar at once; past it, new ones arrive by mail only.",
+        "calendarInvitationsPerOrganizer": "Invitations from one organizer",
+        "calendarInvitationsPerOrganizerHint": "Invitations one person on this server may have in one account's calendar at once; past it, theirs arrive by mail only.",
         "calendarMaxCount": "Most occurrences by count",
         "calendarMaxCountHint": "The largest COUNT a repeating event may have (Proton's 49).",
         "calendarRemindersPerEvent": "Reminders per event",

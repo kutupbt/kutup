@@ -28,7 +28,7 @@ ALTER TABLE calendar_events ADD COLUMN author_address_id uuid
 CREATE TABLE calendar_invite_settings (
     account_id uuid PRIMARY KEY REFERENCES accounts (id) ON DELETE CASCADE,
     invite_locale text CHECK (invite_locale IN ('en', 'tr')),
-    auto_add boolean NOT NULL DEFAULT true,
+    auto_add boolean NOT NULL DEFAULT false,
     updated_at timestamp with time zone NOT NULL DEFAULT now()
 );
 

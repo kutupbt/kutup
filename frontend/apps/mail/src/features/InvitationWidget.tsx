@@ -174,7 +174,8 @@ function InvitationWidget({ account, text, message, messageId }: { account: Mail
         {shown.location ? <p className="text-muted-foreground">{shown.location}</p> : null}
         {invitation.organizer ? (
           <p className="text-xs text-muted-foreground">
-            {t('invitation.widget.organizer')}: {invitation.organizer.name || invitation.organizer.email}
+            {/* The address always: a display name alone is anyone's to write (security review L3). */}
+            {t('invitation.widget.organizer')}: {invitation.organizer.name ? `${invitation.organizer.name} <${invitation.organizer.email}>` : invitation.organizer.email}
           </p>
         ) : null}
       </div>
@@ -227,7 +228,7 @@ function InvitationWidget({ account, text, message, messageId }: { account: Mail
   }
 
   if (s.kind === 'organizer') {
-    const name = s.attendee.name || s.attendee.email
+    const name = s.attendee.name ? `${s.attendee.name} <${s.attendee.email}>` : s.attendee.email
     const replied =
       s.attendee.partstat === 'accepted'
         ? t('invitation.widget.repliedAccepted', { name })
