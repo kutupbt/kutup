@@ -7,6 +7,7 @@ pub mod accounts;
 pub mod admin;
 pub mod auth;
 pub mod calendar;
+pub mod calendar_feeds;
 pub mod calendar_invitations;
 pub mod calendar_links;
 pub mod calendar_reminders;

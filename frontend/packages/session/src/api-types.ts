@@ -353,6 +353,13 @@ export interface AdminSettings {
   calendarInvitationIcsMaxBytes: number
   calendarInvitationsPerAccount: number
   calendarInvitationsPerOrganizer: number
+  /** Calendars from a URL (docs/plans/calendar.md, E5a). */
+  calendarFeedRefreshHours: number
+  calendarFeedsPerAccount: number
+  calendarFeedMaxBytes: number
+  calendarFeedMaxEvents: number
+  calendarFeedTimeoutSeconds: number
+  calendarFeedBatch: number
   /** Every device of an account, of every app (site_settings::DEVICES_PER_ACCOUNT). */
   devicesPerAccount: number
   /** How long a new device's row waits to be listed (site_settings::DEVICE_LISTING_GRACE_SECONDS). */

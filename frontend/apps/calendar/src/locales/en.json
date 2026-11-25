@@ -12,6 +12,35 @@
   "nav": {
     "calendars": "Calendars"
   },
+  "feeds": {
+    "new": "Add calendar from URL",
+    "newTitle": "Add calendar from URL",
+    "url": "Calendar URL",
+    "urlHint": "A public .ics address (https:// or webcal://), such as a holidays calendar or Google Calendar's secret address in iCal format. Kutup's server fetches it every few hours and encrypts its events for you.",
+    "created": "Calendar added. Its events appear once it has synced.",
+    "badge": "Calendar from a URL",
+    "subscribed": "Subscribed from a URL",
+    "readOnly": "Events from a URL can't be changed here, and the calendar can't be shared. Its events are signed by this server, not by a person.",
+    "lastSynced": "Last synced: {{when}}",
+    "never": "never",
+    "skipped_one": "{{count}} event in the feed couldn't be added.",
+    "skipped_other": "{{count}} events in the feed couldn't be added.",
+    "state": {
+      "ok": "Up to date",
+      "syncing": "Calendar is syncing",
+      "stale": "More than 12 hours passed since last update",
+      "unreachable": "Calendar link is not accessible",
+      "tooBig": "The calendar is too big to sync",
+      "notACalendar": "The link doesn't lead to a calendar",
+      "tooManyEvents": "The calendar has too many events to sync",
+      "storageFull": "Your storage is full; the calendar can't sync",
+      "unavailable": "Syncing failed; it will be tried again"
+    },
+    "errors": {
+      "url": "Enter a public https:// or webcal:// address.",
+      "limit": "You've reached the most calendars from a URL you can add."
+    }
+  },
   "calendars": {
     "new": "New calendar",
     "newTitle": "New calendar",

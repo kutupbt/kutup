@@ -12,6 +12,35 @@
   "nav": {
     "calendars": "Takvimler"
   },
+  "feeds": {
+    "new": "URL'den takvim ekle",
+    "newTitle": "URL'den takvim ekle",
+    "url": "Takvim URL'si",
+    "urlHint": "Herkese açık bir .ics adresi (https:// veya webcal://); örneğin bir tatil takvimi ya da Google Takvim'in iCal biçimindeki gizli adresi. Kutup sunucusu onu birkaç saatte bir alır ve etkinliklerini sizin için şifreler.",
+    "created": "Takvim eklendi. Etkinlikleri eşitlendiğinde görünür.",
+    "badge": "URL'den takvim",
+    "subscribed": "Bir URL'ye abone",
+    "readOnly": "URL'den gelen etkinlikler burada değiştirilemez ve takvim paylaşılamaz. Etkinlikleri bir kişi tarafından değil, bu sunucu tarafından imzalanır.",
+    "lastSynced": "Son eşitleme: {{when}}",
+    "never": "hiç",
+    "skipped_one": "Akıştaki {{count}} etkinlik eklenemedi.",
+    "skipped_other": "Akıştaki {{count}} etkinlik eklenemedi.",
+    "state": {
+      "ok": "Güncel",
+      "syncing": "Takvim eşitleniyor",
+      "stale": "Son güncellemenin üzerinden 12 saatten fazla geçti",
+      "unreachable": "Takvim bağlantısına erişilemiyor",
+      "tooBig": "Takvim eşitlenemeyecek kadar büyük",
+      "notACalendar": "Bağlantı bir takvime gitmiyor",
+      "tooManyEvents": "Takvimde eşitlenemeyecek kadar çok etkinlik var",
+      "storageFull": "Depolama alanınız dolu; takvim eşitlenemiyor",
+      "unavailable": "Eşitleme başarısız; yeniden denenecek"
+    },
+    "errors": {
+      "url": "Herkese açık bir https:// veya webcal:// adresi girin.",
+      "limit": "Ekleyebileceğiniz en fazla URL takvimine ulaştınız."
+    }
+  },
   "calendars": {
     "new": "Yeni takvim",
     "newTitle": "Yeni takvim",

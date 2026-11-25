@@ -485,6 +485,8 @@ pub async fn invite(
         ));
     }
     let mut tx = state.pool.begin().await?;
+    // A calendar from a URL is read-only and isn't shared (E5a).
+    crate::handlers::calendar_feeds::refuse_feed(&mut *tx, id).await?;
     let (_, generations) = owned_calendar(&mut tx, user_id, id).await?;
     let owner = party(&state, &mut tx, user_id)
         .await?
@@ -1616,6 +1618,8 @@ pub async fn create_link(
         .map(|purpose| purpose.to_sealed().map_err(crypto))
         .transpose()?;
     let mut tx = state.pool.begin().await?;
+    // A calendar from a URL is read-only and isn't shared (E5a).
+    crate::handlers::calendar_feeds::refuse_feed(&mut *tx, id).await?;
     let (newest, generations) = owned_calendar(&mut tx, user_id, id).await?;
     if let Some(purpose) = &purpose {
         let public_key: Vec<u8> = sqlx::query_scalar(

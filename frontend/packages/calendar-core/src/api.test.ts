@@ -109,7 +109,10 @@ import {
   createCalendar,
   deleteCalendar,
   deleteEvent,
+  feedState,
+  FEED_STALE_MS,
   loadCalendars,
+  PERMISSION,
   loadEvents,
   openEvent,
   OwnerIdentityChanged,
@@ -168,6 +171,19 @@ beforeEach(() => {
 })
 
 describe('reading the calendars', () => {
+  it('takes the write permission from a calendar from a URL: its feed is its only writer', async () => {
+    const feed = { url: 'https://example.org/h.ics', status: 'ok', syncedAt: new Date().toISOString(), checkedAt: null, skipped: 0 }
+    http.rows = [{ ...row(1), feed }, row(2)]
+    settings(1, 1)
+    settings(2, 1)
+    const { calendars } = await loadCalendars(session, account)
+    expect(calendars[0].feed).toEqual(feed)
+    expect(calendars[0].permissions & PERMISSION.write).toBe(0)
+    expect(calendars[0].permissions & PERMISSION.owner).not.toBe(0)
+    expect(calendars[1].feed).toBeNull()
+    expect(calendars[1].permissions & PERMISSION.write).not.toBe(0)
+  })
+
   it('opens the calendars with their own settings', async () => {
     http.rows = [row(1), row(2)]
     settings(1, 1)
@@ -397,5 +413,23 @@ describe('reading events', () => {
     const calendar = calendarOpening(fields({ date: '2026-10-29' }, null))
     await expect(loadEvents(account, calendar, '2026-10-26T00:00:00Z', '2026-11-02T00:00:00Z')).rejects.toThrow('repeats a page')
     expect(http.get).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('a calendar from a URL', () => {
+  const now = Date.parse('2027-01-05T12:00:00Z')
+  const at = (ms: number) => new Date(now - ms).toISOString()
+  const feed = (status: string, syncedAt: string | null) =>
+    ({ url: null, status, syncedAt, checkedAt: null, skipped: 0 }) as Parameters<typeof feedState>[0]
+
+  it('is syncing until its first good fetch, then up to date for 12 hours (Proton\'s)', () => {
+    expect(feedState(feed('syncing', null), now)).toBe('syncing')
+    expect(feedState(feed('ok', at(60_000)), now)).toBe('ok')
+    expect(feedState(feed('ok', at(FEED_STALE_MS + 1)), now)).toBe('stale')
+  })
+
+  it('says why the last fetch failed, before and after a good one', () => {
+    expect(feedState(feed('unreachable', null), now)).toBe('unreachable')
+    expect(feedState(feed('tooBig', at(60_000)), now)).toBe('tooBig')
   })
 })

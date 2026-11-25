@@ -501,6 +501,8 @@ async fn main() -> anyhow::Result<()> {
         );
         // Deleted blobs past their wait leave the store.
         blob_purge::spawn(pool.clone(), storage.immediate());
+        // Calendars from a URL fetched again (docs/plans/calendar.md, E5a).
+        handlers::calendar_feeds::spawn(pool.clone(), config.federation_server_name.clone());
     }
 
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
@@ -1356,6 +1358,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/calendar/invitations/events/:id",
             delete(handlers::calendar_invitations::leave),
+        )
+        .route(
+            "/api/v1/calendar/feed-key",
+            get(handlers::calendar_feeds::get_feed_key),
         )
         .route(
             "/api/v1/calendar/settings/invitations",

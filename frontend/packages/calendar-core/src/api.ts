@@ -115,6 +115,58 @@ export interface CalendarRow {
    * row's own key is the only one.
    */
   keys?: CalendarKeyRow[]
+  /** A calendar from a URL (docs/plans/calendar.md, E5a); absent or null otherwise. */
+  feed?: CalendarFeed | null
+}
+
+/**
+ * A calendar from a URL (E5a, Proton's "Add calendar from URL"): the server
+ * fetches the feed and seals its events to the calendar, signed by its feed
+ * key. Read-only and never shared.
+ */
+export interface CalendarFeed {
+  /** The feed's address: its owner's only (it can hold a secret). */
+  url: string | null
+  /** `syncing`, `ok`, or why the last fetch failed. */
+  status: FeedStatus
+  /** The last fetch that left the calendar matching the feed. */
+  syncedAt: string | null
+  checkedAt: string | null
+  /** The feed's events that couldn't be taken. */
+  skipped: number
+}
+
+export type FeedStatus = 'syncing' | 'ok' | 'unreachable' | 'tooBig' | 'notACalendar' | 'tooManyEvents' | 'storageFull' | 'unavailable'
+
+/** Proton's: past 12 hours without a good fetch, a subscription is "not synced". */
+export const FEED_STALE_MS = 12 * 60 * 60 * 1000
+
+/**
+ * What a subscription's status line says: `syncing` before its first good
+ * fetch, a failure's own status, `stale` past 12 hours without a good
+ * fetch, else `ok`.
+ */
+export function feedState(feed: CalendarFeed, now = Date.now()): FeedStatus | 'stale' {
+  if (feed.syncedAt === null) return feed.status === 'ok' ? 'syncing' : feed.status
+  if (feed.status !== 'ok' && feed.status !== 'syncing') return feed.status
+  return now - Date.parse(feed.syncedAt) > FEED_STALE_MS ? 'stale' : 'ok'
+}
+
+let feedKeyCache: Promise<string[]> | null = null
+
+/**
+ * The key the server signs subscriptions' events with: such an event is
+ * "from a subscription", never from a person.
+ */
+export function feedKeys(): Promise<string[]> {
+  feedKeyCache ??= api
+    .get<{ publicKey: string }>('/calendar/feed-key')
+    .then(({ data }) => [data.publicKey])
+    .catch((error) => {
+      feedKeyCache = null
+      throw error
+    })
+  return feedKeyCache
 }
 
 /** A calendar's owner as the server lists them to a member. */
@@ -173,6 +225,8 @@ export interface Calendar {
    * none, or it can't be read now.
    */
   roster: string[] | null
+  /** A calendar from a URL: read-only, its events from the feed (E5a). */
+  feed: CalendarFeed | null
 }
 
 /**
@@ -420,7 +474,9 @@ export async function loadCalendars(
         description: metadata.description,
         color: own?.value.color ?? fallbackColor(row.id),
         display: own?.value.display ?? true,
-        permissions: row.permissions,
+        // A calendar from a URL is written by its feed only (E5a): every
+        // write affordance follows the missing bit.
+        permissions: row.feed ? row.permissions & ~PERMISSION.write : row.permissions,
         revision: own?.revision ?? 0,
         settingsId: id,
         settingsRest: own ? settingsRest(own.value) : undefined,
@@ -435,6 +491,7 @@ export async function loadCalendars(
         owner: owned ? undefined : row.owner,
         metadataRest: metadata.rest,
         roster: owned && typeof own?.value.roster === 'string' ? splitRoster(own.value.roster) : null,
+        feed: row.feed ?? null,
       })
     } catch (error) {
       if (error instanceof OlderThanSeenError) throw error
@@ -590,7 +647,14 @@ export async function activeAddressId(account: MailAccount): Promise<string> {
 export const CALENDAR_COLORS = ['#8080ff', '#db60d6', '#415df0', '#179fd9', '#1da583', '#3cbb3a', '#b4a40e', '#936d58', '#f78400', '#ec3e7c'] as const
 
 /** Makes a calendar under a fresh id; its settings record is written before the create. */
-export async function createCalendar(session: Session, account: MailAccount, name: string, color: string): Promise<string> {
+export async function createCalendar(
+  session: Session,
+  account: MailAccount,
+  name: string,
+  color: string,
+  /** A calendar from a URL (E5a): the feed the server fetches into it. */
+  feedUrl?: string,
+): Promise<string> {
   const id = crypto.randomUUID()
   const made = await makeCalendar(await calendarAccount(session), account.key, id, { name, description: '' })
   // The fingerprint is the server's to read from the key, not to be told.
@@ -599,7 +663,7 @@ export async function createCalendar(session: Session, account: MailAccount, nam
   // A new calendar's roster: nobody but its owner yet.
   const revision = await writeSettings(session, record, { color, display: true, roster: '' })
   try {
-    await api.post('/calendar/calendars', { id, ...body })
+    await api.post('/calendar/calendars', { id, ...body, ...(feedUrl === undefined ? {} : { feedUrl }) })
   } catch (error) {
     // No calendar: its record goes too (one left behind is never shown).
     await removeSettings(session, record).catch(() => undefined)
@@ -702,7 +766,8 @@ export async function timesOf(fields: EventFields): Promise<{ startUtc: string; 
 export async function openEvent(account: MailAccount, calendar: Calendar, row: EventRow): Promise<CalendarEvent> {
   // The generation its key packets name: older events keep their own key.
   const key = calendar.keyring.get(await calendarEventKeyId(row.event)) ?? calendar.unlocked
-  const signers = await authorKeys(account, row.authorAddress).catch(() => [])
+  // A subscription's events are signed by the server's feed key (E5a).
+  const signers = calendar.feed ? await feedKeys().catch(() => []) : await authorKeys(account, row.authorAddress).catch(() => [])
   // An attendee's own copy: the shared parts are the organizer's, the
   // calendar parts the attendee's (docs/plans/calendar-e4.md §6).
   const home = row.home !== false

@@ -951,7 +951,65 @@ pub const CALENDAR_INVITATIONS_PER_ORGANIZER: NumericSetting = NumericSetting {
     unit: SettingUnit::Count,
     per_account: true,
 };
-pub const CALENDAR_SETTINGS: [NumericSetting; 31] = [
+/// Calendars from a URL (docs/plans/calendar.md, E5a): how often the server
+/// fetches a feed again, how many one account subscribes to (Proton's 25
+/// calendars in all), and how big a feed may be.
+pub const CALENDAR_FEED_REFRESH_HOURS: NumericSetting = NumericSetting {
+    key: "calendar.feed_refresh_hours",
+    field: "calendarFeedRefreshHours",
+    default: 6,
+    min: 1,
+    max: 168,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const CALENDAR_FEEDS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "calendar.feeds_per_account",
+    field: "calendarFeedsPerAccount",
+    default: 10,
+    min: 0,
+    max: 1000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+pub const CALENDAR_FEED_MAX_BYTES: NumericSetting = NumericSetting {
+    key: "calendar.feed_max_bytes",
+    field: "calendarFeedMaxBytes",
+    default: 10 * MIB,
+    min: 64 * 1024,
+    max: 100 * MIB,
+    unit: SettingUnit::Bytes,
+    per_account: false,
+};
+pub const CALENDAR_FEED_MAX_EVENTS: NumericSetting = NumericSetting {
+    key: "calendar.feed_max_events",
+    field: "calendarFeedMaxEvents",
+    default: 5_000,
+    min: 1,
+    max: 100_000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const CALENDAR_FEED_TIMEOUT_SECONDS: NumericSetting = NumericSetting {
+    key: "calendar.feed_timeout_seconds",
+    field: "calendarFeedTimeoutSeconds",
+    default: 30,
+    min: 5,
+    max: 300,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// Feeds one refresh pass takes on (the rest wait for the next pass).
+pub const CALENDAR_FEED_BATCH: NumericSetting = NumericSetting {
+    key: "calendar.feed_batch",
+    field: "calendarFeedBatch",
+    default: 20,
+    min: 1,
+    max: 1000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const CALENDAR_SETTINGS: [NumericSetting; 37] = [
     CALENDARS_PER_ACCOUNT,
     CALENDAR_EVENTS_PER_CALENDAR,
     CALENDAR_SYNC_BATCH,
@@ -983,6 +1041,12 @@ pub const CALENDAR_SETTINGS: [NumericSetting; 31] = [
     CALENDAR_INVITATION_ICS_MAX_BYTES,
     CALENDAR_INVITATIONS_PER_ACCOUNT,
     CALENDAR_INVITATIONS_PER_ORGANIZER,
+    CALENDAR_FEED_REFRESH_HOURS,
+    CALENDAR_FEEDS_PER_ACCOUNT,
+    CALENDAR_FEED_MAX_BYTES,
+    CALENDAR_FEED_MAX_EVENTS,
+    CALENDAR_FEED_TIMEOUT_SECONDS,
+    CALENDAR_FEED_BATCH,
 ];
 
 /// How long a Chat link token, and the provisioning socket of the device

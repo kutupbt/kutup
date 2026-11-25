@@ -108,6 +108,10 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test account_roots_live -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server account_roots::tests::live_ -- --nocapture
+# Calendars from a URL (docs/plans/calendar.md, E5a): a feed sealed to the
+# calendar's public key and signed by the feed key, refreshed in place.
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server calendar_feeds::tests::live_ -- --nocapture
 # A master-key rotation (docs/plans/mk-rotation-exercise.md): the server's
 # transaction (its account purged after, so the storage check below holds);
 # the CLI's two-device run is in the CLI checks at the end.

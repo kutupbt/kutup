@@ -3198,6 +3198,33 @@ sharing is off for the site or the owner):
   to a year ahead, `SUMMARY:Busy`) or a query link's events; a full link has
   none. A wrong key answers `404`, as a link that isn't there.
 
+### Calendars from a URL
+
+Proton's "Add calendar from URL" (docs/plans/calendar.md, E5a). The owner
+creates the calendar as any other, with `feedUrl` in the `POST
+/api/v1/calendar/calendars` body: a public `https://` address on port 443
+(`webcal://` is taken as `https://`), at most 8192 bytes (`400
+feedUrlInvalid` otherwise), and at most `calendarFeedsPerAccount` (10, per
+account) such calendars (`409 feedLimit`). The server fetches the feed at
+once and every `calendarFeedRefreshHours` (6) after, through the shared
+public fetcher (every resolved address public, the connection pinned to
+it, redirects checked again; `calendarFeedMaxBytes`, 10 MiB;
+`calendarFeedTimeoutSeconds`, 30), reads it as an `.ics` import
+(`calendarFeedMaxEvents`, 5,000) and seals each event to the calendar's
+public key, signed by the server's feed key. A failed fetch is tried again
+within 30 minutes and leaves the events as they were.
+
+- `CalendarView.feed` → `{ url, status, syncedAt, checkedAt, skipped }`, or
+  null: `url` is the owner's only; `status` is `syncing`, `ok`,
+  `unreachable`, `tooBig`, `notACalendar`, `tooManyEvents`, `storageFull`
+  or `unavailable`; a client says "More than 12 hours passed since last
+  update" past 12 hours from `syncedAt` (Proton's).
+- `GET /api/v1/calendar/feed-key` → `{ publicKey }` (binary OpenPGP,
+  base64): every event of a calendar from a URL is signed by it.
+- Such a calendar is read-only and never shared: a change through the
+  events sync, a member invitation, a link, or an adopted invitation into
+  it is refused with `403 feedReadOnly`.
+
 ## Maps
 
 Kutup stores no map data (docs/plans/maps.md). The administrator chooses the
