@@ -126,12 +126,31 @@ def main() -> None:
     check(sfu["read_timeout_secs"] == 3600 and sfu["upstreams"] == ["http://host.docker.internal:7880"], "SFU socket for the whole call")
 
     acme = config(KORU_TLS="acme", KORU_MODE="block", KUTUP_ACME_STAGING="1", KUTUP_ACME_EMAIL="ops@example.org")
-    check(all("tls" not in s for s in acme["site"]), "acme: sites take the [server.acme] certificate")
+    check(all(s.get("tls") == {"cert": "/certs/fullchain.pem", "key": "/certs/privkey.pem"}
+              for s in acme["site"]), "acme: sites read the exported files, as with files")
     certs = acme["server"]["acme"]["certificate"]
-    check("editor.example.org" in certs[0]["hosts"] and "sfu.example.org" in certs[0]["hosts"], "acme: web names")
-    check(certs[1]["hosts"] == ["turn.example.org", "sfu-turn.example.org"], "acme: relay names apart")
+    check(len(certs) == 1, "acme: one certificate, as certbot's")
+    for name in ("editor.example.org", "sfu.example.org", "turn.example.org", "sfu-turn.example.org"):
+        check(name in certs[0]["hosts"], f"acme: {name} on it")
+    check(certs[0].get("export") == {"dir": "/certs", "owner": "65532:65532", "mode": "0600"},
+          "acme: exported to /certs for the relays and Stalwart, owned by Koru's user")
     check("staging" in acme["server"]["acme"]["directory"], "acme: staging")
     check(all(s["mode"] == "block" for s in acme["site"]), "KORU_MODE=block")
+
+    # certbot renewing the files (docker-compose.koru-certbot.yml): its HTTP-01 answers on every
+    # site, and on a plain-HTTP catch-all for names with no site (the TURN names).
+    plain = config()
+    check(all(r["path"] != "/.well-known/acme-challenge/*" for s in plain["site"] for r in s.get("route", [])),
+          "no ACME route without KORU_ACME_WEBROOT")
+    webroot = config(KORU_ACME_WEBROOT="/var/www/acme")
+    named_sites = [s for s in webroot["site"] if s["hosts"] != ["*"]]
+    check(all(any(r["path"] == "/.well-known/acme-challenge/*" and r.get("root") == "/var/www/acme"
+                  and r.get("mode") == "off" for r in s.get("route", [])) for s in named_sites),
+          "every site answers ACME challenges from the webroot, uninspected")
+    catch_all = [s for s in webroot["site"] if s["hosts"] == ["*"]]
+    check(len(catch_all) == 1 and catch_all[0].get("root") == "/var/www/acme"
+          and catch_all[0].get("https_redirect") is False and "tls" not in catch_all[0]
+          and "upstreams" not in catch_all[0], "a plain-HTTP catch-all serves only the webroot")
 
     # The names nginx's certificate covers instead of the apps' (KUTUP_ACME_DOMAINS) are served too.
     named = config(KUTUP_ACME_DOMAINS="kutup.example.org,turn.example.org")

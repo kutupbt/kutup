@@ -315,6 +315,30 @@ newest version as it is, `catchUp`), so the rotation must cover versions
 too: a version saved under an older document key after the rotation's
 position doesn't count.
 
+### Keyboard shortcuts in every app (Proton parity)
+
+Asked by the user (2026-11-25): every app gets Proton's shortcuts, as Mail
+has them now. Rules for all of them, as Proton's:
+- **One account setting turns them all off** ("Keyboard shortcuts", as
+  Proton's General setting, kept with the other UI preferences so it
+  follows the account), on by default.
+- **Never while typing:** no shortcut fires in a field, an editor or an
+  open dialog (Escape aside).
+- **`?` shows the app's list** (Proton's shortcuts modal), with the
+  setting's switch in it.
+- **Each app copies Proton's own set** (`MailShortcutsModal`,
+  `CalendarShortcutsModal`, Drive's and Pass's); where Proton has none,
+  only the list and Escape.
+
+Today:
+- **Mail:** Proton's set and the overlay; the setting is missing.
+- **Drive:** arrows, Enter, Space (Quick look), Escape; no list.
+- **Calendar:** `N` and Escape. To add: `D` `W` `M` (views), `T` (today),
+  arrows and `J` `K` (previous, next), `/` (search, with encrypted search),
+  `?`, and the setting (calendar-parity.md, gap 10).
+- **Photos:** the viewer's keys; no list.
+- **Contacts, Pass:** none.
+
 ### Security log: sign-ins and 2FA events (Proton parity)
 
 `account_security_events` (`GET /api/v1/account/security-events`) records what
@@ -542,6 +566,12 @@ The database half exists: `scripts/backup-postgres.sh` and `scripts/backup-stalw
 ### Edge · Koru instead of nginx (opt-in)
 
 `docker-compose.koru.yml` runs Koru, a web application firewall and reverse proxy, on the edge ports in place of nginx (`docs/self-hosting.md`, "Koru edge (optional)"); nginx stays the default. Koru has no licence yet, so Kutup ships no image or source of it: the image `kutup-koru:<commit>` is built from a checkout on the deploying machine (`scripts/build-koru-image.sh`) and copied to the server by `scripts/deploy.sh` (`docker save | ssh … docker load`, pinned by image id; no registry). Tried on a test stack in block mode (2026-11-24) with the Chat and Drive suites, meetings through the SFU, and TURN over TLS on port 443. Open before it could become the default or ship to self-hosters: a licence and a published, signed image in place of the copy; HTTP/3; TLS ending for passed-through streams (so the relays need no certificate of their own and could get the client's address through a PROXY header to coturn's `--tcp-proxy-port`); compression per route (API answers); rate-limit counters shared across routes, as nginx's zones; route paths with a wildcard inside (Drive's collaboration sockets apart from its other routes); a health command for the distroless image; Mail's certificate with Koru's own ACME. Until then it runs in `detect` mode first, and each event it would have blocked is read before `block`.
+
+**On kutup.dev since 2026-11-24** (detect mode, the existing certificate files; [`research/21-kutup-dev-edge-and-mail-switch.md`](research/21-kutup-dev-edge-and-mail-switch.md)). Next, in order:
+- **By 2026-12-15: certificate renewal.** It ran through `docker-compose.acme.yml` and nginx's ACME webroot, both gone with the switch; the certificate is valid until 2027-01-20. Built: `KORU_TLS=acme` has Koru order one certificate for every name and export it into `nginx/certs/`, where the sites, the relays and Stalwart read it, and a systemd path unit reloads Koru and restarts the relays on a new one (`docs/self-hosting.md`, "Certificate renewal"); certbot behind Koru (`docker-compose.koru-certbot.yml`) is the alternative. Left: switching kutup.dev to it (production Let's Encrypt directly: a failed order leaves the files as they are, while staging would replace them with an untrusted certificate).
+- **Block mode,** after some days of detect events read (`/api/csp-report` first).
+- **Koru serves the app files,** so the frontend container's nginx goes: Koru now has the per-response `{nonce}`, body substitution and precompressed files; Kutup's browser suites run against it first.
+- **The deploy's mail check** stops on a redeploy of an unchanged release (Stalwart's setup is not recreated, so it reports nothing new); it should only wait when that container was recreated.
 
 ---
 

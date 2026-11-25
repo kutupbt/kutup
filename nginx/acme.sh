@@ -45,6 +45,9 @@ install_certificate() {
   # The key first: nginx reloads when the certificate file changes.
   cp -L "$live/privkey.pem" "$CERTS/privkey.pem.new"
   chmod 600 "$CERTS/privkey.pem.new"
+  # With Koru as the edge (docker-compose.koru-certbot.yml) the key belongs
+  # to Koru's user, which coturn also runs as; root reads it either way.
+  [ -z "${KUTUP_CERTS_OWNER:-}" ] || chown "$KUTUP_CERTS_OWNER" "$CERTS/privkey.pem.new"
   mv "$CERTS/privkey.pem.new" "$CERTS/privkey.pem"
   cp -L "$live/fullchain.pem" "$CERTS/fullchain.pem.new"
   mv "$CERTS/fullchain.pem.new" "$CERTS/fullchain.pem"

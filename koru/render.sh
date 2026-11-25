@@ -170,15 +170,14 @@ case " $sites " in *" $editor "*) editor="" ;; esac
 for name in $sites $editor $sfu $turn $sfu_turn; do check_host "$name"; done
 [ -n "$sites" ] || fail "no app hosts"
 
-if [ "$KORU_TLS" = files ]; then
-  cert=${KORU_CERT:-/certs/fullchain.pem}
-  key=${KORU_KEY:-/certs/privkey.pem}
-  case "$cert$key" in *'"'* | *'\'*) fail "KORU_CERT and KORU_KEY must be plain paths" ;; esac
-  site_tls="tls = { cert = \"$cert\", key = \"$key\" }"
-else
-  # The certificate named in [server.acme] below covers every site.
-  site_tls=""
-fi
+# Every site reads the certificate files, in both modes: with acme Koru
+# writes them itself (the export below), so the relays and Stalwart read the
+# same files, and until Koru's first certificate is there the files already
+# in place keep serving.
+cert=${KORU_CERT:-/certs/fullchain.pem}
+key=${KORU_KEY:-/certs/privkey.pem}
+case "$cert$key" in *'"'* | *'\'*) fail "KORU_CERT and KORU_KEY must be plain paths" ;; esac
+site_tls="tls = { cert = \"$cert\", key = \"$key\" }"
 
 # What every /api route shares with nginx's `location /api/`: bodies
 # streamed to the backend up to 10 GB, five minutes for an answer, and the
@@ -213,6 +212,16 @@ site_common() {
   [ -z "${KORU_BLOCK_CONTACT:-}" ] || printf 'block_contact = "%s"\n' "$(printf '%s' "$KORU_BLOCK_CONTACT" | tr -d '"\\')"
 }
 
+# With certbot renewing the certificate files (docker-compose.koru-certbot.yml):
+# its HTTP-01 answers, from the webroot it writes them to. Let's Encrypt
+# follows the plain-HTTP redirect to HTTPS, so every site serves them; the
+# catch-all site below serves them over plain HTTP for names with no site
+# (the TURN names, passed through on 443 only).
+acme_route() {
+  [ -n "${KORU_ACME_WEBROOT:-}" ] || return 0
+  printf '\n[[site.route]]\npath = "/.well-known/acme-challenge/*"\nroot = "%s"\nmode = "off"\n' "$KORU_ACME_WEBROOT"
+}
+
 body_off='inspect_body = false'
 private='log_query = false\nlog_path = "prefix"'
 
@@ -231,11 +240,14 @@ render() {
       printf 'email = "%s"\n' "$KUTUP_ACME_EMAIL"
     fi
     [ "${KUTUP_ACME_STAGING:-0}" != 1 ] || printf 'directory = "https://acme-staging-v02.api.letsencrypt.org/directory"\n'
-    # One certificate for the web names, as nginx's single one; the relays
-    # get theirs apart, named after their first host, so that they can
-    # read it from Koru's directory (certs/<name>.crt and .key).
-    printf '\n[[server.acme.certificate]]\nhosts = %s\n' "$(toml_list "$sites $editor $sfu")"
-    [ -z "$turn$sfu_turn" ] || printf '\n[[server.acme.certificate]]\nhosts = %s\n' "$(toml_list "$turn $sfu_turn")"
+    # One certificate for every name, as certbot's single one, written
+    # as fullchain.pem and privkey.pem beside the cert and key the sites
+    # read (key first, each renamed into place, owned by Koru's user, which
+    # coturn also runs as; LiveKit and Stalwart read it as root). A new
+    # fullchain.pem reloads Koru and restarts the relays
+    # (scripts/reload-certificate-users.sh); Stalwart watches the files.
+    printf '\n[[server.acme.certificate]]\nhosts = %s\n' "$(toml_list "$sites $editor $sfu $turn $sfu_turn")"
+    printf 'export = { dir = "%s", owner = "65532:65532", mode = "0600" }\n' "$(dirname "$cert")"
   fi
 
   # The apps, the API and federation.
@@ -276,6 +288,7 @@ render() {
   backend_route "/.well-known/kutup/*"
   backend_route "/.well-known/security.txt"
   backend_route "/.well-known/openpgpkey/*"
+  acme_route
   edge_headers
   # The apps tell people to wait on this code (nginx's @rate_limited).
   printf '\n[site.error_pages]\n429 = "%s/429.json"\n' "$out_dir"
@@ -286,6 +299,7 @@ render() {
     site_common
     printf 'max_body_size = "1MB"\n'
     printf '\n[[site.rule]]\nname = "no API on the editor sandbox"\naction = "block"\nstatus = 404\npath = "/api/*"\n'
+    acme_route
     edge_headers
   fi
 
@@ -295,6 +309,7 @@ render() {
     printf '\n[[site]]\nhosts = ["%s"]\nupstreams = ["%s"]\n' "$sfu" "$sfu_upstream"
     site_common
     printf '%s\nread_timeout_secs = 3600\nwrite_timeout_secs = 3600\n' "$body_off"
+    acme_route
     edge_headers sfu
   fi
 
@@ -305,6 +320,12 @@ render() {
   }
   [ -z "$turn" ] || relay_stream "$turn" "$turn_relay"
   [ -z "$sfu_turn" ] || relay_stream "$sfu_turn" "$sfu_turn_relay"
+
+  # Any other name, plain HTTP only: certbot's answers and nothing else
+  # (no TLS, no redirect; the webroot holds only challenge files).
+  if [ -n "${KORU_ACME_WEBROOT:-}" ]; then
+    printf '\n[[site]]\nhosts = ["*"]\nroot = "%s"\nmode = "off"\nhttps_redirect = false\n' "$KORU_ACME_WEBROOT"
+  fi
 }
 
 config=$(render)

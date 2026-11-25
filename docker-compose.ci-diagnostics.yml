@@ -1,0 +1,10 @@
+# Layered onto docker-compose.yml by CI's browser jobs (COMPOSE_FILE in
+# .github/workflows/ci.yml) and by a local run that wants the same
+# diagnostics: the database log names each line's SQLSTATE (%e), which the
+# sanitized failure diagnostics keep (scripts/collect-chat-e2e-diagnostics.sh).
+# Never part of a deployment: docker-compose.yml itself is unchanged.
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.ci-diagnostics.yml docker compose up -d --wait
+services:
+  postgres:
+    command: ["postgres", "-c", "log_line_prefix=%m [%p] %e "]
