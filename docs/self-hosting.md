@@ -1345,9 +1345,10 @@ ExecStart=/opt/kutup/scripts/reload-certificate-users.sh
 ```
 
 `systemctl daemon-reload && systemctl enable --now kutup-certificates.path`.
-`KUTUP_ACME_STAGING=1` tries the whole chain against Let's Encrypt's
-staging service first (its certificate is untrusted: switch back once it
-works, and delete `koru_state`'s staging account).
+Do not try `KUTUP_ACME_STAGING=1` on a live server: Koru would export the
+staging certificate, which browsers do not trust, over the real one. Staging
+belongs on a test stack. On a live server the export is the safety net: if
+an order fails, the files stay as they were and keep serving.
 
 Alternatively, certbot keeps renewing as with nginx: `KORU_TLS=files` with
 `docker-compose.koru-certbot.yml` after `docker-compose.koru.yml` in

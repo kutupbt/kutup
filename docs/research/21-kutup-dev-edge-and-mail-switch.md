@@ -118,7 +118,8 @@ the `koru` container, restore the edge lines of `.env` from the backup, and
   certificate replaces them, and a systemd path unit reloading Koru and the
   relays on each new one (Stalwart watches the files). One ACME client
   instead of two, and no shared webroot. To do on kutup.dev: the switch,
-  staging first.
+  straight to production Let's Encrypt (staging would replace the files
+  with an untrusted certificate; a failed order leaves them as they are).
 - **Block mode** after some days in detect mode, once the events show only
   attacks. `/api/csp-report` bodies (URLs and script samples) are a likely
   false positive to check first.
