@@ -170,15 +170,14 @@ case " $sites " in *" $editor "*) editor="" ;; esac
 for name in $sites $editor $sfu $turn $sfu_turn; do check_host "$name"; done
 [ -n "$sites" ] || fail "no app hosts"
 
-if [ "$KORU_TLS" = files ]; then
-  cert=${KORU_CERT:-/certs/fullchain.pem}
-  key=${KORU_KEY:-/certs/privkey.pem}
-  case "$cert$key" in *'"'* | *'\'*) fail "KORU_CERT and KORU_KEY must be plain paths" ;; esac
-  site_tls="tls = { cert = \"$cert\", key = \"$key\" }"
-else
-  # The certificate named in [server.acme] below covers every site.
-  site_tls=""
-fi
+# Every site reads the certificate files, in both modes: with acme Koru
+# writes them itself (the export below), so the relays and Stalwart read the
+# same files, and until Koru's first certificate is there the files already
+# in place keep serving.
+cert=${KORU_CERT:-/certs/fullchain.pem}
+key=${KORU_KEY:-/certs/privkey.pem}
+case "$cert$key" in *'"'* | *'\'*) fail "KORU_CERT and KORU_KEY must be plain paths" ;; esac
+site_tls="tls = { cert = \"$cert\", key = \"$key\" }"
 
 # What every /api route shares with nginx's `location /api/`: bodies
 # streamed to the backend up to 10 GB, five minutes for an answer, and the
@@ -241,11 +240,14 @@ render() {
       printf 'email = "%s"\n' "$KUTUP_ACME_EMAIL"
     fi
     [ "${KUTUP_ACME_STAGING:-0}" != 1 ] || printf 'directory = "https://acme-staging-v02.api.letsencrypt.org/directory"\n'
-    # One certificate for the web names, as nginx's single one; the relays
-    # get theirs apart, named after their first host, so that they can
-    # read it from Koru's directory (certs/<name>.crt and .key).
-    printf '\n[[server.acme.certificate]]\nhosts = %s\n' "$(toml_list "$sites $editor $sfu")"
-    [ -z "$turn$sfu_turn" ] || printf '\n[[server.acme.certificate]]\nhosts = %s\n' "$(toml_list "$turn $sfu_turn")"
+    # One certificate for every name, as certbot's single one, written
+    # as fullchain.pem and privkey.pem beside the cert and key the sites
+    # read (key first, each renamed into place, owned by Koru's user, which
+    # coturn also runs as; LiveKit and Stalwart read it as root). A new
+    # fullchain.pem reloads Koru and restarts the relays
+    # (scripts/reload-certificate-users.sh); Stalwart watches the files.
+    printf '\n[[server.acme.certificate]]\nhosts = %s\n' "$(toml_list "$sites $editor $sfu $turn $sfu_turn")"
+    printf 'export = { dir = "%s", owner = "65532:65532", mode = "0600" }\n' "$(dirname "$cert")"
   fi
 
   # The apps, the API and federation.

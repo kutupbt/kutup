@@ -1312,24 +1312,20 @@ coturn goes back to its own user and plain TCP behind nginx. The key may
 stay owned by 65532; the next renewal by the acme overlay writes it as
 root again.
 
-**Certificate renewal.** With Koru on the edge, certbot keeps renewing
-`nginx/certs/` as with nginx: put `docker-compose.koru-certbot.yml` in
-`COMPOSE_FILE` after `docker-compose.koru.yml` (in place of
-`docker-compose.acme.yml`, which also changes nginx). It is the same certbot
-container, account and webroot volume (`acme_state`, `acme_webroot`), with
-two differences:
-- Koru answers its HTTP-01 challenges from that webroot, read-only and
-  uninspected: on every site (Let's Encrypt follows Koru's redirect from
-  plain HTTP to HTTPS and does not check the certificate there) and on a
-  plain-HTTP catch-all site for names with no site of their own (the TURN
-  names, which Koru only passes through on 443). The catch-all serves the
-  webroot's files and nothing else.
-- certbot writes the key owned by Koru's user (65532), which coturn also
-  runs as.
+**Certificate renewal.** With Koru on the edge, Koru renews the
+certificate itself: `KORU_TLS=acme` (Koru 2026-11-25 or later, for the
+export). Koru orders one certificate for every name (the apps, `editor.`,
+`sfu.`, the mail host, the extra names and the TURN names, as certbot's) and
+exports it as `nginx/certs/fullchain.pem` and `privkey.pem`, key first,
+each renamed into place, owned by Koru's user (65532, which coturn also
+runs as; LiveKit and Stalwart read it as root). Every site reads those files
+in both modes, so when switching from certbot the certificate already there
+keeps serving until Koru's first one replaces it. `nginx/certs/` must be
+writable by Koru's user: `chown 65532:65532 nginx/certs`.
 
-Koru re-reads certificates on `SIGHUP`, coturn and LiveKit only at start;
-Stalwart watches the files itself (`STALWART_WATCH_CERTIFICATES`). So a
-systemd path unit runs `scripts/reload-certificate-users.sh` whenever
+Koru re-reads its sites' certificate files on `SIGHUP`, coturn and LiveKit
+only at start; Stalwart watches the files itself (`STALWART_WATCH_CERTIFICATES`).
+So a systemd path unit runs `scripts/reload-certificate-users.sh` whenever
 `fullchain.pem` changes: it refuses a key Koru could not read, sends Koru
 `SIGHUP` and restarts coturn and LiveKit (a relayed call reconnects). With
 the nginx edge it does nothing.
@@ -1349,12 +1345,18 @@ ExecStart=/opt/kutup/scripts/reload-certificate-users.sh
 ```
 
 `systemctl daemon-reload && systemctl enable --now kutup-certificates.path`.
-`docker compose exec acme certbot renew --dry-run` checks the whole chain
-against Let's Encrypt's staging service without touching the certificate.
+`KUTUP_ACME_STAGING=1` tries the whole chain against Let's Encrypt's
+staging service first (its certificate is untrusted: switch back once it
+works, and delete `koru_state`'s staging account).
 
-Koru's own ACME (`KORU_TLS=acme`) is the alternative: Koru then holds the
-certificates under its state volume, and the relays and Stalwart would have
-to read them from there.
+Alternatively, certbot keeps renewing as with nginx: `KORU_TLS=files` with
+`docker-compose.koru-certbot.yml` after `docker-compose.koru.yml` in
+`COMPOSE_FILE` (in place of `docker-compose.acme.yml`). Koru then answers
+certbot's HTTP-01 challenges from the shared webroot, on every site and on a
+plain-HTTP catch-all for the TURN names, and certbot writes the key owned by
+Koru's user; the same path unit reloads everything.
+`docker compose exec acme certbot renew --dry-run` checks it against the
+staging service.
 
 `koru/render.sh` writes Koru's configuration at every start from the
 settings the apps already read, as nginx's own does:
@@ -1385,8 +1387,8 @@ Koru's events and error lines.
 | Setting | Default | |
 |---|---|---|
 | `KORU_MODE` | `detect` | `detect` logs what Koru would refuse; `block` refuses it (403 with an event id). Start with `detect` and read the events (`docker compose logs koru`, lines with `"action"`) before blocking. |
-| `KORU_TLS` | `files` | `files`: `nginx/certs/fullchain.pem` and `privkey.pem`, which must be readable by UID 65532 (Koru's user). `acme`: Koru gets and renews Let's Encrypt certificates itself (HTTP-01 on port 80; set `KUTUP_HTTP_PORT=80` and `KUTUP_HTTPS_PORT=443`; `KUTUP_ACME_EMAIL`, `KUTUP_ACME_STAGING=1`). Leave `docker-compose.acme.yml` out either way. |
-| `KORU_RELAY_CERT`, `KORU_RELAY_KEY` | `nginx/certs` | The relays' certificate. With `KORU_TLS=acme`: `/koru/acme/certs/turn.<domain>.crt` and `.key` (Koru names the files after the first relay name). The relays read it at start: restart `coturn` and `livekit` after a renewal. |
+| `KORU_TLS` | `files` | `files`: the sites read `nginx/certs/fullchain.pem` and `privkey.pem`, readable by UID 65532 (Koru's user), renewed by someone else (certbot: `docker-compose.koru-certbot.yml`). `acme`: Koru gets and renews one certificate for every name from Let's Encrypt (HTTP-01 on port 80, or TLS-ALPN-01 on 443; set `KUTUP_HTTP_PORT=80` and `KUTUP_HTTPS_PORT=443`; `KUTUP_ACME_EMAIL`, `KUTUP_ACME_STAGING=1`) and writes it to those same files, for the sites, the relays and Stalwart ("Certificate renewal" above). Leave `docker-compose.acme.yml` out either way. |
+| `KORU_RELAY_CERT`, `KORU_RELAY_KEY` | `nginx/certs` | The relays' certificate: the same files in both modes. They read it at start; the path unit restarts them on a new one. |
 | `KORU_TRUSTED_PROXIES`, `KORU_PROXY_PROTOCOL_FROM` | none | Behind a load balancer: whose `X-Forwarded-For` to believe, or which balancers send the PROXY protocol. |
 | `KORU_RELAY_PROXY_PROTOCOL` | none | `v1`/`v2`: a PROXY header in front of passed-through TURN connections. Neither coturn's TLS listener nor LiveKit's reads one, so leave it unset with the bundled relays; they see Koru's address, as they see nginx's today. |
 
