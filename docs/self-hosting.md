@@ -1324,11 +1324,16 @@ keeps serving until Koru's first one replaces it. `nginx/certs/` must be
 writable by Koru's user: `chown 65532:65532 nginx/certs`.
 
 Koru re-reads its sites' certificate files on `SIGHUP`, coturn and LiveKit
-only at start; Stalwart watches the files itself (`STALWART_WATCH_CERTIFICATES`).
-So a systemd path unit runs `scripts/reload-certificate-users.sh` whenever
+only at start. Stalwart's setup copies the files for Stalwart and has it
+reread them, at start and once a day (`STALWART_WATCH_CERTIFICATES`). So a
+systemd path unit runs `scripts/reload-certificate-users.sh` whenever
 `fullchain.pem` changes: it refuses a key Koru could not read, sends Koru
-`SIGHUP` and restarts coturn and LiveKit (a relayed call reconnects). With
-the nginx edge it does nothing.
+`SIGHUP`, and restarts coturn, LiveKit (a relayed call reconnects) and
+Stalwart's setup (so mail takes the new certificate at once). With the nginx
+edge it does nothing. kutup.dev's first certificate from Koru (2026-11-25)
+showed why the setup restart matters: until then Stalwart reread the files
+only in the daily loop, so a copy made at start kept the old certificate on
+port 25 until the next day.
 
 ```ini
 # /etc/systemd/system/kutup-certificates.path

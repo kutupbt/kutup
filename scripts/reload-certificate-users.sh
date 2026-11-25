@@ -2,8 +2,10 @@
 # After certbot renewed nginx/certs/ on a server whose edge is Koru
 # (docker-compose.koru.yml + docker-compose.koru-certbot.yml): Koru re-reads
 # its certificates on SIGHUP; coturn and LiveKit read theirs only at start, so
-# they restart (a call relayed through them reconnects). Stalwart watches the
-# files itself. With the nginx edge, nginx reloads itself and this does nothing.
+# they restart (a call relayed through them reconnects). Stalwart's setup
+# copies the files for Stalwart and has it reread them; it looks once a day by
+# itself, and restarting it here makes that immediate. With the nginx edge,
+# nginx reloads itself and this does nothing.
 #
 # Run from the deployment's directory, by the kutup-certificates.path unit
 # (docs/self-hosting.md, "Koru edge (optional)") or by hand.
@@ -24,7 +26,7 @@ fi
 
 docker compose kill -s HUP koru >/dev/null
 echo "reload-certificate-users: Koru reloaded"
-for relay in coturn livekit; do
+for relay in coturn livekit stalwart-setup; do
   if grep -qx "$relay" <<<"$services" && [ -n "$(docker compose ps -q "$relay")" ]; then
     docker compose restart "$relay" >/dev/null
     echo "reload-certificate-users: $relay restarted"
