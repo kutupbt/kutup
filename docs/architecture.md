@@ -521,6 +521,8 @@ by their writer: the server stores them and checks who may write which row
 addresses nor answers. Attendees on other servers get the mail only; there
 is no cross-server calendar federation.
 
+---
+
 ## Edge and serving
 
 Two web servers stand between a browser and the backend, with different jobs.
