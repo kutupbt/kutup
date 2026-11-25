@@ -72,6 +72,10 @@ status=0
 copy_certificate || status=$?
 if [ "$status" -ne 1 ] && [ -z "$(stalwart-cli query Certificate --json --no-color)" ]; then
   apply < "$dir/certificate.ndjson"
+elif [ "$status" -eq 0 ]; then
+  # A new certificate copied at start (a renewal noticed by restarting this
+  # container): Stalwart serves the old one until told to reread the files.
+  apply < "$dir/reload-certificates.ndjson" || echo "certificate reload failed" >&2
 fi
 # Settings a test stack adds (tests/mail/plan.ndjson); never in production.
 if [ -n "${STALWART_EXTRA_PLAN:-}" ]; then
