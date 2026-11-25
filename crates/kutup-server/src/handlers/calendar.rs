@@ -123,6 +123,9 @@ pub struct CalendarView {
     /// Every key generation the member holds a share of, oldest first (§2):
     /// older events open with their own generation's key.
     pub keys: Vec<CalendarKeyView>,
+    /// A calendar from a URL (E5a): read-only, its events signed by the
+    /// server's feed key (`/api/v1/calendar/feed-key`).
+    pub feed: Option<crate::handlers::calendar_feeds::FeedView>,
 }
 
 /// A calendar's owner as a member is told: checked against its pins.
@@ -209,6 +212,7 @@ fn view(row: ViewRow) -> CalendarView {
         rotation_due: row.rotation_due,
         owner: None,
         keys: Vec::new(),
+        feed: None,
         id: row.id,
         owner_account_id: row.owner_id,
         public_key: STANDARD.encode(row.public_key),
@@ -264,7 +268,9 @@ pub(crate) async fn complete(
         .map(|view| view.owner_account_id)
         .collect();
     let owners = owners_of(state, &owners).await?;
+    let mut feeds = crate::handlers::calendar_feeds::views(&state.pool, &ids, user_id).await?;
     for view in views {
+        view.feed = feeds.remove(&view.id);
         view.keys = keys
             .iter()
             .filter(|(calendar, _)| *calendar == view.id)
@@ -417,6 +423,11 @@ pub struct CalendarCreate {
     pub passphrase_share: String,
     #[schema(value_type = Object)]
     pub metadata: SealedMetadataV1,
+    /// A calendar from a URL (E5a): the public `.ics` feed (`https://` or
+    /// `webcal://`) the server fetches into it. It stays read-only and
+    /// unshared.
+    #[serde(default)]
+    pub feed_url: Option<String>,
 }
 
 /// `POST /api/v1/calendar/calendars` — makes a calendar the caller owns.
@@ -443,6 +454,11 @@ pub async fn create(
     if input.id.get_version_num() != 4 {
         return Err(AppError::bad_request("a calendar's id is a UUID v4"));
     }
+    let feed_url = input
+        .feed_url
+        .as_deref()
+        .map(crate::handlers::calendar_feeds::parse_url)
+        .transpose()?;
     let public_key = b64(&input.public_key, "public key")?;
     let locked = b64(&input.locked_secret_key, "locked secret key")?;
     let fingerprint = cal::inspect_calendar_public_key(&public_key).map_err(crypto)?;
@@ -564,7 +580,17 @@ pub async fn create(
     .bind(&share)
     .execute(&mut *tx)
     .await?;
+    if let Some(url) = &feed_url {
+        crate::handlers::calendar_feeds::insert(&mut tx, id, user_id, url).await?;
+    }
     tx.commit().await?;
+    if feed_url.is_some() {
+        crate::handlers::calendar_feeds::refresh_soon(
+            state.pool.clone(),
+            state.config.federation_server_name.clone(),
+            id,
+        );
+    }
     Ok((StatusCode::CREATED, Json(fetch(&state, user_id, id).await?)).into_response())
 }
 
@@ -1401,25 +1427,25 @@ pub struct EventSyncResults {
 
 /// What the server stores of a checked event: its parts and the columns it
 /// read from the shared signed part.
-struct Checked {
-    event: kutup_crypto::calendar::SealedEvent,
+pub(crate) struct Checked {
+    pub(crate) event: kutup_crypto::calendar::SealedEvent,
     /// ORGANIZER is the address that signed the event (the organizer's own
     /// invitation); `Some(false)`: an outside organizer's invitation kept as
     /// its attendee's own event; `None`: no organizer.
-    organized_by_author: Option<bool>,
-    shared: SharedSigned,
-    start: time::OffsetDateTime,
-    end: time::OffsetDateTime,
+    pub(crate) organized_by_author: Option<bool>,
+    pub(crate) shared: SharedSigned,
+    pub(crate) start: time::OffsetDateTime,
+    pub(crate) end: time::OffsetDateTime,
     /// The last occurrence's end as this calendar shows the series; `None`
     /// for one without end.
-    range_end: Option<time::OffsetDateTime>,
+    pub(crate) range_end: Option<time::OffsetDateTime>,
     /// A changed occurrence: the instant it replaces.
-    recurrence_id: Option<time::OffsetDateTime>,
+    pub(crate) recurrence_id: Option<time::OffsetDateTime>,
     /// What the shared row holds (the shared parts) and the calendar's own
     /// row (its key packets and its parts); `bytes` is both.
-    shared_bytes: i64,
-    own_bytes: i64,
-    bytes: i64,
+    pub(crate) shared_bytes: i64,
+    pub(crate) own_bytes: i64,
+    pub(crate) bytes: i64,
 }
 
 /// An event time as the instant it names (`EventTime::instant`, the
@@ -1443,7 +1469,7 @@ fn from_seconds(seconds: i64) -> AppResult<time::OffsetDateTime> {
 /// its columns, the series expanded once for its range end (bounded: the
 /// format's 1970–2037 range and 500 EXDATEs). An organizer is the author's
 /// own address (E4).
-fn check_event(
+pub(crate) fn check_event(
     event: &SealedEventV1,
     calendar_public_key: &[u8],
     author_keys: &[Vec<u8>],
@@ -1796,6 +1822,8 @@ async fn apply(
         }
         Some(_) => {}
     }
+    // A calendar from a URL is written by its feed only (E5a).
+    crate::handlers::calendar_feeds::refuse_feed(&mut *tx, calendar).await?;
     let result = match change {
         EventChange::Create {
             id,
@@ -2171,7 +2199,7 @@ async fn rewrite(
 /// it); and its SEQUENCE is not behind the series'. A series deleted later
 /// leaves its changes as single events: `orphan_ok` (a change of an existing
 /// one) lets them be changed still.
-async fn check_parent(
+pub(crate) async fn check_parent(
     tx: &mut Transaction<'_, Postgres>,
     calendar: Uuid,
     checked: &Checked,
@@ -2232,11 +2260,11 @@ async fn check_parent(
 }
 
 /// The ids, creation time and next revision of an event written again.
-struct Kept {
-    id: Uuid,
-    shared_id: Uuid,
-    created_at: time::OffsetDateTime,
-    revision: i64,
+pub(crate) struct Kept {
+    pub(crate) id: Uuid,
+    pub(crate) shared_id: Uuid,
+    pub(crate) created_at: time::OffsetDateTime,
+    pub(crate) revision: i64,
 }
 
 async fn insert(
@@ -2254,17 +2282,17 @@ async fn insert(
         created_at: time::OffsetDateTime::now_utc(),
         revision: 1,
     };
-    insert_as(tx, kept, calendar, user_id, address_id, checked).await
+    insert_as(tx, kept, calendar, Some(user_id), Some(address_id), checked).await
 }
 
 /// Inserts a checked event in the calendar it is home to: its shared row,
 /// then the calendar's own.
-async fn insert_as(
+pub(crate) async fn insert_as(
     tx: &mut Transaction<'_, Postgres>,
     kept: Kept,
     calendar: Uuid,
-    user_id: Uuid,
-    address_id: Uuid,
+    user_id: Option<Uuid>,
+    address_id: Option<Uuid>,
     checked: &Checked,
 ) -> AppResult<Uuid> {
     // The unique key covers the calendar's own events only; an invitation's

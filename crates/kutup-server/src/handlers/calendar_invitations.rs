@@ -923,6 +923,8 @@ pub async fn adopt(
         crate::handlers::calendar::address_keys(&mut conn, user_id, input.address_id).await?
     };
     let mut tx = state.pool.begin().await?;
+    // A calendar from a URL is read-only and isn't shared (E5a).
+    crate::handlers::calendar_feeds::refuse_feed(&mut *tx, calendar).await?;
     let calendar_row: Option<(Uuid, Vec<u8>)> = sqlx::query_as(
         "SELECT c.owner_account_id, k.public_key FROM calendars c
            JOIN calendar_keys k ON k.calendar_id = c.id AND k.key_generation = c.key_generation

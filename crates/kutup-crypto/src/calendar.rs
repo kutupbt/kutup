@@ -906,6 +906,29 @@ fn seal_event_to(
     })
 }
 
+/// Seals an event from a calendar subscription (docs/plans/calendar.md, E5a)
+/// to the calendar's public key, signed by the server's feed key: the
+/// server writes what it can never read back. Fresh session keys every time.
+pub fn seal_feed_event(
+    parts: &EventParts,
+    calendar_public_key: &[u8],
+    feed_secret_key: &[u8],
+) -> Result<SealedEvent> {
+    seal_event_to(parts, calendar_public_key, feed_secret_key, None, None)
+}
+
+/// The server's feed key (E5a): an address-shaped key whose user ID names
+/// the server, signing the events it writes into subscribed calendars.
+pub fn generate_feed_key(
+    server_host: &str,
+    created_at_secs: u32,
+) -> Result<crate::mail_key::GeneratedAddressKey> {
+    crate::mail_key::generate_key(
+        format!("Kutup calendar subscriptions <calendar-feeds@{server_host}>"),
+        created_at_secs,
+    )
+}
+
 fn check_one_uid(parts: &EventParts) -> Result<()> {
     let uid = &parts.shared_signed.uid;
     let same = parts.shared_encrypted.uid == *uid
@@ -1486,6 +1509,29 @@ mod tests {
             },
             calendar_encrypted: None,
         }
+    }
+
+    #[test]
+    fn a_feed_event_is_sealed_with_the_public_key_only() {
+        // The server holds the calendar's public key and its feed key, never
+        // the calendar's secret (docs/plans/calendar.md, E5a).
+        let feed = generate_feed_key("kutup.example", 1_760_000_000).unwrap();
+        let other = generate_address_key("eve@example.org", 1_760_000_000).unwrap();
+        let passphrase = Passphrase::generate();
+        let calendar = generate_calendar_key(&passphrase, 1_760_000_000).unwrap();
+        let sealed =
+            seal_feed_event(&parts("u1@feed"), &calendar.public_key, &feed.secret_key).unwrap();
+        check_sealed_shape(&sealed, &calendar.public_key).unwrap();
+        let (shared, _) = check_signed_parts(&sealed, &[&feed.public_key]).unwrap();
+        assert_eq!(shared.uid, "u1@feed");
+        assert!(check_signed_parts(&sealed, &[&other.public_key]).is_err());
+        let unlocked = unlock_calendar_key(&calendar.locked_secret_key, &passphrase).unwrap();
+        let opened = unlocked.open_event(&sealed, &[&feed.public_key]).unwrap();
+        assert!(opened.verified);
+        assert_eq!(
+            opened.parts.shared_encrypted.summary.as_deref(),
+            Some("Planning")
+        );
     }
 
     #[test]

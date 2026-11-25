@@ -244,6 +244,12 @@ pub fn parse_long_public_https(value: &str) -> AppResult<Url> {
     parse_checked(value, false, &Checks::PUBLIC, MAX_LONG_URL_BYTES)
 }
 
+/// An address checked as [`fetch`] checks it, up to [`MAX_LONG_URL_BYTES`]
+/// (calendar feeds, whose addresses carry secrets).
+pub(crate) fn parse_checked_long(value: &str, checks: &Checks, allow_http: bool) -> AppResult<Url> {
+    parse_checked(value, allow_http, checks, MAX_LONG_URL_BYTES)
+}
+
 /// [`parse_public_https`], or http on port 80 as well.
 pub fn parse_public(value: &str, allow_http: bool) -> AppResult<Url> {
     parse_checked(value, allow_http, &Checks::PUBLIC, MAX_URL_BYTES)
