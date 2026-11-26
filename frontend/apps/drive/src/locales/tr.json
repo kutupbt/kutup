@@ -421,7 +421,22 @@
       "size": "Önizleme görseli: dosya burada gösterilemeyecek kadar büyük. Aç ya da indir."
     }
   },
+  "keys": {
+    "basic": "Temel işlemler",
+    "search": "Ara",
+    "help": "Klavye kısayollarını göster",
+    "list": "Dosya listesinde",
+    "move": "Öğeler arasında gezin",
+    "firstLast": "İlk veya son öğe",
+    "open": "Aç",
+    "quickLook": "Hızlı bakış (dosya)",
+    "extend": "Seçimi genişlet",
+    "all": "Tümünü seç",
+    "clear": "Seçimi temizle",
+    "trash": "Çöp kutusuna taşı"
+  },
   "settings": {
+    "shortcutsHint": "Görmek için Drive'da ? tuşuna basın.",
     "title": "Depo ayarları",
     "description": "Depo'nun dosyalarınızı nasıl sakladığı ve klasörleri nasıl açtığı. Profiliniz ve güvenliğiniz hesap ayarlarınızdadır.",
     "versions": {

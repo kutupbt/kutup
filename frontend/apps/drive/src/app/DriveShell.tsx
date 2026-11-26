@@ -8,6 +8,7 @@ import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
 import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
+import { DriveShortcuts } from '../features/shortcuts/DriveShortcuts'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
@@ -27,6 +28,8 @@ export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
   // Exchange profile keys with the people you share with while Drive is open.
   usePeople()
   return (
+    <>
+    <DriveShortcuts />
     <AppShell
       banner={<HeadStateBanner {...accountHeadState} />}
       appName={t('apps.drive')}
@@ -78,5 +81,6 @@ export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
     >
       <Outlet />
     </AppShell>
+    </>
   )
 }

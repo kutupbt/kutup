@@ -1,4 +1,5 @@
 import { Search, X } from 'lucide-react'
+import { isShortcutKey } from '@kutup/session/shortcuts'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
@@ -51,9 +52,8 @@ export function SearchBox() {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      const target = event.target as HTMLElement
-      if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return
-      if (target.closest('input, textarea, [contenteditable="true"], [role="dialog"]')) return
+      // A shortcut: off with the account's switch, never while typing.
+      if (event.key !== '/' || !isShortcutKey(event)) return
       event.preventDefault()
       input.current?.focus()
     }

@@ -337,7 +337,9 @@ Today:
 - **Mail:** Proton's set and the overlay, with the switch; off stops them.
 - **Calendar:** Proton's set (`N`, `T`, `1` `2` `3`, arrows) plus `D` `W`
   `M`, and `?` (also from Settings). Still to add: `/` with encrypted search.
-- **Drive:** arrows, Enter, Space (Quick look), Escape; no list.
+- **Drive:** Proton Drive has no set, so `?` lists the keys the file list
+  takes; the switch turns off `/` (search) and `?`, list keys always work.
+  The switch is also in Drive's Settings.
 - **Photos:** the viewer's keys; no list.
 - **Contacts, Pass:** none.
 
