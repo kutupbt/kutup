@@ -141,6 +141,10 @@ export interface DriveSource {
 
   /** Whether a folder can be opened and listed (Kutup: its key is at hand). */
   isOpen: (folder: FolderView) => boolean
+  /** Whether a file can be opened, read and downloaded (Kutup: its key is at hand). */
+  isFileOpen: (file: FileView) => boolean
+  /** Whether files in a folder offer their version history. */
+  offersHistory: (folder: FolderView) => boolean
   /** The names of the files in a folder (for new names that are free). */
   namesIn: (folder: FolderView) => Promise<string[]>
 
@@ -168,6 +172,15 @@ export interface DriveSource {
   useMove: () => (tree: FolderTree, items: ItemRef[], dest: FolderView) => Promise<void>
   /** Whether an item can be moved at all by this source's rules (where to is `moveRefusal`'s). */
   mayMove: (item: ItemRef) => boolean
+  /** Saves one file to the computer by the source's own rules (Kutup: large files streamed to disk). */
+  downloadFile: (folder: FolderView, file: FileView) => Promise<void>
+  /** A folder (its own files) as a ZIP; 'empty' when there was nothing to put in. */
+  downloadFolderZip: (folder: FolderView, onProgress: (done: number, total: number) => void) => Promise<'empty' | 'done'>
+  /** Several items as one ZIP named `archive`. */
+  downloadSelectionZip: (items: ItemRef[], archive: string, onProgress: (done: number, total: number) => void) => Promise<'empty' | 'done'>
+  /** What a failed download means for the person: too large to zip here, too large for this browser, or other. */
+  downloadFailure: (error: unknown) => 'zipTooLarge' | 'fileTooLarge' | 'other'
+
   /**
    * A file's thumbnail as a URL for an <img>, or null (the kind's icon shows).
    * The screens never draw one: the source makes them (Kutup in the browser,

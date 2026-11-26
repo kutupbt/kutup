@@ -1,5 +1,4 @@
 import { CheckCheck, Copy, Download, ExternalLink, Eye, FolderInput, History, Info, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
-import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
 import { useCallback, useMemo, useState, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -24,13 +23,12 @@ import { canShareFile } from '@kutup/drive-core/fileShares'
 import { folderHex } from '../drive/colors'
 import { useDeclareCurrentFolder } from '../drive/currentFolderContext'
 import { isWithin } from '@kutup/drive-source/tree'
-import { downloadFile, downloadFolderZip, downloadRevision, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
+import { downloadRevision } from '@kutup/editors/files/downloads'
 import { useFolderFiles } from '@kutup/drive-core/files'
-import { useRestore } from '@kutup/drive-core/trash'
-import { canonicalName } from '@kutup/drive-core/names'
+import { canonicalName } from '@kutup/drive-source/names'
 import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
-import { folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
-import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { useCreatePublicLink } from '@kutup/drive-core/mutations'
 import { isTargetBlocked, sharingOffScope } from '@kutup/drive-core/publicSharing'
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { isListName } from '@kutup/map/list'
@@ -134,10 +132,10 @@ export function FolderPage() {
   const [itemDrag, setItemDrag] = useState(false)
   const [looking, setLooking] = useState<QuickLookTarget | null>(null)
   const { uploadFiles, uploadDirectory } = useUploadActions()
-  const renameFolder = useRenameFolder()
-  const renameFile = useRenameFile()
-  const trashFolder = useTrashFolder()
-  const trashFile = useTrashFile()
+  const renameFolder = source.useRenameFolder()
+  const renameFile = source.useRenameFile()
+  const trashFolder = source.useTrashFolder()
+  const trashFile = source.useTrashFile()
   const publicLink = useCreatePublicLink()
   const copy = source.useCopy()
   const move = source.useMove()
@@ -198,17 +196,17 @@ export function FolderPage() {
       const target = lookup.get(itemKey(item))
       if (!target) return
       if (!target.file) {
-        if (target.folder.key) void navigate(folderPath(target.folder))
+        if (source.isOpen(target.folder)) void navigate(folderPath(target.folder))
         return
       }
-      if (!target.file.fileKey) return
+      if (!source.isFileOpen(target.file)) return
       // Files on another server open here too, read (and notes edited) through this server.
       openFile(navigate, target.folder, target.file)
     },
-    [lookup, navigate],
+    [lookup, navigate, source],
   )
 
-  const restore = useRestore()
+  const restore = source.useRestore()
   const moveToTrash = useCallback(
     async (targets: Target[]) => {
       let moved = 0
@@ -252,29 +250,24 @@ export function FolderPage() {
       if (!only) return
       try {
         if (targets.length === 1 && only.file) {
-          await downloadFile(only.folder, only.file)
+          await source.downloadFile(only.folder, only.file)
         } else {
           const id = toast.loading(t('drive.zipping'))
           const progress = (done: number, total: number) => toast.loading(t('drive.zipProgress', { done, total }), { id })
           const archive = folder?.isRoot ? t('nav.myFiles') : (folder?.name ?? 'Kutup')
           const result = await (targets.length === 1
-            ? downloadFolderZip(only.folder, progress)
-            : downloadSelectionZip(targets, archive, progress)
+            ? source.downloadFolderZip(only.folder, progress)
+            : source.downloadSelectionZip(targets, archive, progress)
           ).finally(() => toast.dismiss(id))
           if (result === 'empty') toast.info(t('drive.zipEmpty'))
         }
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        toast.error(
-          error instanceof FsaRequiredError
-            ? t('drive.zipTooLarge')
-            : error instanceof BlobDownloadTooLarge
-              ? t('drive.fileTooLargeForBrowser')
-              : t('drive.downloadFailed'),
-        )
+        const failure = source.downloadFailure(error)
+        toast.error(failure === 'zipTooLarge' ? t('drive.zipTooLarge') : failure === 'fileTooLarge' ? t('drive.fileTooLargeForBrowser') : t('drive.downloadFailed'))
       }
     },
-    [t, folder],
+    [t, folder, source],
   )
 
   const actionsFor = useCallback(
@@ -284,7 +277,7 @@ export function FolderPage() {
       const actions: ExplorerAction[] = []
       if (target.file) {
         const { file, folder: container } = target
-        if (!file.fileKey) {
+        if (!source.isFileOpen(file)) {
           return mayChangeFile(container, file)
             ? [{ id: 'trash', label: t('drive.actions.trash'), icon: <Trash2 />, onSelect: () => void moveToTrash([target]), destructive: true }]
             : []
@@ -307,7 +300,7 @@ export function FolderPage() {
           actions.push({ id: 'share', label: t('drive.actions.share'), icon: <UserPlus />, onSelect: () => setDialog({ kind: 'shareFile', key: itemKey(item) }), separated: true })
         }
         // Editors see a file's history (as Proton's "See version history"); files on another server are not offered it.
-        if (container.canUpload && folderLocation(container).kind === 'local') {
+        if (container.canUpload && source.offersHistory(container)) {
           actions.push({ id: 'history', label: t('drive.actions.versionHistory'), icon: <History />, onSelect: () => setDialog({ kind: 'history', key: itemKey(item) }), separated: true })
         }
         actions.push({ id: 'details', label: t('drive.actions.details'), icon: <Info />, onSelect: () => setDialog({ kind: 'details', keys: [itemKey(item)] }), separated: true })
@@ -320,7 +313,7 @@ export function FolderPage() {
         return actions
       }
       const f = target.folder
-      if (!f.key) return f.canManage ? [{ id: 'trash', label: t('drive.actions.trash'), icon: <Trash2 />, onSelect: () => void moveToTrash([target]), destructive: true }] : []
+      if (!source.isOpen(f)) return f.canManage ? [{ id: 'trash', label: t('drive.actions.trash'), icon: <Trash2 />, onSelect: () => void moveToTrash([target]), destructive: true }] : []
       actions.push({ id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => open(item) })
       actions.push({ id: 'download', label: t('drive.actions.downloadZip'), icon: <Download />, onSelect: () => void download([target]) })
       actions.push({ id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets: [target] }) })
@@ -368,7 +361,7 @@ export function FolderPage() {
 
   /** What can be done to several items at once. */
   const selectionActions = (targets: Target[]): ExplorerAction[] => {
-    const readable = targets.filter((s) => (s.file ? s.file.fileKey : s.folder.key))
+    const readable = targets.filter((s) => (s.file ? source.isFileOpen(s.file) : source.isOpen(s.folder)))
     const trashable = targets.filter((s) => (s.file ? mayChangeFile(s.folder, s.file) : s.folder.canManage))
     const actions: ExplorerAction[] = []
     if (readable.length === targets.length) {
@@ -425,7 +418,7 @@ export function FolderPage() {
   async function onDrop(event: DragEvent) {
     event.preventDefault()
     setDragging(false)
-    if (!folder?.key || !folder.canUpload) return
+    if (!folder || !source.isOpen(folder) || !folder.canUpload) return
     const hasDirectory = Array.from(event.dataTransfer.items).some((i) => i.webkitGetAsEntry()?.isDirectory)
     if (hasDirectory && folder.canManage) {
       const entries = await dataTransferToFolderEntries(event.dataTransfer.items)
@@ -443,7 +436,7 @@ export function FolderPage() {
     }
   }
 
-  if (folders.isPending || (folder?.key && files.isPending)) return <ListSkeleton label={t('common.loading')} />
+  if (folders.isPending || (folder && source.isOpen(folder) && files.isPending)) return <ListSkeleton label={t('common.loading')} />
   if (folders.isError) {
     return (
       <div className="p-6">
@@ -461,7 +454,7 @@ export function FolderPage() {
   // Quick Look steps through the files in the order on screen.
   const lookableFiles = shown.flatMap((item) => {
     const target = lookup.get(itemKey(item))
-    return target?.file?.fileKey ? [{ folder: target.folder, file: target.file }] : []
+    return target?.file && source.isFileOpen(target.file) ? [{ folder: target.folder, file: target.file }] : []
   })
   // The selection bar: a lone item gets its own download/copy/trash, several get the bulk ones.
   const selectedItems = shown.filter((i) => selection.has(itemKey(i)))
@@ -542,7 +535,7 @@ export function FolderPage() {
             <Alert variant="error">{apiErrorMessage(files.error, t('drive.loadFailed'))}</Alert>
           </div>
         ) : null}
-        {!folder.key ? (
+        {!source.isOpen(folder) ? (
           <EmptyState title={t('drive.encryptedFolderTitle')} description={t('drive.encryptedFolder')} />
         ) : shown.length === 0 ? (
           <EmptyState
@@ -572,7 +565,7 @@ export function FolderPage() {
             onOpen={open}
             onQuickLook={(item) => {
               const target = lookup.get(itemKey(item))
-              if (target?.file?.fileKey) setLooking({ folder: target.folder, file: target.file })
+              if (target?.file && source.isFileOpen(target.file)) setLooking({ folder: target.folder, file: target.file })
             }}
             actionsFor={actionsFor}
             renderPreview={
@@ -696,7 +689,7 @@ export function FolderPage() {
         index={index}
         start={folder}
         refusal={(dest) => {
-          if (!dest.key) return t('dialogs.copy.locked')
+          if (!source.isOpen(dest)) return t('dialogs.copy.locked')
           if (!dest.canUpload) return t('dialogs.copy.readOnly')
           const folderTargets = (copying ?? []).filter((c) => !c.file)
           if (folderTargets.length > 0 && !dest.canManage) return t('dialogs.copy.foldersOwnedOnly')

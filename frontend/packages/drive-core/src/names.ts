@@ -12,6 +12,7 @@ import api from '@kutup/session/client'
 import { folderKeyAt, type KeyringFolder } from './keyring'
 import { folderLocation, type DriveFile, type Folder } from './model'
 import { randomBytes } from '@kutup/crypto/random'
+import { canonicalName } from '@kutup/drive-source/names'
 
 /**
  * Names unique in a folder (docs/plans/drive-unique-names.md). Every write
@@ -87,15 +88,8 @@ export async function contentHashIn(folder: KeyringFolder, contentSha256: string
   return contentHashOf(await hashKey(inFolder(folder)), contentSha256)
 }
 
-/**
- * The form two names are compared in on this device: NFC, Unicode's
- * default lowercase, NFC — what `kutup_crypto::drive_names::canonical_name`
- * does (both lowercase without a locale; tested against it). The hashes
- * themselves always come from Rust.
- */
-export function canonicalName(name: string): string {
-  return name.normalize('NFC').toLowerCase().normalize('NFC')
-}
+// Shared with every Drive data source (docs/plans/drive-source.md).
+export { canonicalName } from '@kutup/drive-source/names'
 
 /** What holds a taken name, as the server says. */
 export interface NameHolder {

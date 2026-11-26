@@ -20,6 +20,9 @@ import { useMove } from './kutup/drive/useMove'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 import { getSession } from '@kutup/session/store'
 import { backfill } from './kutup/thumbnails/backfill'
+import { folderLocation } from '@kutup/drive-core/model'
+import { downloadFile, downloadFolderZip, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
+import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
 
 /** Kutup's uploads (sealed, resumable, thumbnails drawn after) as the screens start them. */
 function useKutupUploadActions(): UploadActions {
@@ -36,6 +39,9 @@ export const kutupDriveSource: DriveSource = {
   },
 
   isOpen: (folder) => Boolean((folder as Folder).key),
+  isFileOpen: (file) => Boolean((file as DriveFile).fileKey),
+  // Files on another server are not offered their history.
+  offersHistory: (folder) => folderLocation(folder).kind === 'local',
   namesIn: async (folder) => (await loadFolderFiles(folder as Folder)).flatMap((f) => (f.name ? [f.name] : [])),
 
   useFolders,
@@ -56,6 +62,11 @@ export const kutupDriveSource: DriveSource = {
 
   useCopy: useCopy as unknown as DriveSource['useCopy'],
   useMove: useMove as unknown as DriveSource['useMove'],
+  downloadFile: (folder, file) => downloadFile(folder as Folder, file as DriveFile),
+  downloadFolderZip: (folder, onProgress) => downloadFolderZip(folder as Folder, onProgress),
+  downloadSelectionZip: (items, archive, onProgress) => downloadSelectionZip(items as MoveSource[], archive, onProgress),
+  downloadFailure: (error) => (error instanceof FsaRequiredError ? 'zipTooLarge' : error instanceof BlobDownloadTooLarge ? 'fileTooLarge' : 'other'),
+
   thumbnail: async (folder, file, size) => {
     const url = await thumbnailUrl(file as DriveFile, size)
     // On screen: draw a missing or stale one in the background (docs/plans/drive-thumbnails.md).
