@@ -1,0 +1,15 @@
+{
+  "name": "@kutup/drive-source",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    "./source": "./src/source.ts",
+    "./context": "./src/context.ts",
+    "./provider": "./src/provider.tsx"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1"
+  }
+}

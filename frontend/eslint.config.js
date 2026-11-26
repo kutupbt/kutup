@@ -128,7 +128,7 @@ const sodiumImports = [
   },
 ]
 
-const UI_CODE = ['apps/*/src/**/*.{ts,tsx}', 'packages/{ui,i18n,config,map,drive-core,drive-ui,editors,contacts-core,mail-core,calendar-core}/**/*.{ts,tsx}']
+const UI_CODE = ['apps/*/src/**/*.{ts,tsx}', 'packages/{ui,i18n,config,map,drive-core,drive-ui,drive-source,editors,contacts-core,mail-core,calendar-core}/**/*.{ts,tsx}']
 const LOGIC_CODE = ['packages/{session,files,collab,chat-core}/src/**/*.{ts,tsx,js,mjs}']
 const CRYPTO_CODE = ['packages/crypto/src/**/*.ts']
 /* The WASM loaders that import their own wasm-bindgen glue by URL. */
