@@ -1038,8 +1038,39 @@ feed events signed by a server key; order E5a, E5c, E5b).
 ### E5c: Kutup meeting links in events
 
 "Add Kutup meeting" in the event editor makes a Chat call link (its title
-encrypted, as Proton Meet's) and puts it in the event; it replaces Chat's
-`.ics` download, and a repeating meeting is a repeating event.
+encrypted, as Proton Meet's) and puts it in the event; a repeating meeting
+is a repeating event.
+
+**Decisions (2026-11-26, the user's).**
+
+- **All encrypted.** The link is RFC 7986's `CONFERENCE` property
+  (`VALUE=URI`, `FEATURE=AUDIO,VIDEO`, `LABEL=Kutup meeting`) in the shared
+  **encrypted** part only. Proton splits it: `X-PM-CONFERENCE-ID` in the
+  signed part, which its server reads, and `X-PM-CONFERENCE-URL` encrypted.
+  Its reason is server-side meeting management (its server creates and
+  updates Zoom meetings through Zoom's API, `createZoomMeeting`, and manages
+  Proton Meet rooms). Kutup's server never manages a meeting for an event: a
+  call link is made and changed in the browser. So the server isn't told
+  which event is which meeting. `CONFERENCE` is what Google, Apple and
+  Thunderbird read, so exports and invitations carry it as is.
+- **Chat's meeting page** gets "Add to Kutup Calendar": it opens the
+  Calendar editor filled in with the meeting (title, time, link). The `.ics`
+  download stays, for other calendar apps.
+
+**Build.**
+
+- `EventFieldsV1.conference` (the URL) and `SharedEncrypted.conference`,
+  read and written by the `.ics` reader, export and invitations. Older
+  clients keep the line in `other` (docs/plans/format-evolution.md, rule 3).
+- The call-link functions Calendar needs (nonce, owner secret, host token,
+  keys, fragment, parse, seal and open the info) are exposed by the
+  `crypto-calendar` WASM Calendar already loads, not Chat's engine WASM. The
+  browser code that makes and changes a link moves from the Chat app into
+  a shared package, given its crypto.
+- The editor: "Add Kutup meeting" makes a link titled and timed as the
+  event; saving a changed title or time changes the meeting's too (the
+  owner's own links); removing it from the event leaves the meeting in
+  Chat's list. The event view shows "Join" for a `CONFERENCE` link.
 
 ### E5b: import from Google (D-3: in the browser)
 
