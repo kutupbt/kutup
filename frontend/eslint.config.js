@@ -128,6 +128,23 @@ const sodiumImports = [
   },
 ]
 
+/* The Drive screens read their data only through @kutup/drive-source
+   (docs/plans/drive-source.md): Kutup's implementation is in
+   apps/drive/src/source, and another app supplies its own. */
+const DRIVE_SCREENS = ['apps/drive/src/features/**/*.{ts,tsx}']
+const driveScreenImports = [
+  'error',
+  {
+    paths: sodiumImports[1].paths,
+    patterns: [
+      ...sodiumImports[1].patterns,
+      {
+        group: ['@kutup/drive-core', '@kutup/drive-core/*'],
+        message: 'The Drive screens read their data through @kutup/drive-source (useDriveSource); Kutup\'s own code belongs in apps/drive/src/source (docs/plans/drive-source.md).',
+      },
+    ],
+  },
+]
 const UI_CODE = ['apps/*/src/**/*.{ts,tsx}', 'packages/{ui,i18n,config,map,drive-core,drive-ui,drive-source,editors,contacts-core,mail-core,calendar-core}/**/*.{ts,tsx}']
 const LOGIC_CODE = ['packages/{session,files,collab,chat-core}/src/**/*.{ts,tsx,js,mjs}']
 const CRYPTO_CODE = ['packages/crypto/src/**/*.ts']
@@ -159,6 +176,12 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       'no-restricted-syntax': [...restricted, ...webCrypto, ...computedImports],
       'no-restricted-imports': sodiumImports,
+    },
+  },
+  {
+    files: DRIVE_SCREENS,
+    rules: {
+      'no-restricted-imports': driveScreenImports,
     },
   },
   {

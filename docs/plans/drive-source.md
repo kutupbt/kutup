@@ -1,7 +1,12 @@
 # Drive screens over a `DriveSource` — plan
 
-**Status:** interface agreed in review (PR 1 of 4, 2026-11-26); conversion
-starting. Nothing changes for Kutup's users. The Kutup Home drive (`kutup-home-drive`,
+**Status:** PR 1 converted (2026-11-26): the Drive screens in
+`apps/drive/src/features` read their data only through `@kutup/drive-source`
+(a lint rule keeps them off drive-core); Kutup's implementation is in
+`apps/drive/src/source`. Nothing changes for Kutup's users. Left for PR 2:
+the app shell (`App.tsx`, `app/`: session, people, the boot), which is
+`SessionSource`'s, and Kutup's public link pages (`apps/drive/src/public`,
+outside the screens). The Kutup Home drive (`kutup-home-drive`,
 plain files in plain folders, no end-to-end encryption) is the second
 implementation this enables; its server is built and waiting for the screens.
 
@@ -95,11 +100,15 @@ night to cover several:
    **Done** for the lists (folders, a folder's files, trash) and the folder,
    file and trash changes; the trash page reads through it.
 2. **Lists and simple changes**: the explorer, folder page, shared pages and
-   dialogs read through `useDriveSource()`.
+   dialogs read through `useDriveSource()`. **Done.**
 3. **Content**: uploads, replace, copy, move, downloads, quick look, versions,
-   thumbnails.
+   thumbnails, details. **Done** (3a–3e).
 4. **Sharing and search**, then the remaining direct imports removed (a lint
-   rule keeps `apps/drive/src/features` off drive-core's internals).
+   rule keeps `apps/drive/src/features` off drive-core's internals). **Done**
+   (4a–4f): the sharing dialogs as slots, search over the source's index, the
+   shared pages, the folder picker; the pure helpers both apps decide alike
+   (`kinds`, `editorKind`, `names`, `documents`, `tree`, the restore errors)
+   live in `@kutup/drive-source`, re-exported by drive-core.
 
 **Sharing (decided on #458, 2026-11-26).** The source *supplies* the sharing
 dialogs as components; the common core is data. Kutup's share dialogs stay

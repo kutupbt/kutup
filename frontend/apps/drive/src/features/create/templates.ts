@@ -1,4 +1,4 @@
-import { DOCUMENT_KINDS, newDocument, uniqueName, type DocumentKind } from '@kutup/drive-core/documents'
+import { DOCUMENT_KINDS, newDocument, uniqueName, type DocumentKind } from '@kutup/drive-source/documents'
 import { encodeListJson, LIST_EXTENSION, LIST_MIME } from '@kutup/map/list'
 
 // What "New → …" creates. Each is an ordinary encrypted upload of a small
