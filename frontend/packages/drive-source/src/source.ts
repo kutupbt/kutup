@@ -10,6 +10,7 @@
 // the hooks are drive-core's, so every query key stays as it is.
 
 import type { UseMutationResult, UseQueryResult } from '@tanstack/react-query'
+import type { ComponentType } from 'react'
 import type { FileKind, ItemKind } from './kinds'
 import type { AskRestoreName } from './restore'
 
@@ -162,6 +163,38 @@ export interface VersionHistory {
   remove: (entry: HistoryEntryView) => Promise<void>
 }
 
+/** Someone as the details show them: a name, with their address as its tooltip. */
+export interface PersonName {
+  name: string
+  address?: string
+}
+
+/** A person still being looked up, or not known. */
+export type PersonLookup = PersonName | 'pending' | 'unknown'
+
+/** What a file's details show beyond the file itself. */
+export interface FileDetailsInfo {
+  /** Who uploaded it first; null: no row. */
+  createdBy: PersonLookup | null
+  /** Who saved what it holds now, when not its creator; null: no row. */
+  lastUploadedBy: PersonLookup | null
+  /** What the current content takes in storage; null when not known. */
+  storedSize: number | null
+  /** How many entries its history has; null when it has none here. */
+  versions: number | null
+  /** The content's SHA-256 (hex), while it still says what the content is. */
+  sha256: string | null
+}
+
+/** What the owner shares an item with, counted. */
+export interface SharingSummary {
+  /** People and accounts on other servers. */
+  people: number
+  links: number
+  /** The file's folder is shared too. */
+  folderShared: boolean
+}
+
 /** A player's source for a file's video or audio. */
 export type Playback =
   /** A URL to play (streamed, or a Blob's URL); `close` ends it. */
@@ -238,6 +271,14 @@ export interface DriveSource {
 
   /** Saves one file to the computer by the source's own rules (Kutup: large files streamed to disk). */
   downloadFile: (folder: FolderView, file: FileView) => Promise<void>
+  useFileDetails: (folder: FolderView, file: FileView) => FileDetailsInfo
+  /** Who made a folder (one's own: oneself). */
+  useFolderCreator: (folder: FolderView) => PersonLookup
+  /** What the owner shares a folder (or a file in it) with; undefined while loading, null when not shared. */
+  useSharingSummary: (folder: FolderView, file?: FileView) => SharingSummary | null | undefined
+  /** Shown above an item's details (Kutup: the check of the content's signature); null for none. */
+  DetailsBanner: ComponentType<{ folder: FolderView; file: FileView }> | null
+
   useVersionHistory: (folder: FolderView, file: FileView) => VersionHistory
   /** Who saved a version, as a name to show; null when not known. */
   useAuthorName: (entry: HistoryEntryView) => string | null

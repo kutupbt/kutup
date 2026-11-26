@@ -21,6 +21,8 @@ import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 import { getSession } from '@kutup/session/store'
 import { backfill } from './kutup/thumbnails/backfill'
 import { useKutupAuthorName, useKutupVersionHistory, useKutupVersionRetention } from './kutup/versions'
+import { useKutupFileDetails, useKutupFolderCreator, useKutupSharingSummary } from './kutup/details'
+import { KutupSignatureBanner } from './kutup/SignatureBanner'
 import { folderLocation } from '@kutup/drive-core/model'
 import { downloadFile, downloadFolderZip, downloadRevision, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
 import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
@@ -70,6 +72,11 @@ export const kutupDriveSource: DriveSource = {
   openPlayback: (folder, file, signal, onProgress, onFallback) => openPlayback(folder, file as DriveFile, signal, onProgress, onFallback),
 
   downloadFile: (folder, file) => downloadFile(folder as Folder, file as DriveFile),
+  useFileDetails: useKutupFileDetails,
+  useFolderCreator: useKutupFolderCreator,
+  useSharingSummary: useKutupSharingSummary,
+  DetailsBanner: KutupSignatureBanner,
+
   useVersionHistory: useKutupVersionHistory as unknown as DriveSource['useVersionHistory'],
   useAuthorName: useKutupAuthorName,
   useVersionRetention: useKutupVersionRetention,
