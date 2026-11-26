@@ -21,8 +21,10 @@ import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 import { getSession } from '@kutup/session/store'
 import { backfill } from './kutup/thumbnails/backfill'
 import { folderLocation } from '@kutup/drive-core/model'
-import { downloadFile, downloadFolderZip, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
+import { downloadFile, downloadFolderZip, downloadRevision, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
 import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
+import { readFile, readRevision, type RevisionToRead } from '@kutup/editors/content'
+import { openPlayback } from '@kutup/drive-core/playback'
 
 /** Kutup's uploads (sealed, resumable, thumbnails drawn after) as the screens start them. */
 function useKutupUploadActions(): UploadActions {
@@ -62,16 +64,22 @@ export const kutupDriveSource: DriveSource = {
 
   useCopy: useCopy as unknown as DriveSource['useCopy'],
   useMove: useMove as unknown as DriveSource['useMove'],
+  read: (folder, file, signal) => readFile(folder as Folder, file as DriveFile, signal),
+  readVersion: (file, version, signal) => readRevision(file as DriveFile, version as unknown as RevisionToRead, { signal }),
+  openPlayback: (folder, file, signal, onProgress, onFallback) => openPlayback(folder, file as DriveFile, signal, onProgress, onFallback),
+
   downloadFile: (folder, file) => downloadFile(folder as Folder, file as DriveFile),
+  downloadVersion: (file, version) => downloadRevision(file as DriveFile, version as unknown as RevisionToRead),
   downloadFolderZip: (folder, onProgress) => downloadFolderZip(folder as Folder, onProgress),
   downloadSelectionZip: (items, archive, onProgress) => downloadSelectionZip(items as MoveSource[], archive, onProgress),
   downloadFailure: (error) => (error instanceof FsaRequiredError ? 'zipTooLarge' : error instanceof BlobDownloadTooLarge ? 'fileTooLarge' : 'other'),
 
   thumbnail: async (folder, file, size) => {
     const url = await thumbnailUrl(file as DriveFile, size)
-    // On screen: draw a missing or stale one in the background (docs/plans/drive-thumbnails.md).
+    // A grid picture on screen: draw a missing or stale one in the background
+    // (docs/plans/drive-thumbnails.md).
     const session = getSession()
-    if (session) backfill(folder as Folder, file as DriveFile, session.accountId)
+    if (size === 'sm' && session) backfill(folder as Folder, file as DriveFile, session.accountId)
     return url
   },
   thumbnailStamp: (file) => `${(file as DriveFile).thumbnails.sm ?? ''}:${String((file as DriveFile).thumbnailStale)}`,

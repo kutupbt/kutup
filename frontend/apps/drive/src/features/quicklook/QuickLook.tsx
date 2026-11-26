@@ -5,13 +5,11 @@ import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@kutup/ui/components/dialog'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
-import { readFile, readRevision, type RevisionToRead } from '@kutup/editors/content'
-import type { DriveFile, Folder } from '@kutup/drive-core/model'
-import { editorKindFor, extensionOf } from '@kutup/drive-core/editorKind'
+import { editorKindFor, extensionOf } from '@kutup/drive-source/editorKind'
+import { useDriveSource } from '@kutup/drive-source/context'
+import type { FileView, FolderView, PlaybackFallback, VersionView } from '@kutup/drive-source/source'
 import { chooseViewer } from '@kutup/editors/viewers/dispatch'
 import { KindIcon } from '@kutup/drive-ui/KindIcon'
-import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
-import { openPlayback, type PlaybackFallback } from '@kutup/drive-core/playback'
 
 const MarkdownPreview = lazy(() => import('@kutup/editors/text/markdown/MarkdownPreview'))
 
@@ -21,10 +19,10 @@ const MAX_PREVIEW_BYTES = 100 * 1024 * 1024
 const MAX_TEXT_BYTES = 512 * 1024
 
 export interface QuickLookTarget {
-  folder: Folder
-  file: DriveFile
+  folder: FolderView
+  file: FileView
   /** An earlier revision from the file's history instead of its current content. */
-  revision?: RevisionToRead & { createdAt: string; sizeBytes: number }
+  revision?: VersionView
 }
 
 type Loaded =
@@ -55,6 +53,7 @@ export function QuickLook({
   onDownload: (target: QuickLookTarget) => void
 }) {
   const { t, i18n } = useTranslation()
+  const source = useDriveSource()
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const content = useRef<HTMLDivElement>(null)
   const file = target?.file
@@ -72,7 +71,7 @@ export function QuickLook({
     // has one (cached blob: URLs are owned by the thumbnail store). The
     // thumbnail is of the current content: never shown for an earlier revision.
     const fallback = (reason: 'type' | 'size') =>
-      void (revision ? Promise.resolve(null) : thumbnailUrl(f, 'lg')).then((picture) => {
+      void (revision ? Promise.resolve(null) : source.thumbnail(folder, f, 'lg')).then((picture) => {
         if (!cancelled) setLoaded(picture ? { kind: 'picture', url: picture, reason } : { kind: 'none', reason })
       })
     if (!viewer && !text) {
@@ -93,7 +92,7 @@ export function QuickLook({
         else if (next.kind === 'tooLarge') fallback('size')
         else setLoaded({ kind: 'none', reason: next.kind === 'busy' ? 'busy' : 'failed' })
       }
-      openPlayback(folder, f, controller.signal, undefined, replaced)
+      source.openPlayback(folder, f, controller.signal, undefined, replaced)
         .then((playback) => {
           if (playback.kind === 'ready') {
             if (cancelled) {
@@ -121,7 +120,7 @@ export function QuickLook({
       }
     }
     const controller = new AbortController()
-    const read = revision ? readRevision(f, revision, { signal: controller.signal }) : readFile(folder, f, controller.signal)
+    const read = revision ? source.readVersion(f, revision, controller.signal) : source.read(folder, f, controller.signal)
     read
       .then(async (blob) => {
         if (cancelled) return
@@ -144,7 +143,7 @@ export function QuickLook({
       controller.abort()
       if (url) URL.revokeObjectURL(url)
     }
-  }, [target])
+  }, [target, source])
 
   // An embedded viewer (the browser's PDF viewer) takes the keyboard when it
   // loads, and then Space and the arrows stop reaching Quick Look. Take it

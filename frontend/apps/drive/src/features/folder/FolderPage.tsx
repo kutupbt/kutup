@@ -23,7 +23,6 @@ import { canShareFile } from '@kutup/drive-core/fileShares'
 import { folderHex } from '../drive/colors'
 import { useDeclareCurrentFolder } from '../drive/currentFolderContext'
 import { isWithin } from '@kutup/drive-source/tree'
-import { downloadRevision } from '@kutup/editors/files/downloads'
 import { useFolderFiles } from '@kutup/drive-core/files'
 import { canonicalName } from '@kutup/drive-source/names'
 import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
@@ -33,7 +32,7 @@ import { isTargetBlocked, sharingOffScope } from '@kutup/drive-core/publicSharin
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { isListName } from '@kutup/map/list'
 import { useDriveSource } from '@kutup/drive-source/context'
-import type { DriveSource, MoveRefusal } from '@kutup/drive-source/source'
+import type { DriveSource, ItemRef, MoveRefusal } from '@kutup/drive-source/source'
 import { draggedItems, endItemDrag } from '../explorer/dragItems'
 import { Explorer, type ExplorerAction } from '../explorer/Explorer'
 import { ExplorerContextMenu, type ContextMenuSpec } from '../explorer/ExplorerContextMenu'
@@ -245,7 +244,7 @@ export function FolderPage() {
 
   /** One file as itself; a folder, or several items, as a ZIP. */
   const download = useCallback(
-    async (targets: Target[]) => {
+    async (targets: ItemRef[]) => {
       const [only] = targets
       if (!only) return
       try {
@@ -652,7 +651,7 @@ export function FolderPage() {
         }}
         onDownload={(target) => {
           if (!target.revision) return void download([target])
-          downloadRevision(target.file, target.revision).catch((error: unknown) => {
+          source.downloadVersion(target.file, target.revision).catch((error: unknown) => {
             if (!(error instanceof DOMException && error.name === 'AbortError')) toast.error(t('versions.downloadFailed'))
           })
         }}

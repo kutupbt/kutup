@@ -126,6 +126,27 @@ export type ItemRef = { folder: FolderView; file?: undefined } | { folder: Folde
 /** Why an item cannot be moved into a folder (the screens say it in words). */
 export type MoveRefusal = 'locked' | 'readOnly' | 'otherOwner' | 'remote' | 'notOwner' | 'intoItself' | 'alreadyThere'
 
+/** A version of a file from its history. */
+export interface VersionView {
+  id: string
+  createdAt: string
+  /** Bytes of that version's content. */
+  sizeBytes: number
+  authorAccountId?: string | null
+}
+
+/** A player's source for a file's video or audio. */
+export type Playback =
+  /** A URL to play (streamed, or a Blob's URL); `close` ends it. */
+  | { kind: 'ready'; src: string; streamed: boolean; close: () => void }
+  /** Too large to play here. */
+  | { kind: 'tooLarge' }
+  /** Too many playing at once in this tab. */
+  | { kind: 'busy' }
+
+/** What a stream that failed before it played is replaced with. */
+export type PlaybackFallback = Playback | { kind: 'failed' }
+
 /** What a source can do; the screens hide what is missing. */
 export interface Capabilities {
   /** Folder colours. */
@@ -172,8 +193,26 @@ export interface DriveSource {
   useMove: () => (tree: FolderTree, items: ItemRef[], dest: FolderView) => Promise<void>
   /** Whether an item can be moved at all by this source's rules (where to is `moveRefusal`'s). */
   mayMove: (item: ItemRef) => boolean
+  /** A file's current content, for a viewer in the page. */
+  read: (folder: FolderView, file: FileView, signal?: AbortSignal) => Promise<Blob>
+  /** A version's content, for a viewer in the page. */
+  readVersion: (file: FileView, version: VersionView, signal?: AbortSignal) => Promise<Blob>
+  /**
+   * A file's video or audio for a player, streamed where it can be. A stream
+   * that fails before it plays is replaced, and `onFallback` hears of it.
+   */
+  openPlayback: (
+    folder: FolderView,
+    file: FileView,
+    signal?: AbortSignal,
+    onProgress?: (read: number) => void,
+    onFallback?: (next: PlaybackFallback) => void,
+  ) => Promise<Playback>
+
   /** Saves one file to the computer by the source's own rules (Kutup: large files streamed to disk). */
   downloadFile: (folder: FolderView, file: FileView) => Promise<void>
+  /** Saves a version from a file's history under the file's name. */
+  downloadVersion: (file: FileView, version: VersionView) => Promise<void>
   /** A folder (its own files) as a ZIP; 'empty' when there was nothing to put in. */
   downloadFolderZip: (folder: FolderView, onProgress: (done: number, total: number) => void) => Promise<'empty' | 'done'>
   /** Several items as one ZIP named `archive`. */
@@ -184,7 +223,8 @@ export interface DriveSource {
   /**
    * A file's thumbnail as a URL for an <img>, or null (the kind's icon shows).
    * The screens never draw one: the source makes them (Kutup in the browser,
-   * after an upload, and redraws a missing or stale one while it is on screen).
+   * after an upload, and redraws a missing or stale one when its grid picture,
+   * `sm`, is on screen).
    */
   thumbnail: (folder: FolderView, file: FileView, size: 'sm' | 'lg') => Promise<string | null>
   /** Changes whenever the file's thumbnail does (when to ask again). */

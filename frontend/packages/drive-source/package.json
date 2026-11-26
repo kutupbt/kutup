@@ -11,7 +11,8 @@
     "./kinds": "./src/kinds.ts",
     "./restore": "./src/restore.ts",
     "./tree": "./src/tree.ts",
-    "./names": "./src/names.ts"
+    "./names": "./src/names.ts",
+    "./editorKind": "./src/editorKind.ts"
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5",
