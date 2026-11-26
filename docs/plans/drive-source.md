@@ -1,7 +1,7 @@
 # Drive screens over a `DriveSource` — plan
 
-**Status:** draft for review (PR 1 of 4). Nothing changes for Kutup's users;
-nothing uses the new package yet. The Kutup Home drive (`kutup-home-drive`,
+**Status:** interface agreed in review (PR 1 of 4, 2026-11-26); conversion
+starting. Nothing changes for Kutup's users. The Kutup Home drive (`kutup-home-drive`,
 plain files in plain folders, no end-to-end encryption) is the second
 implementation this enables; its server is built and waiting for the screens.
 
@@ -22,24 +22,47 @@ contains anything that only the home drive needs.
    check and devices; loading and saving a document, versions, thumbnails).
 4. **A PMTiles provider type** in `@kutup/map` and its config.
 
-## This PR (draft): the interface
+## This PR: the interface
 
-`packages/drive-source/src/source.ts` has the proposal. Its key decision:
+`packages/drive-source/src/source.ts`. Decided in review:
 
-- **The screens work with views, not with drive-core's types.** `Folder` and
-  `DriveFile` carry keys, epochs, sealed metadata, envelopes and revisions,
-  which a plain source does not have. The screens get `FolderView` and
-  `FileView` (id, name, size, kind, rights, times, media details, origin).
-  Kutup's `Folder` and `DriveFile` keep everything they have and satisfy the
-  views; Kutup's implementation receives its own objects back and narrows
-  them, so nothing is looked up twice.
-- **Operations by view**, each invalidating what it changed, as drive-core's
-  mutations do today.
-- **Capabilities** instead of branches on the source: identity pins,
-  federation, folder colours, upload links, server-made thumbnails.
-- **`UploadEngine`** wraps `streamUpload`, `uploadFolder` and `pendingUploads`
-  for Kutup; the screens see an `UploadHandle` (progress, pause, resume,
-  cancel, done) and the uploads that come back after a reload.
+- **Views, not drive-core's types.** The screens get `FolderView` and
+  `FileView`. Kutup's `Folder` and `DriveFile` keep all their fields and
+  satisfy the views; Kutup's implementation receives its own objects back and
+  narrows them. `FileView` carries the current **revision id** (the base a
+  version save or an editor's save names, shown in the details panel).
+- **A file's kind is not the source's.** Both apps derive it the same way
+  from name and type (`drive-core/kinds`, `editorKind`), so "open in Office"
+  is decided alike.
+- **Hooks on the source** (`useFolders`, `useFolderFiles`, `useTrash`,
+  `useSharedWithMe`, `useSharedByMe`). **Kutup's implementation keeps
+  drive-core's query keys exactly**: the editors, Calendar's attachments and
+  the upload commit invalidate Drive's lists by those keys.
+- **Capabilities instead of branches**, one per Kutup feature another source
+  may not have: identity pins, federation, leaving remote shares, invites,
+  roles, "editors can share", file links, link passwords, upload links, folder
+  colours, thumbnails made by the source.
+- **Sharing** is a small common core (shares with people and groups, links)
+  with Kutup's extras as optional, flagged operations.
+- **Operations** the screens use, all on the interface: folder move and copy
+  (Kutup's recursive `copy.ts` and `move.ts` move into its implementation),
+  folder colour, empty trash, the shared lists, search (Kutup searches in the
+  browser over its decrypted index; another source on its server), the names
+  in a folder for the conflict dialog, a new version from a base revision
+  (`replaceContent`), downloads by the source's own rules (Kutup's large-file
+  handling, File System Access) and a folder as a ZIP, reading for viewers,
+  previews, versions.
+- **Uploads** report changes (`subscribe`), not only a polled state.
+- **Thumbnails:** the screens never draw one. With `serverThumbnails`, the
+  source makes them: Kutup's upload engine draws and seals them in the browser
+  after an upload (`thumbnailQueue`) inside its implementation; a server source
+  makes them on the server. The screens only call `preview`.
+
+**Packaging for the other app** (agreed): the home drive includes Kutup as a
+git submodule pinned to a commit, in one pnpm workspace with
+`frontend/packages/*`. Kutup's packages stay private and unpublished, and
+Kutup promises **no API stability**: the home repository fixes its side when
+it moves the pin. Kutup's CI never builds the home edition.
 
 ## Where the screens touch encryption today
 
@@ -60,26 +83,21 @@ interface, into Kutup's implementation in `drive-core`:
 | `features/shared/SharedPage.tsx`, `dialogs/AccessList.tsx`, `ShareDialog.tsx` | remote shares, identity pins, access | sharing (in this PR's next step), `federation` and `identityPins` capabilities |
 | `features/search/*` | the encrypted search index | a `search` operation (next step) |
 
-Steps inside PR 1, each with Kutup's unit tests and the Drive browser suite
-green: (a) this interface; (b) Kutup's implementation in `drive-core`,
-wrapping today's code without changing it; (c) the screens switched to
-`useDriveSource()`, one feature folder at a time; (d) the moved code deleted
-from `apps/drive`.
+Steps inside PR 1, each keeping Kutup's unit tests green; the Drive browser
+suite runs on Kutup's even-numbered nights, so the steps are batched for one
+night to cover several:
 
-## Questions for review
+1. **Kutup's implementation** in `drive-core` (`encryptedDriveSource`),
+   wrapping today's hooks and functions without changing them, with unit tests
+   that it keeps the query keys.
+2. **Lists and simple changes**: the explorer, folder page, trash, shared
+   pages and dialogs read through `useDriveSource()`.
+3. **Content**: uploads, replace, copy, move, downloads, quick look, versions,
+   thumbnails; the moved code goes from `apps/drive` into `drive-core`.
+4. **Sharing and search**, then the remaining direct imports removed (a lint
+   rule keeps `apps/drive/src/features` off drive-core's internals).
 
-1. **Views over drive-core's types** (above): agreed, or should the screens
-   keep `Folder`/`DriveFile` with the encrypted fields optional?
-2. **Hooks on the source** (`useFolders`, `useFolderFiles`, `useTrash`) rather
-   than plain async functions the screens wrap in React Query themselves:
-   the source then owns its query keys and invalidation, as drive-core does now.
-3. **Sharing and search** are not in this draft yet: the access list and the
-   share dialog differ the most (federation, identity pins, invites). Proposal:
-   a `sharing` part with a small common core (people and groups, rights,
-   links) and Kutup's extras behind `federation` and `identityPins`.
-4. **Packaging for the other app:** the home drive includes Kutup as a git
-   submodule pinned to a commit, in one pnpm workspace with
-   `frontend/packages/*`, mirroring the root `pnpm.overrides` and
-   `patchedDependencies` (with a check that fails when they drift). Kutup
-   publishes nothing and changes nothing for it. Is that acceptable, or do you
-   prefer published packages?
+## Review
+
+Questions 1–4 of the first draft were answered on #458 (2026-11-26); the
+answers are folded in above.
