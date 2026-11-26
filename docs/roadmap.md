@@ -870,7 +870,8 @@ arrival, and direct sending. Phases, each with its own plan before code:
   events, day, week and month views, the editor with time zones). Next:
   E2 recurrence, reminders (web push and email) and `.ics` import and
   export; E3 sharing, links and busy/free; E4 invitations over Mail; E5
-  feeds from a URL (E5a built), Google import and Chat meetings. The view settings (zone,
+  feeds from a URL (E5a built), Chat meetings (E5c built); Google import
+  parked (needs Google's verification per server; plans/calendar.md, E5b). The view settings (zone,
   week start, clock) are kept per device until E2 moves them to the account.
   No CalDAV (as Proton). Replaces Chat meetings' `.ics` download (E5).
   E3 (sharing, links, busy/free, [`plans/calendar-e3.md`](plans/calendar-e3.md))

@@ -1107,3 +1107,48 @@ OAuth with PKCE in the browser, Google's Calendar API read from there, every
 event sealed before upload through the `.ics` import's path. Google's token
 never reaches Kutup's server. Off until the operator registers a Google
 OAuth client (its id is a setting); the button isn't shown before.
+
+**Parked (the user, 2026-11-26).** Google treats `calendar.readonly` (and
+every narrower read scope) as sensitive: an unverified OAuth client shows a
+warning and takes at most 100 users. Lifting that needs Google's
+verification (free for sensitive scopes: a verified domain, homepage,
+privacy policy and a demo video), and every self-hosted server would need
+its own client and its own verification. Google users already have two
+ways in with no client and no limit: "Add calendar from URL" with
+Google's secret iCal address (E5a, kept in step), and an `.ics` export
+through Import (a one-time copy). Pick this up if kutup.dev verifies a
+client. The design below is kept for then.
+
+**Design (proposed 2026-11-26).**
+
+- **Proton's is server-side** (Easy Switch: the OAuth code goes to Proton's
+  server, which reads the Google calendars). Kutup keeps D-3: everything in
+  the browser, so Kutup's server never holds a Google token or sees a Google
+  event.
+- **The token.** A browser can't keep a client secret, and Google's token
+  endpoint wants one for web clients even with PKCE. So the import uses
+  Google's browser token flow (`response_type=token`, the one Google Identity
+  Services uses for browser apps) in a popup: scope
+  `https://www.googleapis.com/auth/calendar.readonly`, the token in memory
+  only, revoked (`oauth2.googleapis.com/revoke`) as soon as the import ends
+  or is cancelled. No refresh token; nothing stored.
+- **The operator.** A Google Cloud OAuth client of type "Web application",
+  its JavaScript origin `https://calendar.<domain>` and redirect
+  `https://calendar.<domain>/google`. The client id is `KUTUP_GOOGLE_CLIENT_ID`
+  in the web container's environment, because the Calendar app's CSP then
+  allows `connect-src https://www.googleapis.com` (only with an id, as Chat's
+  SFU). Google treats `calendar.readonly` as a sensitive scope: past 100
+  users the operator's app needs Google's verification (self-hosting docs).
+- **What is imported.** A one-time import, as Proton's (a lasting copy is
+  E5a's subscription to Google's secret iCal address). The person picks
+  Google calendars and, for each, a new or existing Kutup calendar. Events
+  are read page by page (`events.list`, `singleEvents=false`, so series stay
+  series with their changed and cancelled occurrences), turned into one
+  `.ics` text per calendar and read by `calendar_ics::import`: the same
+  rules, limits (`calendar.import_max_events`, bytes) and report of what
+  can't be taken as a file import. Attendees and the organizer are dropped
+  as an import drops them; a Meet link comes over as the event's
+  `CONFERENCE` (E5c).
+- **UI.** Calendar's Import dialog gets "Import from Google" beside the file
+  picker, shown only with a client id; progress per calendar; the report as
+  the file import's.
