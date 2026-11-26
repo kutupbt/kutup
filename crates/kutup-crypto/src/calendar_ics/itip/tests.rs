@@ -368,3 +368,22 @@ fn a_written_cancel_is_cancelled_and_only_the_three_methods_are_sent() {
     bad.attendees[0].email = "Bea@contoso.example".into();
     assert!(write_invitation(&bad).is_err());
 }
+
+#[test]
+fn a_meeting_link_goes_out_with_a_request_and_reads_back() {
+    let mut invitation = request();
+    invitation.fields.conference = Some("https://chat.kutup.example/call#room-secret".into());
+    let text = write_invitation(&invitation).unwrap();
+    assert!(text.replace("\r\n ", "").contains(
+        "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:https://chat.kutup.example/call#room-secret"
+    ));
+    assert_eq!(
+        read(&text).fields.conference.as_deref(),
+        Some("https://chat.kutup.example/call#room-secret")
+    );
+    // A cancellation carries no link.
+    invitation.method = "CANCEL".into();
+    assert!(!write_invitation(&invitation)
+        .unwrap()
+        .contains("CONFERENCE"));
+}

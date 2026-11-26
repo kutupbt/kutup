@@ -186,6 +186,7 @@ fn parts() -> EventParts {
             summary: Some("Republic Day lunch; with friends, family".into()),
             description: Some("Bring dessert.\nTable for 8 — ü, ş, ğ".into()),
             location: Some("Moda, İstanbul".into()),
+            conference: None,
             other: Vec::new(),
         },
         calendar_signed: CalendarSigned {

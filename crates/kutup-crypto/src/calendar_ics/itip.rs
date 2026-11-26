@@ -671,6 +671,12 @@ pub fn write_invitation(invitation: &WriteInvitationV1) -> Result<String> {
     if let Some(location) = &secret.location {
         line(text_line("LOCATION", location));
     }
+    // The meeting link, so every invitee can join (RFC 7986; E5c).
+    if method == "REQUEST" {
+        if let Some(url) = &secret.conference {
+            line(format!("CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:{url}"));
+        }
+    }
     match method {
         "CANCEL" => line("STATUS:CANCELLED".into()),
         "REQUEST" => {
