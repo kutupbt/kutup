@@ -284,6 +284,15 @@ export interface DriveSource {
   useFolderCreator: (folder: FolderView) => PersonLookup
   /** What the owner shares a folder (or a file in it) with; undefined while loading, null when not shared. */
   useSharingSummary: (folder: FolderView, file?: FileView) => SharingSummary | null | undefined
+  /**
+   * Everything to search, by name, in the browser: the folder tree and every
+   * file the person can read (Kutup decrypts every listing; its own index).
+   * A source that searches on its server can later offer that instead.
+   */
+  useSearchIndex: (enabled: boolean) => { index: FolderTree | undefined; files: { folder: FolderView; file: FileView }[]; loading: boolean }
+  /** Whether the owner shares an item (for the search filter); undefined while loading. */
+  useSharedLookup: () => ((folder: FolderView, file?: FileView) => boolean) | undefined
+
   /** Whether the person may share an item with people. */
   mayShare: (item: ItemRef) => boolean
   /** Whether the person may make a public link to an item. */

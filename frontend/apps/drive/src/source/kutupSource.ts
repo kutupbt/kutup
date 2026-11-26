@@ -6,7 +6,8 @@
 // only ever hold objects drive-core gave them. So the hooks take Kutup's own
 // types back: the casts below say that, nothing is converted.
 
-import type { DriveSource, UploadActions } from '@kutup/drive-source/source'
+import { useMemo } from 'react'
+import type { DriveSource, FileView, FolderView, UploadActions } from '@kutup/drive-source/source'
 import { loadFolderFiles, useFolderFiles } from '@kutup/drive-core/files'
 import { useFolders } from '@kutup/drive-core/folders'
 import { useCreateFolder, useRenameFile, useRenameFolder, useSetFolderColor, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
@@ -25,6 +26,8 @@ import { useKutupFileDetails, useKutupFolderCreator, useKutupSharingSummary } fr
 import { KutupSignatureBanner } from './kutup/SignatureBanner'
 import { KutupAcceptInviteDialog, KutupPublicLinkDialog, KutupShareDialog } from './kutup/sharing/slots'
 import { canShareFile } from '@kutup/drive-core/fileShares'
+import { useDriveIndex } from '@kutup/editors/driveIndex'
+import { sharedByMeRowOf, useSharedByMeRows } from '@kutup/drive-core/sharedByMe'
 import { folderLocation } from '@kutup/drive-core/model'
 import { downloadFile, downloadFolderZip, downloadRevision, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
 import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
@@ -38,6 +41,17 @@ function useKutupUploadActions(): UploadActions {
     ...(actions as unknown as Omit<UploadActions, 'createFile'>),
     createFile: (folder, file) => uploadOne(folder as Folder, file),
   }
+}
+
+/** What this account shares, as the server counts it (shared-by-me rows). */
+function useKutupSharedLookup() {
+  const rows = useSharedByMeRows()
+  const data = rows.data
+  // One function per answer from the server, so what depends on it is not redone every render.
+  return useMemo(
+    () => (data ? (folder: FolderView, file?: FileView) => folder.source === 'owned' && Boolean(sharedByMeRowOf(data, folder.id, file?.id)) : undefined),
+    [data],
+  )
 }
 
 export const kutupDriveSource: DriveSource = {
@@ -79,6 +93,8 @@ export const kutupDriveSource: DriveSource = {
   useFolderCreator: useKutupFolderCreator,
   useSharingSummary: useKutupSharingSummary,
   DetailsBanner: KutupSignatureBanner,
+  useSearchIndex: useDriveIndex,
+  useSharedLookup: useKutupSharedLookup,
   // A file by itself as canShareFile says; a folder by whoever manages it.
   mayShare: (item) => (item.file ? canShareFile(item.folder as Folder, item.file as DriveFile) : item.folder.canManage),
   mayLink: (item) => !item.file && item.folder.canManage,
