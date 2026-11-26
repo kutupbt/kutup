@@ -231,6 +231,12 @@ pub(crate) struct World {
 
 impl World {
     pub(crate) fn new() -> Rc<Self> {
+        Self::with_gateway_config_ending(now() - 100 + 7 * 24 * 60 * 60)
+    }
+
+    /// A world whose home serves a gateway key config ending at `expires_at`
+    /// (a week long): the last stretch before a weekly rotation.
+    pub(crate) fn with_gateway_config_ending(expires_at: i64) -> Rc<Self> {
         let mut rng = rng();
         let key = SigningKey::from_seed(Suite::V1, &[1u8; 32]);
         let identity = FederationIdentityDocumentV1::genesis(SERVER, now() - 3600, &key).unwrap();
@@ -240,8 +246,8 @@ impl World {
             &key,
             gateway.key_id(),
             &gateway.public_key(),
-            now() - 100,
-            now() - 100 + 7 * 24 * 60 * 60,
+            expires_at - 7 * 24 * 60 * 60,
+            expires_at,
         )
         .unwrap();
         let trust_root = KeyPair::generate(&mut rng);
@@ -2394,6 +2400,26 @@ fn group_harness_members_message_each_other_under_sender_keys() {
         .filter(|(_, submission)| submission.send_id == first)
         .count();
     assert_eq!(legs, 2);
+}
+
+/// The hour before the home's weekly rotation: the home serves the config it
+/// will change from, which clients hold to its end. A group is made, joined
+/// and messaged then (every group request failed in that hour, as the client
+/// refused a config so near its end).
+#[test]
+fn group_harness_groups_work_in_the_last_hour_before_a_rotation() {
+    let world = World::with_gateway_config_ending(now() + 30 * 60);
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "before the rotation");
+    let report = bob.receive();
+    let texts: Vec<_> = report
+        .messages
+        .iter()
+        .filter_map(|m| m.content.as_text().map(|t| t.text))
+        .collect();
+    assert_eq!(texts, vec!["before the rotation".to_string()]);
 }
 
 #[test]

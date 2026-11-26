@@ -29,6 +29,7 @@ history implementation. It is retained as design and debugging history;
 |---|---|
 | [`21-kutup-dev-edge-and-mail-switch.md`](./21-kutup-dev-edge-and-mail-switch.md) | kutup.dev's MX moved from Cloudflare Email Routing to Kutup, and its edge from nginx to Koru (2026-11-24): the causes, the problems found before and during the switch and their fixes, the checks, and what is left (certificate renewal by 2026-12-15, block mode). |
 | [`22-signup-500-investigation.md`](./22-signup-500-investigation.md) | Open: an intermittent 500 on `POST /api/v1/auth/register` in master CI. Evidence, what is ruled out and why, the diagnostics that should name it next time. |
+| [`23-group-gateway-weekly-hour.md`](./23-group-gateway-weekly-hour.md) | Groups failed for the hour before each weekly gateway key change (Wednesday 23:00–24:00 UTC): the client refused a config near its end even when the home had nothing newer. Cause, fix (client uses it to its end; home serves the next one two minutes early), tests. |
 
 ### Other forward-looking notes
 
