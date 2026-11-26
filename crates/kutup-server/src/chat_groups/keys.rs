@@ -2,6 +2,13 @@
 //! key (domain-separated HKDF), so nothing secret is stored beside it and a
 //! restart serves the same key. The key config is signed by the same
 //! identity; the previous week's key is still accepted for the overlap.
+//!
+//! The next week's config is served a little before the change
+//! ([`SERVE_AHEAD_SECS`]), its key taken from then, so a client whose clock
+//! runs a minute or two ahead isn't left holding a config it finds expired
+//! while the home still serves it. A client uses the config it holds to its
+//! end: in its last hour it fetches again, gets the same config until the
+//! change, and keeps using it (`kutup-chat-core`'s `group_client`).
 
 use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, KEY_OVERLAP_SECS};
 use kutup_crypto::oblivious::GatewayKey;
@@ -14,6 +21,13 @@ use crate::error::{AppError, AppResult};
 /// A key's week, in seconds (also the config's lifetime, at most the format's
 /// seven days).
 pub(crate) const EPOCH_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// How long before the weekly change the next week's config is served. Below
+/// the format's clock skew allowance (`MAX_CLOCK_SKEW_SECS`), so a client
+/// whose clock is right already takes the new config (its `issued_at` is the
+/// change itself).
+pub(crate) const SERVE_AHEAD_SECS: i64 = 2 * 60;
+const _: () = assert!(SERVE_AHEAD_SECS < kutup_chat_proto::group_route::MAX_CLOCK_SKEW_SECS);
 
 /// The KEM is in the label: the derived seed is an X-Wing seed.
 const KEY_INFO: &[u8] = kutup_crypto::labels::CHAT_GROUP_GATEWAY_KEY_XWING_V2;
@@ -63,7 +77,7 @@ pub(crate) fn current_config(
     identity: &SigningKey,
     now: i64,
 ) -> AppResult<GroupGatewayKeyConfigV1> {
-    let epoch = epoch_of(now);
+    let epoch = epoch_of(now + SERVE_AHEAD_SECS);
     let key = cached(identity, epoch)?;
     let issued_at = epoch * EPOCH_SECS;
     GroupGatewayKeyConfigV1::sign(
@@ -85,6 +99,10 @@ pub(crate) fn accepted_keys(
 ) -> AppResult<Vec<std::sync::Arc<GatewayKey>>> {
     let epoch = epoch_of(now);
     let mut keys = vec![cached(identity, epoch)?];
+    // The next week's, once it is served.
+    if epoch_of(now + SERVE_AHEAD_SECS) > epoch {
+        keys.push(cached(identity, epoch + 1)?);
+    }
     if now - epoch * EPOCH_SECS < KEY_OVERLAP_SECS {
         keys.push(cached(identity, epoch - 1)?);
     }
@@ -115,6 +133,41 @@ mod tests {
             .unwrap()
             .iter()
             .any(|gateway| gateway.open_request(&request).is_ok()));
+    }
+
+    /// Across a weekly change, minute by minute: the served config verifies,
+    /// has time left, and its key is taken; a client with a config of the
+    /// week before keeps being answered through the overlap.
+    #[test]
+    fn every_minute_around_the_change_has_a_current_config_and_key() {
+        let (document, key) = identity();
+        let history = std::slice::from_ref(&document);
+        let change = 101 * EPOCH_SECS;
+        let opens = |config: &GroupGatewayKeyConfigV1, at: i64| {
+            let (key_id, public_key) = config.verify(history, at).unwrap();
+            let (request, _) =
+                kutup_crypto::oblivious::seal_request(key_id, &public_key, b"x").unwrap();
+            accepted_keys(&key, at)
+                .unwrap()
+                .iter()
+                .any(|gateway| gateway.open_request(&request).is_ok())
+        };
+        let before = current_config(&document, &key, change - 2 * 60 * 60).unwrap();
+        for at in (change - 2 * 60 * 60..change + 2 * 60 * 60).step_by(60) {
+            let served = current_config(&document, &key, at).unwrap();
+            assert!(served.expires_at > at, "expired config served at {at}");
+            assert!(opens(&served, at), "served key refused at {at}");
+            // The week before's config, as a client holds it to its end.
+            if at < before.expires_at {
+                assert!(opens(&before, at), "held key refused at {at}");
+            }
+        }
+        // The next week's is served just before the change, and a client
+        // whose clock is right takes it then (within the skew allowance).
+        let early = current_config(&document, &key, change - 60).unwrap();
+        assert_eq!(early.issued_at, change);
+        assert!(early.verify(history, change - 60).is_ok());
+        assert!(opens(&early, change - 60));
     }
 
     #[test]

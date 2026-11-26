@@ -22,7 +22,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ChatError, Result};
 use crate::transport::{ChatTransport, GroupRelayOutcome};
 
-/// A config is fetched again this long before it expires.
+/// A config is fetched again this long before it expires, so the home's next
+/// one is picked up early. Until the home serves a newer one, the one held
+/// is still used to its end: a home serves a config up to its rotation, so
+/// in this last stretch the fetch brings back the same config (the home
+/// takes its key a day longer, `KEY_OVERLAP_SECS`).
 const REFRESH_MARGIN_SECS: i64 = 60 * 60;
 
 /// What this device keeps of a home: the newest gateway key config it took,
@@ -76,11 +80,19 @@ impl GatewayCache {
         ConfigCheck::Unknown
     }
 
+    /// The held config's key, while it is not yet due to be fetched again.
     fn usable(&self, now: i64) -> Option<(u8, [u8; kutup_crypto::oblivious::PUBLIC_KEY_LEN])> {
         let config = self.config.as_ref()?;
         if now + REFRESH_MARGIN_SECS >= config.expires_at {
             return None;
         }
+        self.valid(now)
+    }
+
+    /// The held config's key while it verifies at `now`, however near its
+    /// end: what is used once fetching again brought nothing newer.
+    fn valid(&self, now: i64) -> Option<(u8, [u8; kutup_crypto::oblivious::PUBLIC_KEY_LEN])> {
+        let config = self.config.as_ref()?;
         config.verify(&self.identity_history, now).ok()
     }
 
@@ -216,16 +228,22 @@ pub async fn call(
     let mut clock_offset = 0i64;
     let mut refreshed = false;
     for _ in 0..3 {
+        // Due to be fetched again (or none held): fetched once. In a config's
+        // last hour the home still serves that same config until it rotates,
+        // so the one held is used while it verifies; refusing it left every
+        // group request failing for the hour before each weekly rotation.
         let (key_id, public_key) = match cache.usable(now) {
             Some(key) => key,
-            None if !refreshed => {
-                cache.refresh(transport, pin, now).await?;
-                refreshed = true;
+            None => {
+                if !refreshed {
+                    cache.refresh(transport, pin, now).await?;
+                    refreshed = true;
+                }
                 cache
                     .usable(now)
+                    .or_else(|| cache.valid(now))
                     .ok_or_else(|| ChatError::Trust("group gateway key is not usable".into()))?
             }
-            None => return Err(ChatError::Trust("group gateway key is not usable".into())),
         };
         let mut nonce = [0u8; 16];
         OsRng.fill_bytes(&mut nonce);
@@ -445,6 +463,51 @@ mod tests {
         assert_eq!(response.status, GroupResponseStatusV1::Ok);
         assert_eq!(home.fetches.get(), 2);
         assert_eq!(cache.config.as_ref().unwrap().key_id, 2);
+    }
+
+    /// The home serves a config up to its rotation: in its last hour, fetching
+    /// again brings back the same config, which is used to its end (it was
+    /// refused, and every group request failed for the hour before each
+    /// weekly rotation).
+    #[test]
+    fn a_config_in_its_last_hour_is_used_until_the_home_rotates() {
+        let mut home = Home::new();
+        let expires_at = home.served.borrow().expires_at;
+        let mut cache = GatewayCache::default();
+        get_state(&home, &mut cache, NOW).unwrap();
+        assert_eq!(home.fetches.get(), 1);
+        for left in [59 * 60, 10 * 60, 1] {
+            let now = expires_at - left;
+            home.clock = now;
+            let response = get_state(&home, &mut cache, now).unwrap();
+            assert_eq!(response.status, GroupResponseStatusV1::Ok, "{left}s left");
+        }
+        // Each call in the last hour asks once for a newer config.
+        assert_eq!(home.fetches.get(), 4);
+        // Past its end it is refused, as before.
+        home.clock = expires_at;
+        assert!(matches!(
+            get_state(&home, &mut cache, expires_at),
+            Err(ChatError::Trust(_))
+        ));
+    }
+
+    /// In the last hour, a config the home rotated to is taken at once.
+    #[test]
+    fn a_rotation_in_the_last_hour_is_taken_at_once() {
+        let mut home = Home::new();
+        let expires_at = home.served.borrow().expires_at;
+        let mut cache = GatewayCache::default();
+        get_state(&home, &mut cache, NOW).unwrap();
+        let gateway = GatewayKey::generate(2).unwrap();
+        *home.served.borrow_mut() =
+            Home::config(&home.identity, &home.key, &gateway, expires_at - 30 * 60);
+        *home.gateway.borrow_mut() = gateway;
+        let now = expires_at - 20 * 60;
+        home.clock = now;
+        get_state(&home, &mut cache, now).unwrap();
+        assert_eq!(cache.config.as_ref().unwrap().key_id, 2);
+        assert_eq!(home.fetches.get(), 2);
     }
 
     #[test]
