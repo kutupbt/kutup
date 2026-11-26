@@ -213,6 +213,16 @@ export interface SlotProps {
   onOpenChange: (open: boolean) => void
 }
 
+/** Something the person shares: a folder, or a file shared by itself, with counts. */
+export interface SharedByMeView {
+  folder: FolderView
+  file?: FileView
+  people: number
+  /** Capability `federation`: accounts on other servers. */
+  otherServers?: number
+  links: number
+}
+
 /** What a source can do; the screens hide what is missing. */
 export interface Capabilities {
   /** Accepting invites from other servers (the AcceptInviteDialog slot). */
@@ -290,6 +300,8 @@ export interface DriveSource {
    * A source that searches on its server can later offer that instead.
    */
   useSearchIndex: (enabled: boolean) => { index: FolderTree | undefined; files: { folder: FolderView; file: FileView }[]; loading: boolean }
+  /** What the person shares, with counts. */
+  useSharedByMe: () => { items: SharedByMeView[]; loading: boolean; error: unknown }
   /** Whether the owner shares an item (for the search filter); undefined while loading. */
   useSharedLookup: () => ((folder: FolderView, file?: FileView) => boolean) | undefined
 

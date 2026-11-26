@@ -2,8 +2,7 @@ import { ExternalLink, UserPlus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import type { Folder } from '@kutup/drive-core/model'
-import { useSharedByMe, type SharedByMeItem } from '@kutup/drive-core/sharedByMe'
+import type { FolderView, SharedByMeView } from '@kutup/drive-source/source'
 import { Alert } from '@kutup/ui/components/alert'
 import { EmptyState } from '@kutup/ui/components/states'
 import { ListSkeleton } from '@kutup/ui/components/skeleton'
@@ -15,7 +14,7 @@ import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
 
-type Dialog = { kind: 'folder'; folder: Folder } | { kind: 'file'; key: string } | null
+type Dialog = { kind: 'folder'; folder: FolderView } | { kind: 'file'; key: string } | null
 
 /**
  * What you share: your folders shared with people or by link, and your files
@@ -26,13 +25,13 @@ export function SharedByMePage() {
   const source = useDriveSource()
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
-  const shared = useSharedByMe()
+  const shared = source.useSharedByMe()
   const [prefs, updatePrefs] = useExplorerPrefs()
   const [selection, setSelection] = useState<Set<string>>(new Set())
   const [dialog, setDialog] = useState<Dialog>(null)
 
   const byKey = useMemo(() => {
-    const map = new Map<string, SharedByMeItem>()
+    const map = new Map<string, SharedByMeView>()
     for (const item of shared.items) map.set(itemKey({ type: item.file ? 'file' : 'folder', id: item.file?.id ?? item.folder.id }), item)
     return map
   }, [shared.items])
@@ -63,11 +62,11 @@ export function SharedByMePage() {
   )
   const shown = sortItems(filterItems(items, prefs.kinds), prefs.sort, i18n.language)
 
-  const open = (item: SharedByMeItem) => {
+  const open = (item: SharedByMeView) => {
     if (item.file) openFile(navigate, item.folder, item.file)
     else void navigate(folderPath(item.folder))
   }
-  const manage = (item: SharedByMeItem) =>
+  const manage = (item: SharedByMeView) =>
     setDialog(item.file ? { kind: 'file', key: itemKey({ type: 'file', id: item.file.id }) } : { kind: 'folder', folder: item.folder })
 
   const shareTarget = (() => {
@@ -106,7 +105,7 @@ export function SharedByMePage() {
             if (!shared) return null
             return [
               shared.people > 0 ? t('sharedByMe.people', { count: shared.people }) : null,
-              shared.otherServers > 0 ? t('sharedByMe.otherServers', { count: shared.otherServers }) : null,
+              shared.otherServers ? t('sharedByMe.otherServers', { count: shared.otherServers }) : null,
               shared.links > 0 ? t('sharedByMe.links', { count: shared.links }) : null,
             ]
               .filter(Boolean)

@@ -27,7 +27,7 @@ import { KutupSignatureBanner } from './kutup/SignatureBanner'
 import { KutupAcceptInviteDialog, KutupPublicLinkDialog, KutupShareDialog } from './kutup/sharing/slots'
 import { canShareFile } from '@kutup/drive-core/fileShares'
 import { useDriveIndex } from '@kutup/editors/driveIndex'
-import { sharedByMeRowOf, useSharedByMeRows } from '@kutup/drive-core/sharedByMe'
+import { sharedByMeRowOf, useSharedByMe, useSharedByMeRows } from '@kutup/drive-core/sharedByMe'
 import { folderLocation } from '@kutup/drive-core/model'
 import { downloadFile, downloadFolderZip, downloadRevision, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
 import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
@@ -95,6 +95,7 @@ export const kutupDriveSource: DriveSource = {
   DetailsBanner: KutupSignatureBanner,
   useSearchIndex: useDriveIndex,
   useSharedLookup: useKutupSharedLookup,
+  useSharedByMe,
   // A file by itself as canShareFile says; a folder by whoever manages it.
   mayShare: (item) => (item.file ? canShareFile(item.folder as Folder, item.file as DriveFile) : item.folder.canManage),
   mayLink: (item) => !item.file && item.folder.canManage,
