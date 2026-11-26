@@ -19,14 +19,11 @@ import { NameDialog } from '@kutup/drive-ui/NameDialog'
 import { folderHex } from '../drive/colors'
 import { useDeclareCurrentFolder } from '../drive/currentFolderContext'
 import { isWithin } from '@kutup/drive-source/tree'
-import { useFolderFiles } from '@kutup/drive-core/files'
 import { canonicalName } from '@kutup/drive-source/names'
-import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
-import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { isListName } from '@kutup/map/list'
 import { useDriveSource } from '@kutup/drive-source/context'
-import type { DriveSource, FolderTree, FolderView, ItemRef, MoveRefusal } from '@kutup/drive-source/source'
+import type { DriveSource, FileView, FolderTree, FolderView, ItemRef, MoveRefusal } from '@kutup/drive-source/source'
 import { draggedItems, endItemDrag } from '../explorer/dragItems'
 import { Explorer, type ExplorerAction } from '../explorer/Explorer'
 import { ExplorerContextMenu, type ContextMenuSpec } from '../explorer/ExplorerContextMenu'
@@ -35,22 +32,21 @@ import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/
 import { Toolbar } from '../explorer/Toolbar'
 import { QuickLook, type QuickLookTarget } from '../quicklook/QuickLook'
 import { FileThumbnail } from '../thumbnails/FileThumbnail'
-import { useUploadActions } from '../../source/kutup/uploads/useUploadActions'
 import { VersionHistoryDialog } from '../versions/VersionHistoryDialog'
 import { DetailsDialog } from '../details/DetailsDialog'
 
-type Target = { folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile }
+type Target = ItemRef
 type Dialog =
   | { kind: 'rename'; target: Target }
-  | { kind: 'color'; folder: Folder }
-  | { kind: 'share'; folder: Folder }
+  | { kind: 'color'; folder: FolderView }
+  | { kind: 'share'; folder: FolderView }
   /** By key: the file's own key changes as people are removed, the list refreshes it. */
   | { kind: 'shareFile'; key: string }
   /** By key too: a restore or delete changes the file, the list refreshes it. */
   | { kind: 'history'; key: string }
   /** By keys too: the dialog follows the items as the list refreshes them. */
   | { kind: 'details'; keys: string[] }
-  | { kind: 'link'; folder: Folder }
+  | { kind: 'link'; folder: FolderView }
   | { kind: 'copy'; targets: Target[] }
   | { kind: 'move'; targets: Target[] }
   | null
@@ -64,23 +60,23 @@ function refusalFor(source: DriveSource, index: FolderTree, targets: ItemRef[], 
   return reasons.every((r) => r === 'alreadyThere') ? 'alreadyThere' : null
 }
 
-function resolveFolder(index: FolderIndex, id: string | undefined, shareId: string | undefined): Folder | undefined {
+function resolveFolder(index: FolderTree, id: string | undefined, shareId: string | undefined): FolderView | undefined {
   if (shareId) return index.sharedWithMe.find((f) => f.remoteShareId === shareId)
   if (!id) return index.root
   return index.byId.get(id)
 }
 
 function crumbsFor(
-  index: FolderIndex,
-  folder: Folder,
+  index: FolderTree,
+  folder: FolderView,
   t: (k: string) => string,
-  dropOn: (dest: Folder) => Crumb['drop'],
+  dropOn: (dest: FolderView) => Crumb['drop'],
 ): Crumb[] {
   if (folder.source !== 'owned') {
     return [{ label: t('nav.shared'), to: '/shared' }, { label: folder.name ?? t('drive.encrypted') }]
   }
   const trail: Crumb[] = []
-  let at: Folder | undefined = folder
+  let at: FolderView | undefined = folder
   while (at && !at.isRoot) {
     trail.unshift({ label: at.name ?? t('drive.encrypted'), to: folderPath(at), drop: dropOn(at) })
     at = at.parentId ? index.byId.get(at.parentId) : undefined
@@ -104,10 +100,10 @@ export function FolderPage() {
   const source = useDriveSource()
   const session = useRequiredSession()
   const params = useParams()
-  const folders = useFolders()
+  const folders = source.useFolders()
   const folder = folders.data ? resolveFolder(folders.data, params.id, params.shareId) : undefined
   useDeclareCurrentFolder(folder)
-  const files = useFolderFiles(folder)
+  const files = source.useFolderFiles(folder)
   const [prefs, updatePrefs] = useExplorerPrefs()
   const [selection, setSelection] = useState<Set<string>>(new Set())
   // The page stays mounted from folder to folder: a selection belongs to the
@@ -123,7 +119,7 @@ export function FolderPage() {
   // An item is being dragged: the path stays on screen as a drop target.
   const [itemDrag, setItemDrag] = useState(false)
   const [looking, setLooking] = useState<QuickLookTarget | null>(null)
-  const { uploadFiles, uploadDirectory } = useUploadActions()
+  const { uploadFiles, uploadDirectory } = source.useUploadActions()
   const renameFolder = source.useRenameFolder()
   const renameFile = source.useRenameFile()
   const trashFolder = source.useTrashFolder()
@@ -177,7 +173,7 @@ export function FolderPage() {
   )
 
   const mayChangeFile = useCallback(
-    (container: Folder, file: DriveFile) =>
+    (container: FolderView, file: FileView) =>
       container.canManage || (container.canDelete && file.uploaderAccountId === session.accountId),
     [session.accountId],
   )
@@ -443,7 +439,7 @@ export function FolderPage() {
     })
     return targets.length === keys.length && targets.every((target) => source.mayMove(target)) ? targets : null
   }
-  const dropOn = (dest: Folder): Crumb['drop'] => ({
+  const dropOn = (dest: FolderView): Crumb['drop'] => ({
     accepts: () => {
       const keys = draggedItems()
       const targets = keys && draggedTargets(keys)
