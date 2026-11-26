@@ -17,6 +17,9 @@ import { folderKeyAt, type KeyringFolder } from './keyring'
 import { fileMetadataOf, type DriveFile } from './model'
 import { acceptFileMetadata } from './metadataGuard'
 import { asNameTaken, atTopLevel, availableHashes, findAvailableName, hashGenerationOf, inFolder, nameFieldsIn, nameHashIn, type NamePlace } from './names'
+// Shared with every Drive data source (docs/plans/drive-source.md).
+import { RestoreCancelled, type AskRestoreName } from '@kutup/drive-source/restore'
+export { RestoreCancelled, type AskRestoreName, type RestoreNameQuestion } from '@kutup/drive-source/restore'
 
 interface TrashFolderRow {
   id: string
@@ -197,22 +200,6 @@ function useTrashMutation<T>(fn: (input: T) => Promise<void>) {
   })
 }
 
-/** Restoring needs a name: what is asked, and the name offered. */
-export interface RestoreNameQuestion {
-  name: string
-  /** The first free `name (n)` where it comes back. */
-  suggested: string
-}
-
-/** Asks the person whether to restore under the offered name; false: leave it in the trash. */
-export type AskRestoreName = (question: RestoreNameQuestion) => Promise<boolean>
-
-/** A restore the person called off (its name is taken where it comes back). */
-export class RestoreCancelled extends Error {
-  constructor() {
-    super('restore cancelled')
-  }
-}
 
 /** A restore refused because the item needs a name where it comes back. */
 function refusedName(error: unknown): 'taken' | 'needed' | null {

@@ -7,9 +7,12 @@
   "exports": {
     "./source": "./src/source.ts",
     "./context": "./src/context.ts",
-    "./provider": "./src/provider.tsx"
+    "./provider": "./src/provider.tsx",
+    "./kinds": "./src/kinds.ts",
+    "./restore": "./src/restore.ts"
   },
   "peerDependencies": {
+    "@tanstack/react-query": "^5",
     "react": "^18.3.1"
   }
 }

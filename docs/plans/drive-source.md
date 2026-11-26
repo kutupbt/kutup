@@ -87,15 +87,37 @@ Steps inside PR 1, each keeping Kutup's unit tests green; the Drive browser
 suite runs on Kutup's even-numbered nights, so the steps are batched for one
 night to cover several:
 
-1. **Kutup's implementation** in `drive-core` (`encryptedDriveSource`),
-   wrapping today's hooks and functions without changing them, with unit tests
-   that it keeps the query keys.
-2. **Lists and simple changes**: the explorer, folder page, trash, shared
-   pages and dialogs read through `useDriveSource()`.
+1. **Kutup's implementation** (`apps/drive/src/source/kutupSource.ts`):
+   drive-core's own hooks, unchanged, with a unit test that they are drive-core's
+   (so every query key and invalidation stays). It lives in the app, not in
+   `drive-core`: the upload, copy and move code it will need is in the app
+   today, and after PR 2 the app is exactly "Kutup's screens + Kutup's source".
+   **Done** for the lists (folders, a folder's files, trash) and the folder,
+   file and trash changes; the trash page reads through it.
+2. **Lists and simple changes**: the explorer, folder page, shared pages and
+   dialogs read through `useDriveSource()`.
 3. **Content**: uploads, replace, copy, move, downloads, quick look, versions,
-   thumbnails; the moved code goes from `apps/drive` into `drive-core`.
+   thumbnails.
 4. **Sharing and search**, then the remaining direct imports removed (a lint
    rule keeps `apps/drive/src/features` off drive-core's internals).
+
+**How the interface grows.** `source.ts` holds what is implemented and used,
+nothing more (no stubs); each step adds its part. The whole target, as
+reviewed, is `packages/drive-source/src/source.ts` at `afbd1d9`. Two
+refinements made while implementing:
+
+- **The views use Kutup's own field names** (`source`, `collectionId`,
+  `content.revisionId`, `MediaMetadataV1`'s names), so Kutup's `Folder`,
+  `DriveFile` and `TrashEntry` *are* the views: nothing is copied, the screens'
+  memoisation sees the same objects, and Kutup's source is drive-core's hooks.
+  The folder list is a `FolderTree` (drive-core's `FolderIndex` shape: root,
+  children, shared with me).
+- **Changes are mutation hooks**, as in drive-core (`useRenameFile()` with
+  `mutate`, `isPending`, `error`), not bare promises: the screens keep their
+  pending and error states, and Kutup's invalidation stays drive-core's.
+- **`kinds.ts` and the restore errors** moved into `@kutup/drive-source`
+  (drive-core re-exports them unchanged), so every source decides a file's kind
+  and reports a cancelled restore the same way, without a package cycle.
 
 ## Review
 
