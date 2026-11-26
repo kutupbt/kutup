@@ -168,6 +168,14 @@ export interface DriveSource {
   useMove: () => (tree: FolderTree, items: ItemRef[], dest: FolderView) => Promise<void>
   /** Whether an item can be moved at all by this source's rules (where to is `moveRefusal`'s). */
   mayMove: (item: ItemRef) => boolean
+  /**
+   * A file's thumbnail as a URL for an <img>, or null (the kind's icon shows).
+   * The screens never draw one: the source makes them (Kutup in the browser,
+   * after an upload, and redraws a missing or stale one while it is on screen).
+   */
+  thumbnail: (folder: FolderView, file: FileView, size: 'sm' | 'lg') => Promise<string | null>
+  /** Changes whenever the file's thumbnail does (when to ask again). */
+  thumbnailStamp: (file: FileView) => string
   /** Why an item cannot be moved into `dest` by this source's rules, or null when it can. */
   moveRefusal: (tree: FolderTree, item: ItemRef, dest: FolderView) => MoveRefusal | null
 }

@@ -17,6 +17,9 @@ import type { FolderIndex } from '@kutup/drive-core/folders'
 import { useCopy } from './kutup/drive/useCopy'
 import { moveRefusal, type MoveSource } from './kutup/drive/move'
 import { useMove } from './kutup/drive/useMove'
+import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
+import { getSession } from '@kutup/session/store'
+import { backfill } from './kutup/thumbnails/backfill'
 
 /** Kutup's uploads (sealed, resumable, thumbnails drawn after) as the screens start them. */
 function useKutupUploadActions(): UploadActions {
@@ -53,6 +56,14 @@ export const kutupDriveSource: DriveSource = {
 
   useCopy: useCopy as unknown as DriveSource['useCopy'],
   useMove: useMove as unknown as DriveSource['useMove'],
+  thumbnail: async (folder, file, size) => {
+    const url = await thumbnailUrl(file as DriveFile, size)
+    // On screen: draw a missing or stale one in the background (docs/plans/drive-thumbnails.md).
+    const session = getSession()
+    if (session) backfill(folder as Folder, file as DriveFile, session.accountId)
+    return url
+  },
+  thumbnailStamp: (file) => `${(file as DriveFile).thumbnails.sm ?? ''}:${String((file as DriveFile).thumbnailStale)}`,
   // A file by whoever can edit its folder, a folder by its owner (docs/plans/drive-move.md).
   mayMove: (item) => {
     const folder = item.folder as Folder
