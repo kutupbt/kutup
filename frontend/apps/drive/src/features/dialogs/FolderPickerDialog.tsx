@@ -5,8 +5,8 @@ import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { cn } from '@kutup/ui/lib/cn'
 import { folderHex } from '../drive/colors'
-import type { FolderIndex } from '@kutup/drive-core/folders'
-import type { Folder } from '@kutup/drive-core/model'
+import { useDriveSource } from '@kutup/drive-source/context'
+import type { FolderTree, FolderView } from '@kutup/drive-source/source'
 import { KindIcon } from '@kutup/drive-ui/KindIcon'
 
 /**
@@ -30,17 +30,18 @@ export function FolderPickerDialog({
   title: string
   description?: string
   submit: string
-  index: FolderIndex
+  index: FolderTree
   /** Opened at, and pre-selected: usually the folder on screen. */
-  start: Folder | null
+  start: FolderView | null
   /** Why a folder cannot be picked, or null when it can. */
-  refusal: (folder: Folder) => string | null
+  refusal: (folder: FolderView) => string | null
   pending?: boolean
   onClose: () => void
-  onPick: (folder: Folder) => void
+  onPick: (folder: FolderView) => void
 }) {
   const { t } = useTranslation()
-  const [picked, setPicked] = useState<Folder | null>(null)
+  const source = useDriveSource()
+  const [picked, setPicked] = useState<FolderView | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   useEffect(() => {
@@ -58,13 +59,13 @@ export function FolderPickerDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, index, start])
 
-  const childrenOf = (folder: Folder) =>
+  const childrenOf = (folder: FolderView) =>
     folder.isRoot ? [...index.childrenOf(folder.id), ...index.looseTopLevel] : index.childrenOf(folder.id)
 
-  const byName = (a: Folder, b: Folder) => (a.name ?? '').localeCompare(b.name ?? '')
+  const byName = (a: FolderView, b: FolderView) => (a.name ?? '').localeCompare(b.name ?? '')
 
-  const row = (folder: Folder, depth: number, icon?: React.ReactNode) => {
-    const kids = folder.source === 'owned' ? childrenOf(folder).filter((f) => f.key).sort(byName) : []
+  const row = (folder: FolderView, depth: number, icon?: React.ReactNode) => {
+    const kids = folder.source === 'owned' ? childrenOf(folder).filter((f) => source.isOpen(f)).sort(byName) : []
     const isOpen = expanded.has(folder.id)
     const reason = refusal(folder)
     const label = folder.isRoot ? t('nav.myFiles') : (folder.name ?? t('drive.encrypted'))
@@ -115,7 +116,7 @@ export function FolderPickerDialog({
     )
   }
 
-  const shared = index.sharedWithMe.filter((f) => f.key).sort(byName)
+  const shared = index.sharedWithMe.filter((f) => source.isOpen(f)).sort(byName)
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>

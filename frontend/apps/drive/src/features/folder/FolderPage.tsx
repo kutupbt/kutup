@@ -26,7 +26,7 @@ import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { isListName } from '@kutup/map/list'
 import { useDriveSource } from '@kutup/drive-source/context'
-import type { DriveSource, ItemRef, MoveRefusal } from '@kutup/drive-source/source'
+import type { DriveSource, FolderTree, FolderView, ItemRef, MoveRefusal } from '@kutup/drive-source/source'
 import { draggedItems, endItemDrag } from '../explorer/dragItems'
 import { Explorer, type ExplorerAction } from '../explorer/Explorer'
 import { ExplorerContextMenu, type ContextMenuSpec } from '../explorer/ExplorerContextMenu'
@@ -56,7 +56,7 @@ type Dialog =
   | null
 
 /** Why none of `targets` can go into `dest`, or null when they can. */
-function refusalFor(source: DriveSource, index: FolderIndex, targets: Target[], dest: Folder): MoveRefusal | null {
+function refusalFor(source: DriveSource, index: FolderTree, targets: ItemRef[], dest: FolderView): MoveRefusal | null {
   const reasons = targets.map((target) => source.moveRefusal(index, target, dest))
   const blocking = reasons.find((r) => r !== null && r !== 'alreadyThere')
   if (blocking) return blocking
