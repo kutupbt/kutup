@@ -120,6 +120,12 @@ export interface UploadActions {
   createFile: (folder: FolderView, file: File) => Promise<{ fileId: string } | null>
 }
 
+/** A folder, or a file in its folder: what is copied or moved. */
+export type ItemRef = { folder: FolderView; file?: undefined } | { folder: FolderView; file: FileView }
+
+/** Why an item cannot be moved into a folder (the screens say it in words). */
+export type MoveRefusal = 'locked' | 'readOnly' | 'otherOwner' | 'remote' | 'notOwner' | 'intoItself' | 'alreadyThere'
+
 /** What a source can do; the screens hide what is missing. */
 export interface Capabilities {
   /** Folder colours. */
@@ -155,4 +161,13 @@ export interface DriveSource {
   useEmptyTrash: () => UseMutationResult<void, Error, void>
 
   useUploadActions: () => UploadActions
+
+  /** Copies into `dest` (each item an entry in the upload panel; taken names get "(1)"…). */
+  useCopy: () => (tree: FolderTree, items: ItemRef[], dest: FolderView) => Promise<void>
+  /** Moves into `dest`, then says what happened with an undo; taken names stay where they are. */
+  useMove: () => (tree: FolderTree, items: ItemRef[], dest: FolderView) => Promise<void>
+  /** Whether an item can be moved at all by this source's rules (where to is `moveRefusal`'s). */
+  mayMove: (item: ItemRef) => boolean
+  /** Why an item cannot be moved into `dest` by this source's rules, or null when it can. */
+  moveRefusal: (tree: FolderTree, item: ItemRef, dest: FolderView) => MoveRefusal | null
 }

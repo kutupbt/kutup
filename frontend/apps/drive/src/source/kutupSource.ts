@@ -11,8 +11,12 @@ import { loadFolderFiles, useFolderFiles } from '@kutup/drive-core/files'
 import { useFolders } from '@kutup/drive-core/folders'
 import { useCreateFolder, useRenameFile, useRenameFolder, useSetFolderColor, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
 import { useEmptyTrash, usePurge, useRestore, useTrash } from '@kutup/drive-core/trash'
-import type { Folder } from '@kutup/drive-core/model'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { uploadOne, useUploadActions } from './kutup/uploads/useUploadActions'
+import type { FolderIndex } from '@kutup/drive-core/folders'
+import { useCopy } from './kutup/drive/useCopy'
+import { moveRefusal, type MoveSource } from './kutup/drive/move'
+import { useMove } from './kutup/drive/useMove'
 
 /** Kutup's uploads (sealed, resumable, thumbnails drawn after) as the screens start them. */
 function useKutupUploadActions(): UploadActions {
@@ -46,4 +50,14 @@ export const kutupDriveSource: DriveSource = {
   useEmptyTrash,
 
   useUploadActions: useKutupUploadActions,
+
+  useCopy: useCopy as unknown as DriveSource['useCopy'],
+  useMove: useMove as unknown as DriveSource['useMove'],
+  // A file by whoever can edit its folder, a folder by its owner (docs/plans/drive-move.md).
+  mayMove: (item) => {
+    const folder = item.folder as Folder
+    if (item.file) return folder.source !== 'remote' && folder.canUpload && Boolean((item.file as DriveFile).fileKey)
+    return folder.source === 'owned' && folder.canManage && !folder.isRoot && Boolean(folder.key)
+  },
+  moveRefusal: (tree, item, dest) => moveRefusal(tree as FolderIndex, item as MoveSource, dest as Folder),
 }

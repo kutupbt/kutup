@@ -6,7 +6,7 @@ import type { Folder } from '@kutup/drive-core/model'
 import { asNameTaken, canonicalName, findAvailableName, freeName, inFolder, nameHashIn, namesIn } from '@kutup/drive-core/names'
 import { openRow, type CollectionRowWithTimes } from '@kutup/drive-core/folders'
 import { ConflictPolicy } from '@kutup/drive-ui/nameConflicts'
-import { createdFolder } from '../../../features/drive/copy'
+import { createdFolder } from '../drive/copy'
 import { BatchListing, placeFile } from './upload'
 
 /**

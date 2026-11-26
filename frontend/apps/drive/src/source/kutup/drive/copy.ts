@@ -1,7 +1,7 @@
 import { createOwnedCollectionV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { readFile } from '@kutup/editors/content'
-import { uploadCreating } from '../../source/kutup/uploads/useUploadActions'
+import { uploadCreating } from '../uploads/useUploadActions'
 import { copyEmbedded, embeddingKind } from '@kutup/editors/files/embedded'
 import { loadFolderFiles } from '@kutup/drive-core/files'
 import type { FolderIndex } from '@kutup/drive-core/folders'
@@ -65,15 +65,8 @@ export function createdFolder(
   }
 }
 
-/** Whether `candidate` is `folder` or somewhere inside it (a folder cannot be copied into itself). */
-export function isWithin(index: FolderIndex, candidate: Folder, folder: Folder): boolean {
-  let at: Folder | undefined = candidate
-  while (at) {
-    if (at.id === folder.id && at.source === folder.source) return true
-    at = at.parentId ? index.byId.get(at.parentId) : undefined
-  }
-  return false
-}
+/** Shared with every source. */
+export { isWithin } from '@kutup/drive-source/tree'
 
 /** Names already used directly in `dest` (its files and subfolders). */
 export async function namesIn(index: FolderIndex, dest: Folder): Promise<string[]> {

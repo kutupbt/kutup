@@ -23,7 +23,7 @@ import { ShareDialog } from '../dialogs/ShareDialog'
 import { canShareFile } from '@kutup/drive-core/fileShares'
 import { folderHex } from '../drive/colors'
 import { useDeclareCurrentFolder } from '../drive/currentFolderContext'
-import { isWithin } from '../drive/copy'
+import { isWithin } from '@kutup/drive-source/tree'
 import { downloadFile, downloadFolderZip, downloadRevision, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
 import { useFolderFiles } from '@kutup/drive-core/files'
 import { useRestore } from '@kutup/drive-core/trash'
@@ -34,9 +34,8 @@ import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useT
 import { isTargetBlocked, sharingOffScope } from '@kutup/drive-core/publicSharing'
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { isListName } from '@kutup/map/list'
-import { moveRefusal, type MoveRefusal } from '../drive/move'
-import { useCopy } from '../drive/useCopy'
-import { useMove } from '../drive/useMove'
+import { useDriveSource } from '@kutup/drive-source/context'
+import type { DriveSource, MoveRefusal } from '@kutup/drive-source/source'
 import { draggedItems, endItemDrag } from '../explorer/dragItems'
 import { Explorer, type ExplorerAction } from '../explorer/Explorer'
 import { ExplorerContextMenu, type ContextMenuSpec } from '../explorer/ExplorerContextMenu'
@@ -66,19 +65,9 @@ type Dialog =
   | { kind: 'move'; targets: Target[] }
   | null
 
-/**
- * Whether an item can be moved at all (docs/plans/drive-move.md): a file by
- * whoever can edit its folder, a folder by its owner. Where it may go is
- * `moveRefusal`'s to say.
- */
-function mayMove(target: Target): boolean {
-  if (target.file) return target.folder.source !== 'remote' && target.folder.canUpload && Boolean(target.file.fileKey)
-  return target.folder.source === 'owned' && target.folder.canManage && !target.folder.isRoot && Boolean(target.folder.key)
-}
-
 /** Why none of `targets` can go into `dest`, or null when they can. */
-function refusalFor(index: FolderIndex, targets: Target[], dest: Folder): MoveRefusal | null {
-  const reasons = targets.map((target) => moveRefusal(index, target, dest))
+function refusalFor(source: DriveSource, index: FolderIndex, targets: Target[], dest: Folder): MoveRefusal | null {
+  const reasons = targets.map((target) => source.moveRefusal(index, target, dest))
   const blocking = reasons.find((r) => r !== null && r !== 'alreadyThere')
   if (blocking) return blocking
   // Some already there and some not: the rest move.
@@ -122,6 +111,7 @@ function crumbsFor(
 export function FolderPage() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
+  const source = useDriveSource()
   const session = useRequiredSession()
   const params = useParams()
   const folders = useFolders()
@@ -149,8 +139,8 @@ export function FolderPage() {
   const trashFolder = useTrashFolder()
   const trashFile = useTrashFile()
   const publicLink = useCreatePublicLink()
-  const copy = useCopy()
-  const move = useMove()
+  const copy = source.useCopy()
+  const move = source.useMove()
   const create = useCreateActions(folder ?? null)
 
   const children = useMemo(() => {
@@ -310,7 +300,7 @@ export function FolderPage() {
         actions.push({ id: 'preview', label: t('drive.actions.quickLook'), icon: <Eye />, onSelect: () => setLooking({ folder: container, file }) })
         actions.push({ id: 'download', label: t('drive.actions.download'), icon: <Download />, onSelect: () => void download([target]) })
         actions.push({ id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets: [target] }) })
-        if (mayMove(target)) {
+        if (source.mayMove(target)) {
           actions.push({ id: 'move', label: t('drive.actions.moveTo'), icon: <FolderInput />, onSelect: () => setDialog({ kind: 'move', targets: [target] }) })
         }
         if (canShareFile(container, file)) {
@@ -334,7 +324,7 @@ export function FolderPage() {
       actions.push({ id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => open(item) })
       actions.push({ id: 'download', label: t('drive.actions.downloadZip'), icon: <Download />, onSelect: () => void download([target]) })
       actions.push({ id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets: [target] }) })
-      if (mayMove(target)) {
+      if (source.mayMove(target)) {
         actions.push({ id: 'move', label: t('drive.actions.moveTo'), icon: <FolderInput />, onSelect: () => setDialog({ kind: 'move', targets: [target] }) })
       }
       actions.push({ id: 'details', label: t('drive.actions.details'), icon: <Info />, onSelect: () => setDialog({ kind: 'details', keys: [itemKey(item)] }), separated: !f.canManage })
@@ -367,7 +357,7 @@ export function FolderPage() {
       }
       return actions
     },
-    [lookup, mayChangeFile, moveToTrash, open, download, publicLink, t],
+    [lookup, mayChangeFile, moveToTrash, open, download, publicLink, source, t],
   )
 
   const selectedTargets = [...selection].flatMap((key) => {
@@ -387,7 +377,7 @@ export function FolderPage() {
         { id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets }) },
       )
     }
-    if (targets.every(mayMove)) {
+    if (targets.every((target) => source.mayMove(target))) {
       actions.push({ id: 'move', label: t('drive.actions.moveTo'), icon: <FolderInput />, onSelect: () => setDialog({ kind: 'move', targets }) })
     }
     actions.push({
@@ -485,13 +475,13 @@ export function FolderPage() {
       const target = lookup.get(k)
       return target ? [target] : []
     })
-    return targets.length === keys.length && targets.every(mayMove) ? targets : null
+    return targets.length === keys.length && targets.every((target) => source.mayMove(target)) ? targets : null
   }
   const dropOn = (dest: Folder): Crumb['drop'] => ({
     accepts: () => {
       const keys = draggedItems()
       const targets = keys && draggedTargets(keys)
-      return Boolean(targets && refusalFor(index, targets, dest) === null)
+      return Boolean(targets && refusalFor(source, index, targets, dest) === null)
     },
     onDrop: () => {
       const keys = draggedItems()
@@ -596,12 +586,12 @@ export function FolderPage() {
             onDeleteKey={() => selectedTrashable.length === selectedTargets.length && void moveToTrash(selectedTargets)}
             canDrag={(item) => {
               const target = lookup.get(itemKey(item))
-              return Boolean(target && mayMove(target))
+              return Boolean(target && source.mayMove(target))
             }}
             canDrop={(keys, item) => {
               const dest = lookup.get(itemKey(item))
               const targets = draggedTargets(keys)
-              return Boolean(dest && !dest.file && targets && refusalFor(index, targets, dest.folder) === null)
+              return Boolean(dest && !dest.file && targets && refusalFor(source, index, targets, dest.folder) === null)
             }}
             onItemDrag={setItemDrag}
             onDropItems={(keys, item) => {
@@ -729,7 +719,7 @@ export function FolderPage() {
         index={index}
         start={folder}
         refusal={(dest) => {
-          const reason = refusalFor(index, moving ?? [], dest)
+          const reason = refusalFor(source, index, moving ?? [], dest)
           return reason ? refusalText[reason] : null
         }}
         onClose={() => setDialog(null)}

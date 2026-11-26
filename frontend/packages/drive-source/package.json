@@ -9,7 +9,8 @@
     "./context": "./src/context.ts",
     "./provider": "./src/provider.tsx",
     "./kinds": "./src/kinds.ts",
-    "./restore": "./src/restore.ts"
+    "./restore": "./src/restore.ts",
+    "./tree": "./src/tree.ts"
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5",

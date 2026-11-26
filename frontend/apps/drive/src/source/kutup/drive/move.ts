@@ -17,15 +17,9 @@ import type { DriveFile, Folder } from '@kutup/drive-core/model'
 
 export type MoveSource = { folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile }
 
-/** Why an item cannot go into a folder. */
-export type MoveRefusal =
-  | 'locked'
-  | 'readOnly'
-  | 'otherOwner'
-  | 'remote'
-  | 'notOwner'
-  | 'intoItself'
-  | 'alreadyThere'
+/** Why an item cannot go into a folder (shared with every source). */
+import type { MoveRefusal } from '@kutup/drive-source/source'
+export type { MoveRefusal }
 
 /** Why `source` cannot be moved into `dest`, or null when it can. */
 export function moveRefusal(index: FolderIndex, source: MoveSource, dest: Folder): MoveRefusal | null {
