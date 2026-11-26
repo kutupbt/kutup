@@ -24,6 +24,8 @@ export interface FolderView {
   updatedAt: string
   /** "alice@example.org" for folders someone else owns; null for one's own. */
   ownerAccount: string | null
+  /** The owner's permanent id (Kutup: account id; home: the account server's subject). */
+  ownerAccountId: string
   canUpload: boolean
   canDelete: boolean
   /** Rename, colour, share, links, subfolders, delete. */
@@ -135,6 +137,31 @@ export interface VersionView {
   authorAccountId?: string | null
 }
 
+/** One entry of a file's history: an earlier version, or what it holds now. */
+export interface HistoryEntryView extends VersionView {
+  /** `file`: the whole file; `yjs`: a note's (or code file's, place list's) saved state. */
+  kind: 'file' | 'yjs'
+  label: string | null
+  keepForever: boolean
+  /** What the file holds now. */
+  current: boolean
+}
+
+/** Why restoring a version did not happen (the screens say it in words). */
+export type RestoreProblem = 'changed' | 'ownUpload' | 'othersUpload'
+
+/** A file's history and what can be done with it; every change refreshes it. */
+export interface VersionHistory {
+  history: { data: HistoryEntryView[] | undefined; isPending: boolean; isError: boolean; error: unknown }
+  /** Whether an earlier version can be made current here. */
+  mayRestore: boolean
+  mayDelete: (entry: HistoryEntryView, history: readonly HistoryEntryView[]) => boolean
+  /** Makes it the newest version again; every other version stays. */
+  restore: (entry: HistoryEntryView) => Promise<{ done: true } | { problem: RestoreProblem }>
+  keep: (entry: HistoryEntryView, keepForever: boolean) => Promise<void>
+  remove: (entry: HistoryEntryView) => Promise<void>
+}
+
 /** A player's source for a file's video or audio. */
 export type Playback =
   /** A URL to play (streamed, or a Blob's URL); `close` ends it. */
@@ -211,6 +238,12 @@ export interface DriveSource {
 
   /** Saves one file to the computer by the source's own rules (Kutup: large files streamed to disk). */
   downloadFile: (folder: FolderView, file: FileView) => Promise<void>
+  useVersionHistory: (folder: FolderView, file: FileView) => VersionHistory
+  /** Who saved a version, as a name to show; null when not known. */
+  useAuthorName: (entry: HistoryEntryView) => string | null
+  /** How long earlier versions are kept, where the person can change it (null: nothing to show). */
+  useVersionRetention: () => { days: number } | null
+
   /** Saves a version from a file's history under the file's name. */
   downloadVersion: (file: FileView, version: VersionView) => Promise<void>
   /** A folder (its own files) as a ZIP; 'empty' when there was nothing to put in. */

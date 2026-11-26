@@ -1,31 +1,13 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, Eye, ExternalLink, Loader2, MoreVertical, Pin, PinOff, RotateCcw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
-import { useAccountName } from '@kutup/drive-core/accountName'
-import { editorKindFor } from '@kutup/drive-core/editorKind'
-import { useDriveIdentity } from '@kutup/drive-core/identity'
-import type { DriveFile, Folder } from '@kutup/drive-core/model'
-import { personOfAccount, usePeople } from '@kutup/drive-core/people'
-import { readRevision } from '@kutup/editors/content'
-import { downloadRevision } from '@kutup/editors/files/downloads'
-import {
-  deleteVersion,
-  fileHistory,
-  groupHistory,
-  holdsYjsState,
-  listVersions,
-  mayDeleteEntry,
-  ORIGINAL,
-  patchVersion,
-  type HistoryEntry,
-  type HistoryGroup,
-} from '@kutup/editors/history'
+import { useDriveSource } from '@kutup/drive-source/context'
+import { editorKindFor } from '@kutup/drive-source/editorKind'
+import type { FileView, FolderView, HistoryEntryView } from '@kutup/drive-source/source'
+import { groupHistory, holdsYjsState, ORIGINAL, type HistoryGroup } from '@kutup/editors/history'
 import { chooseViewer } from '@kutup/editors/viewers/dispatch'
-import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
-import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
 import {
   AlertDialog,
@@ -49,20 +31,15 @@ import {
 } from '@kutup/ui/components/dropdown-menu'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { canReplace, replaceContent } from '../../source/kutup/uploads/replace'
-import { thumbnailAfterUpload } from '../../source/kutup/thumbnails/schedule'
 import type { QuickLookTarget } from '../quicklook/QuickLook'
 
 /** The periods with a name of their own (as Drive → Settings names them). */
 const NAMED_RETENTION_DAYS: ReadonlySet<number> = new Set([7, 30, 90, 180, 365, 3650])
 
 export interface VersionHistoryTarget {
-  folder: Folder
-  file: DriveFile
+  folder: FolderView
+  file: FileView
 }
-
-/** The query of a file's version rows. */
-const versionsKey = (fileId: string) => ['versions', fileId] as const
 
 /**
  * A file's version history (Proton Drive's "Version history"): the current
@@ -112,13 +89,14 @@ function HistoryBody({
 }) {
   const { t, i18n } = useTranslation()
   const session = useRequiredSession()
-  const queryClient = useQueryClient()
+  const source = useDriveSource()
   const { folder, file } = target
-  const versions = useQuery({ queryKey: versionsKey(file.id), queryFn: () => listVersions(file.id) })
+  const versionHistory = source.useVersionHistory(folder, file)
+  const versions = versionHistory.history
   const owner = folder.ownerAccountId === session.accountId
-  const [restoring, setRestoring] = useState<HistoryEntry | null>(null)
+  const [restoring, setRestoring] = useState<HistoryEntryView | null>(null)
   const [restorePending, setRestorePending] = useState(false)
-  const [deleting, setDeleting] = useState<HistoryEntry | null>(null)
+  const [deleting, setDeleting] = useState<HistoryEntryView | null>(null)
   const [deletePending, setDeletePending] = useState(false)
   const [deleteError, setDeleteError] = useState<unknown>(null)
 
@@ -132,20 +110,14 @@ function HistoryBody({
   }
   if (versions.isError) return <Alert variant="error">{apiErrorMessage(versions.error, t('versions.loadFailed'))}</Alert>
 
-  const history = fileHistory(file, versions.data)
+  const history = versions.data ?? []
   const current = history.find((e) => e.current)
   const earlier = history.filter((e) => !e.current)
   const yjs = holdsYjsState(file.name)
   const previewable = Boolean(file.name && (chooseViewer(file.name) || editorKindFor(file.name) === 'text'))
-  const mayRestore = !yjs && canReplace(folder, file)
+  const mayRestore = versionHistory.mayRestore
 
-  const refresh = () =>
-    Promise.all([
-      queryClient.invalidateQueries({ queryKey: versionsKey(file.id) }),
-      queryClient.invalidateQueries({ queryKey: ['files'] }),
-    ])
-
-  const when = (entry: HistoryEntry) =>
+  const when = (entry: HistoryEntryView) =>
     new Intl.DateTimeFormat(i18n.language, { dateStyle: 'long', timeStyle: 'short' }).format(new Date(entry.createdAt))
 
   const actions: RowActions = {
@@ -159,10 +131,10 @@ function HistoryBody({
       : undefined,
     download: async (entry) => {
       try {
-        await downloadRevision(file, entry)
+        await source.downloadVersion(file, entry)
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        toast.error(error instanceof BlobDownloadTooLarge ? t('drive.fileTooLargeForBrowser') : t('versions.downloadFailed'))
+        toast.error(source.downloadFailure(error) === 'fileTooLarge' ? t('drive.fileTooLargeForBrowser') : t('versions.downloadFailed'))
       }
     },
     restore: mayRestore ? setRestoring : undefined,
@@ -170,29 +142,24 @@ function HistoryBody({
     keep: folder.canUpload
       ? async (entry) => {
           try {
-            await patchVersion(file.id, entry.id, { keepForever: !entry.keepForever })
-            await queryClient.invalidateQueries({ queryKey: versionsKey(file.id) })
+            await versionHistory.keep(entry, !entry.keepForever)
           } catch (error) {
             toast.error(apiErrorMessage(error, t('versions.updateFailed')))
           }
         }
       : undefined,
-    remove: (entry) => (mayDeleteEntry(entry, history, session.accountId, folder.ownerAccountId) ? () => setDeleting(entry) : undefined),
+    remove: (entry) => (versionHistory.mayDelete(entry, history) ? () => setDeleting(entry) : undefined),
   }
 
-  async function restore(entry: HistoryEntry) {
+  async function restore(entry: HistoryEntryView) {
     if (!file.name) return
     setRestorePending(true)
     const id = toast.loading(t('versions.restoring'))
     try {
-      const blob = await readRevision(file, entry)
-      const restored = new File([blob], file.name, { type: file.mimeType })
-      const outcome = await replaceContent(folder, file, restored, { signal: new AbortController().signal })
+      const outcome = await versionHistory.restore(entry)
       if ('done' in outcome) {
-        thumbnailAfterUpload(outcome.done, restored)
         toast.success(t('versions.restored'), { id })
         setRestoring(null)
-        await refresh()
       } else {
         toast.error(t(`versions.restoreProblem.${outcome.problem}`), { id })
       }
@@ -203,14 +170,13 @@ function HistoryBody({
     }
   }
 
-  async function remove(entry: HistoryEntry) {
+  async function remove(entry: HistoryEntryView) {
     setDeletePending(true)
     setDeleteError(null)
     try {
-      await deleteVersion(file.id, entry.id)
+      await versionHistory.remove(entry)
       setDeleting(null)
       toast.success(t('versions.deleted'))
-      await refresh()
     } catch (error) {
       setDeleteError(error)
     } finally {
@@ -290,16 +256,16 @@ function HistoryBody({
 }
 
 interface RowActions {
-  preview?: (entry: HistoryEntry) => void
-  download: (entry: HistoryEntry) => Promise<void>
-  restore?: (entry: HistoryEntry) => void
+  preview?: (entry: HistoryEntryView) => void
+  download: (entry: HistoryEntryView) => Promise<void>
+  restore?: (entry: HistoryEntryView) => void
   openInEditor?: () => void
-  keep?: (entry: HistoryEntry) => Promise<void>
+  keep?: (entry: HistoryEntryView) => Promise<void>
   /** The delete action for `entry`, when this account may delete it. */
-  remove: (entry: HistoryEntry) => (() => void) | undefined
+  remove: (entry: HistoryEntryView) => (() => void) | undefined
 }
 
-function groupTitle(group: HistoryGroup, t: (key: string) => string, locale: string): string {
+function groupTitle(group: HistoryGroup<HistoryEntryView>, t: (key: string) => string, locale: string): string {
   switch (group.kind) {
     case 'today':
       return t('versions.groups.today')
@@ -316,7 +282,7 @@ function groupTitle(group: HistoryGroup, t: (key: string) => string, locale: str
   }
 }
 
-function VersionItem({ entry, format, actions }: { entry: HistoryEntry; format: 'auto' | 'time' | 'date'; actions: RowActions }) {
+function VersionItem({ entry, format, actions }: { entry: HistoryEntryView; format: 'auto' | 'time' | 'date'; actions: RowActions }) {
   const { t, i18n } = useTranslation()
   const at = new Date(entry.createdAt)
   const sameDay = at.toDateString() === new Date().toDateString()
@@ -397,28 +363,18 @@ function VersionItem({ entry, format, actions }: { entry: HistoryEntry; format: 
 }
 
 /** Who saved a revision: their profile name once they gave it, else their address. */
-function AuthorName({ entry }: { entry: HistoryEntry }) {
+function AuthorName({ entry }: { entry: HistoryEntryView }) {
   const { t } = useTranslation()
-  const identity = useDriveIdentity()
-  const server = identity.data?.accountRef.server
-  const account =
-    entry.remoteAuthor ?? (entry.authorAccountId && server ? { server, accountId: entry.authorAccountId } : null)
-  const address = useAccountName(account)
-  const people = usePeople()
-  const name = account && address.data ? personOfAccount(people.data, account, address.data).name : null
+  const name = useDriveSource().useAuthorName(entry)
   return <span className="truncate">{name ?? t('versions.unknownAuthor')}</span>
 }
 
 /** How long the owner's earlier versions are kept, with a way to change it (Proton's `RevisionsSettingsBanner`). */
 function RetentionBanner() {
   const { t } = useTranslation()
-  const me = useQuery({
-    queryKey: ['me'],
-    queryFn: async () =>
-      (await api.get<{ versionRetentionDays: number; versionRetentionChoices: number[] }>('/account')).data,
-  })
-  if (!me.data) return null
-  const days = me.data.versionRetentionDays
+  const retention = useDriveSource().useVersionRetention()
+  if (!retention) return null
+  const days = retention.days
   const period = NAMED_RETENTION_DAYS.has(days) ? t(`settings.versions.retention.d${days}`) : t('settings.versions.retention.days', { count: days })
   return (
     <div className="flex items-center justify-between gap-3 rounded-md bg-muted/60 px-3 py-2" data-testid="version-retention">

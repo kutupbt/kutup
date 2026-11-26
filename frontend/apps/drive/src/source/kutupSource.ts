@@ -20,6 +20,7 @@ import { useMove } from './kutup/drive/useMove'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 import { getSession } from '@kutup/session/store'
 import { backfill } from './kutup/thumbnails/backfill'
+import { useKutupAuthorName, useKutupVersionHistory, useKutupVersionRetention } from './kutup/versions'
 import { folderLocation } from '@kutup/drive-core/model'
 import { downloadFile, downloadFolderZip, downloadRevision, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
 import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
@@ -69,6 +70,9 @@ export const kutupDriveSource: DriveSource = {
   openPlayback: (folder, file, signal, onProgress, onFallback) => openPlayback(folder, file as DriveFile, signal, onProgress, onFallback),
 
   downloadFile: (folder, file) => downloadFile(folder as Folder, file as DriveFile),
+  useVersionHistory: useKutupVersionHistory as unknown as DriveSource['useVersionHistory'],
+  useAuthorName: useKutupAuthorName,
+  useVersionRetention: useKutupVersionRetention,
   downloadVersion: (file, version) => downloadRevision(file as DriveFile, version as unknown as RevisionToRead),
   downloadFolderZip: (folder, onProgress) => downloadFolderZip(folder as Folder, onProgress),
   downloadSelectionZip: (items, archive, onProgress) => downloadSelectionZip(items as MoveSource[], archive, onProgress),
