@@ -25,7 +25,10 @@ import { useKutupAuthorName, useKutupVersionHistory, useKutupVersionRetention } 
 import { useKutupFileDetails, useKutupFolderCreator, useKutupSharingSummary } from './kutup/details'
 import { KutupSignatureBanner } from './kutup/SignatureBanner'
 import { KutupAcceptInviteDialog, KutupPublicLinkDialog, KutupShareDialog } from './kutup/sharing/slots'
-import { canShareFile } from '@kutup/drive-core/fileShares'
+import { canShareFile, useLeaveRemoteFileShare, useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
+import { useLeaveRemoteShare } from '@kutup/drive-core/mutations'
+import { personOf, usePeople } from '@kutup/drive-core/people'
+import { KutupSharedFrom } from './kutup/sharing/SharedFrom'
 import { useDriveIndex } from '@kutup/editors/driveIndex'
 import { sharedByMeRowOf, useSharedByMe, useSharedByMeRows } from '@kutup/drive-core/sharedByMe'
 import { folderLocation } from '@kutup/drive-core/model'
@@ -52,6 +55,12 @@ function useKutupSharedLookup() {
     () => (data ? (folder: FolderView, file?: FileView) => folder.source === 'owned' && Boolean(sharedByMeRowOf(data, folder.id, file?.id)) : undefined),
     [data],
   )
+}
+
+/** Someone by their address: their profile name once they gave it, else the address. */
+function useKutupPersonName(account: string): string {
+  const people = usePeople()
+  return personOf(people.data, account).name
 }
 
 export const kutupDriveSource: DriveSource = {
@@ -96,6 +105,14 @@ export const kutupDriveSource: DriveSource = {
   useSearchIndex: useDriveIndex,
   useSharedLookup: useKutupSharedLookup,
   useSharedByMe,
+  useSharedFiles,
+  // Shares from other servers can be left; one on this server is the sharer's to take back.
+  mayLeaveFolder: (folder) => folder.source === 'remote',
+  mayLeaveFile: (shared) => Boolean((shared as SharedFile).remoteShareId),
+  useLeaveFolder: useLeaveRemoteShare as unknown as DriveSource['useLeaveFolder'],
+  useLeaveFile: useLeaveRemoteFileShare as unknown as DriveSource['useLeaveFile'],
+  usePersonName: useKutupPersonName,
+  SharedFrom: KutupSharedFrom,
   // A file by itself as canShareFile says; a folder by whoever manages it.
   mayShare: (item) => (item.file ? canShareFile(item.folder as Folder, item.file as DriveFile) : item.folder.canManage),
   mayLink: (item) => !item.file && item.folder.canManage,

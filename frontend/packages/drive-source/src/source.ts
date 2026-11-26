@@ -223,6 +223,24 @@ export interface SharedByMeView {
   links: number
 }
 
+/** A file shared with the person by itself (not through a folder). */
+export interface SharedWithMeFileView {
+  file: FileView
+  /** Where it lives, as far as the person can tell (no folder of theirs). */
+  container: FolderView
+  canEdit: boolean
+  /** An editor the owner lets share it on. */
+  canShare: boolean
+  /**
+   * `ready`; `gone`: the owner deleted it; `waiting` and `editsWait`: access
+   * is on its way (Kutup: keys not yet received). A plain source is ready or gone.
+   */
+  state: 'ready' | 'editsWait' | 'waiting' | 'gone'
+  /** Who shared it, and whose it is (they differ when an editor passed it on). */
+  sharerAccount: string
+  ownerAccount: string
+}
+
 /** What a source can do; the screens hide what is missing. */
 export interface Capabilities {
   /** Accepting invites from other servers (the AcceptInviteDialog slot). */
@@ -300,6 +318,18 @@ export interface DriveSource {
    * A source that searches on its server can later offer that instead.
    */
   useSearchIndex: (enabled: boolean) => { index: FolderTree | undefined; files: { folder: FolderView; file: FileView }[]; loading: boolean }
+  /** Files shared with the person by themselves (shared folders are in `useFolders`' `sharedWithMe`). */
+  useSharedFiles: () => UseQueryResult<SharedWithMeFileView[]>
+  /** Whether the person can leave a folder or a file shared with them (Kutup: shares from other servers). */
+  mayLeaveFolder: (folder: FolderView) => boolean
+  mayLeaveFile: (shared: SharedWithMeFileView) => boolean
+  useLeaveFolder: () => UseMutationResult<void, Error, FolderView>
+  useLeaveFile: () => UseMutationResult<void, Error, SharedWithMeFileView>
+  /** Someone's name as the person knows them (by their address). */
+  usePersonName: (account: string) => string
+  /** "From X · owned by Y" for something shared with the person (Kutup adds its identity warnings). */
+  SharedFrom: ComponentType<{ shared: SharedWithMeFileView } | { folder: FolderView }>
+
   /** What the person shares, with counts. */
   useSharedByMe: () => { items: SharedByMeView[]; loading: boolean; error: unknown }
   /** Whether the owner shares an item (for the search filter); undefined while loading. */

@@ -9,23 +9,14 @@ import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { EmptyState } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { downloadFile, downloadFolderZip } from '@kutup/editors/files/downloads'
-import { useLeaveRemoteFileShare, useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
-import { useRenameFile } from '@kutup/drive-core/mutations'
 import { NameDialog } from '@kutup/drive-ui/NameDialog'
-import { useFolders } from '@kutup/drive-core/folders'
-import type { Folder } from '@kutup/drive-core/model'
-import { useLeaveRemoteShare } from '@kutup/drive-core/mutations'
 import { folderPath, openFile } from '@kutup/editors/paths'
-import { personOf, usePeople } from '@kutup/drive-core/people'
-import { PersonLabel } from '../people/PersonLabel'
 import { Explorer } from '../explorer/Explorer'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
 import { useDriveSource } from '@kutup/drive-source/context'
-import { folderOwnerClaim } from '@kutup/drive-core/identityStatus'
-import { IdentityWarningIcon } from '@kutup/drive-ui/IdentityWarning'
+import type { FolderView, SharedWithMeFileView } from '@kutup/drive-source/source'
 
 /**
  * What other people shared with you: folders, here or from other Kutup
@@ -36,20 +27,21 @@ export function SharedPage() {
   const AcceptInvite = source.AcceptInviteDialog
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
-  const folders = useFolders()
-  const sharedFiles = useSharedFiles()
+  const folders = source.useFolders()
+  const sharedFiles = source.useSharedFiles()
+  const SharedFrom = source.SharedFrom
   const [prefs, updatePrefs] = useExplorerPrefs()
   const [selection, setSelection] = useState<Set<string>>(new Set())
   const [inviting, setInviting] = useState(false)
-  const [leaving, setLeaving] = useState<Folder | null>(null)
-  const leave = useLeaveRemoteShare()
-  const rename = useRenameFile()
-  const leaveFile = useLeaveRemoteFileShare()
-  const [leavingFile, setLeavingFile] = useState<SharedFile | null>(null)
+  const [leaving, setLeaving] = useState<FolderView | null>(null)
+  const leave = source.useLeaveFolder()
+  const rename = source.useRenameFile()
+  const leaveFile = source.useLeaveFile()
+  const [leavingFile, setLeavingFile] = useState<SharedWithMeFileView | null>(null)
   // By id: the file's key and name refresh while a dialog is open.
   const [sharing, setSharing] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
-  const people = usePeople()
+  const leavingOwner = source.usePersonName(leaving?.ownerAccount ?? '')
 
   const byId = useMemo(() => new Map((folders.data?.sharedWithMe ?? []).map((f) => [f.remoteShareId ?? f.id, f])), [folders.data])
   const filesById = useMemo(() => new Map((sharedFiles.data ?? []).map((s) => [s.file.id, s])), [sharedFiles.data])
@@ -76,8 +68,8 @@ export function SharedPage() {
   )
   const shown = sortItems(filterItems(items, prefs.kinds), prefs.sort, i18n.language)
 
-  function downloadShared(s: SharedFile) {
-    return downloadFile(s.container, s.file).catch(
+  function downloadShared(s: SharedWithMeFileView) {
+    return source.downloadFile(s.container, s.file).catch(
       (e: unknown) => !(e instanceof DOMException && e.name === 'AbortError') && toast.error(t('drive.downloadFailed')),
     )
   }
@@ -116,19 +108,7 @@ export function SharedPage() {
               const s = filesById.get(item.id)
               if (!s) return null
               // Who shared it; and whose it is, when an editor passed it on.
-              const from = (
-                <>
-                  <PersonLabel account={s.sharerAccount} format={(name) => t('shared.from', { account: name })} />
-                  <IdentityWarningIcon account={s.sharerAccount} claimed={s.sharerClaim} />
-                  {s.sharerAccount !== s.ownerAccount ? (
-                    <>
-                      {' · '}
-                      <PersonLabel account={s.ownerAccount} format={(name) => t('shared.ownedBy', { account: name })} />
-                      <IdentityWarningIcon account={s.ownerAccount} claimed={s.ownerClaim} />
-                    </>
-                  ) : null}
-                </>
-              )
+              const from = <SharedFrom shared={s} />
               return s.state === 'gone' ? (
                 <>{from} · {t('shared.gone')}</>
               ) : s.state === 'waiting' ? (
@@ -140,30 +120,25 @@ export function SharedPage() {
               )
             }
             const f = byId.get(item.id)
-            return f?.ownerAccount ? (
-              <>
-                <PersonLabel account={f.ownerAccount} format={(name) => t('shared.from', { account: name })} />
-                <IdentityWarningIcon account={f.ownerAccount} claimed={folderOwnerClaim(f)} />
-              </>
-            ) : null
+            return f ? <SharedFrom folder={f} /> : null
           }}
           onOpen={(item) => {
             if (item.type === 'file') {
               const s = filesById.get(item.id)
-              if (s?.file.fileKey) openFile(navigate, s.container, s.file)
+              if (s && source.isFileOpen(s.file)) openFile(navigate, s.container, s.file)
               else if (s?.state === 'waiting') toast.info(t('shared.waitingHint'))
               return
             }
             const f = byId.get(item.id)
-            if (f?.key) void navigate(folderPath(f))
+            if (f && source.isOpen(f)) void navigate(folderPath(f))
           }}
           actionsFor={(item) => {
             if (item.type === 'file') {
               const s = filesById.get(item.id)
-              const leave = s?.remoteShareId
+              const leave = s && source.mayLeaveFile(s)
                 ? [{ id: 'leave', label: t('shared.remove'), icon: <LogOut />, onSelect: () => setLeavingFile(s), destructive: true, separated: true }]
                 : []
-              if (!s?.file.fileKey) return leave
+              if (!s || !source.isFileOpen(s.file)) return leave
               return [
                 { id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => openFile(navigate, s.container, s.file) },
                 {
@@ -181,7 +156,7 @@ export function SharedPage() {
               ]
             }
             const f = byId.get(item.id)
-            if (!f?.key) return []
+            if (!f || !source.isOpen(f)) return []
             return [
               { id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => void navigate(folderPath(f)) },
               {
@@ -189,12 +164,12 @@ export function SharedPage() {
                 label: t('drive.actions.downloadZip'),
                 icon: <Download />,
                 onSelect: () =>
-                  void downloadFolderZip(f, () => {}).then(
+                  void source.downloadFolderZip(f, () => {}).then(
                     (r) => r === 'empty' && toast.info(t('drive.zipEmpty')),
                     (e: unknown) => !(e instanceof DOMException && e.name === 'AbortError') && toast.error(t('drive.downloadFailed')),
                   ),
               },
-              ...(f.source === 'remote'
+              ...(source.mayLeaveFolder(f)
                 ? [{ id: 'leave', label: t('shared.leave'), icon: <LogOut />, onSelect: () => setLeaving(f), destructive: true, separated: true }]
                 : []),
             ]
@@ -215,7 +190,7 @@ export function SharedPage() {
       />
       <source.ShareDialog
         target={(() => {
-          const s: SharedFile | undefined = sharing ? filesById.get(sharing) : undefined
+          const s: SharedWithMeFileView | undefined = sharing ? filesById.get(sharing) : undefined
           return s?.canShare ? { folder: s.container, file: s.file } : null
         })()}
         open={sharing !== null}
@@ -240,7 +215,7 @@ export function SharedPage() {
         open={leaving !== null}
         onOpenChange={(o) => !o && (setLeaving(null), leave.reset())}
         title={t('shared.leaveTitle')}
-        description={t('shared.leaveDescription', { name: leaving?.name ?? '', account: leaving?.ownerAccount ? personOf(people.data, leaving.ownerAccount).name : '' })}
+        description={t('shared.leaveDescription', { name: leaving?.name ?? '', account: leaving?.ownerAccount ? leavingOwner : '' })}
         submit={t('shared.leave')}
         pending={leave.isPending}
         error={leave.error}
