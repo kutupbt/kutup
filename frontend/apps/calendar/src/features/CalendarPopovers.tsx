@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { AlignLeft, Bell, CalendarDays, Copy, MapPin, Pencil, Trash2, UserRound, X } from 'lucide-react'
+import { AlignLeft, Bell, CalendarDays, Copy, MapPin, Pencil, Trash2, UserRound, Video, X } from 'lucide-react'
 import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { EventRefusedError, PERMISSION, saveEvent, useCalendarMutation, useCalendars, type Calendar } from '@kutup/calendar-core/api'
 import { addDays } from '@kutup/calendar-core/time'
 import { InvitationPanel } from './invitations/InvitationPanel'
+import { isKutupMeeting } from '@kutup/calendar-core/meetings'
 import { useMailAccount } from '@kutup/mail-core/api'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
@@ -54,6 +55,15 @@ function whenText(placed: Pick<Placed, 'allDay' | 'start' | 'end' | 'firstDay' |
 }
 
 /** One labelled row of the event's details (Proton's `IconRow`). */
+/** A link's host, as a link from elsewhere is shown. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
 function Row({ icon, label, children, testId }: { icon: ReactNode; label: string; children: ReactNode; testId?: string }) {
   return (
     <div className="flex gap-3 text-sm">
@@ -169,6 +179,21 @@ function EventPeek({ placed, calendars }: { placed: Placed; calendars: Calendar[
         {fields.location ? (
           <Row icon={<MapPin className="size-4" />} label={t('events.location')} testId="event-popover-location">
             <Linkified text={fields.location} />
+          </Row>
+        ) : null}
+        {fields.conference ? (
+          <Row icon={<Video className="size-4" />} label={t('meetings.label')} testId="event-popover-meeting">
+            <div className="flex items-center gap-2">
+              {/* Another app's link is named by its host, never by a label it chose. */}
+              <span className="min-w-0 flex-1 truncate" title={fields.conference}>
+                {isKutupMeeting(fields.conference) ? t('meetings.kutup') : hostOf(fields.conference)}
+              </span>
+              <Button asChild size="sm">
+                <a href={fields.conference} target="_blank" rel="noopener noreferrer" data-testid="event-popover-join">
+                  {t('meetings.join')}
+                </a>
+              </Button>
+            </div>
           </Row>
         ) : null}
         {organizer ? (

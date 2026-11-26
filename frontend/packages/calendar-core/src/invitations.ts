@@ -147,7 +147,7 @@ export async function movedEvent(before: EventFields, after: EventFields): Promi
 
 /** Whether a change touches what an update mail tells (Proton's title, description, location, times or rule). */
 export function changedData(before: EventFields, after: EventFields): boolean {
-  const pick = (f: EventFields) => [f.summary ?? '', f.description ?? '', f.location ?? '', f.start, f.end, f.rrule ?? null, f.exdates ?? []]
+  const pick = (f: EventFields) => [f.summary ?? '', f.description ?? '', f.location ?? '', f.conference ?? null, f.start, f.end, f.rrule ?? null, f.exdates ?? []]
   return JSON.stringify(pick(before)) !== JSON.stringify(pick(after))
 }
 

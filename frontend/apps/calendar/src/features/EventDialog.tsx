@@ -35,6 +35,8 @@ import { RecurringDialog } from './recurrence/RecurringDialog'
 import { RepeatField } from './recurrence/RepeatField'
 import { planOf, runPlan, type Plan } from './recurrence/run'
 import { ParticipantsRow } from './invitations/ParticipantsRow'
+import { draftMeetingInfo, MeetingRow } from './meetings/MeetingRow'
+import { followEvent } from '@kutup/calendar-core/meetings'
 
 /** Kutup-crypto's limits (`calendar_event`), as Proton's. */
 const MAX_TITLE = 255
@@ -136,6 +138,18 @@ export function EventDialog() {
   /** This member's reminders as the save sends them: own when edited, back to the defaults when they were own, else as they are. */
   const remindersFor = (next: Draft) => (next.reminders.custom ? (next.allDay ? next.reminders.allDay : next.reminders.timed) : existing?.reminders ? null : undefined)
 
+  /**
+   * The event's Kutup meeting follows its title and time (the owner's own
+   * meetings only; anyone else's link is left as it is). Best effort: the
+   * event is saved either way.
+   */
+  const followMeeting = (next: Draft) => {
+    if (!next.conference) return
+    void draftMeetingInfo(next, prefs.weekStart, t('meetings.untitled'))
+      .then((info) => followEvent(next.conference!, info))
+      .catch(() => undefined)
+  }
+
   const save = useCalendarMutation(async (next: Draft): Promise<'created' | 'createdMany' | 'saved' | 'asked'> => {
     const calendar = writable.find((c) => c.id === next.calendarId)
     if (!account.data || !calendar) throw new Error('no calendar')
@@ -174,6 +188,7 @@ export function EventDialog() {
         reminders,
         lng: sendLanguage(inviteSettings.data, i18n.language),
       })
+      followMeeting(next)
       if (saved.failures.length) {
         setUnsent({ failures: saved.failures, messages: saved.messages })
         return 'asked'
@@ -191,6 +206,7 @@ export function EventDialog() {
     }
     const fields = fieldsOf(form, account.data.serverDomain, existing)
     await saveEvent(session, account.data, calendar, fields, existing, reminders)
+    followMeeting(next)
     if (existing) return 'saved'
     // Proton's "Events created" for a series of more than one.
     const many = fields.rrule ? (await occurrences(fields, '1970-01-01T00:00:00Z', '2038-01-01T00:00:00Z', 2).catch(() => [])).length > 1 : false
@@ -204,6 +220,7 @@ export function EventDialog() {
       plan.current = { type, plan: planOf(steps) }
     }
     await runPlan(plan.current.plan, session, account.data, calendar)
+    if (draft) followMeeting(draft)
     return type
   })
 
@@ -401,6 +418,7 @@ export function EventDialog() {
                 <Label htmlFor="event-location">{t('events.location')}</Label>
                 <Input id="event-location" value={draft.location} onChange={(e) => set({ location: e.target.value })} maxLength={MAX_LOCATION} />
               </div>
+              <MeetingRow draft={draft} weekStart={prefs.weekStart} onChange={(conference) => set({ conference })} />
               <div className="space-y-1.5">
                 <Label htmlFor="event-description">{t('events.description')}</Label>
                 <Textarea id="event-description" value={draft.description} onChange={(e) => set({ description: e.target.value })} maxLength={MAX_DESCRIPTION} rows={3} />

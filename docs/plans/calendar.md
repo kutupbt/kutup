@@ -1072,6 +1072,35 @@ is a repeating event.
   owner's own links); removing it from the event leaves the meeting in
   Chat's list. The event view shows "Join" for a `CONFERENCE` link.
 
+**As built (2026-11-26).**
+
+- Format: `SharedEncrypted.conference` / `EventFieldsV1.conference`, written
+  `CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:<https URL>` (at most 2048
+  bytes). Only that exact form is read as the link; any other `CONFERENCE`
+  line stays in `other`, so events kept before E5c open as before. Absent,
+  it isn't serialized (the checked-in vectors are unchanged). Imports take
+  the first https `CONFERENCE;VALUE=URI` or Proton's `X-PM-CONFERENCE-URL`;
+  exports and REQUEST invitations write it (not CANCEL).
+- `crypto-calendar` exports Chat's owner functions under Chat's names
+  (`crates/kutup-crypto-wasm/src/call_link.rs`); the browser code that
+  makes, lists and renames an own meeting is
+  `@kutup/chat-core/ownedMeetings`, given a runtime; Chat passes its engine,
+  Calendar the calendar runtime (`@kutup/calendar-core/meetings`).
+- The editor's row is hidden when the server hosts no meetings
+  (`chat.callLinks`, no call server); an event's existing link still shows.
+  After a save the meeting takes the event's title and time (a PUT to the
+  owner's own meeting; anyone else's is left alone). The details popover
+  shows "Join"; a link from elsewhere is named by its host.
+- Chat → Calendar: `calendar.<domain>/#meeting=<link>&title=…&start=<ms>&minutes=<n>`.
+  The fragment carries the link's secret and never reaches a server;
+  Calendar takes only a meeting of its own server's Chat, opens the editor
+  filled in (nothing is saved by the link) and clears the fragment from the
+  address and its history entry.
+- Mail's invitation card shows the link by its host, with Join.
+- Tests: Rust format, import and invitation round trips; calendar-core and
+  the hand-over unit tests; browser spec 230 (needs the call server, as
+  spec 41).
+
 ### E5b: import from Google (D-3: in the browser)
 
 OAuth with PKCE in the browser, Google's Calendar API read from there, every

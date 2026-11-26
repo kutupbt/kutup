@@ -1,5 +1,14 @@
 import type { CallLinkRoot } from '@kutup/crypto/accountRoots'
-import type { CallLinkCrypto, CallLinkInfo, CallLinkKeys } from '@kutup/chat-core/types'
+import type { CallLinkCrypto, CallLinkKeys } from '@kutup/chat-core/types'
+import {
+  createOwnedCallLink,
+  meetingUrl,
+  ownedCallLink,
+  updateOwnedCallLinkInfo,
+  type MeetingInfo,
+  type OwnedCallLink,
+  type StoredCallLink,
+} from '@kutup/chat-core/ownedMeetings'
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import { toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
@@ -14,7 +23,8 @@ import { randomBytes } from '@kutup/crypto/random'
 // the derivations and the sealed formats; this is the browser's side of
 // making, listing, opening and joining one.
 
-export type MeetingInfo = CallLinkInfo
+export type { MeetingInfo, OwnedCallLink } from '@kutup/chat-core/ownedMeetings'
+export { callLinkFragmentOf } from '@kutup/chat-core/ownedMeetings'
 
 /** A meeting someone holds the link of: its secret and what derives from it. */
 export interface OpenCallLink extends CallLinkKeys {
@@ -24,43 +34,9 @@ export interface OpenCallLink extends CallLinkKeys {
   fragment: string
 }
 
-/** One of the account's own meetings. */
-export interface OwnedCallLink {
-  roomId: string
-  createdAt: string
-  url: string
-  info: MeetingInfo
-  /** People who open the link wait until the owner lets them in. */
-  waitingRoom: boolean
-  /** Public; the owner's devices derive the meeting's secrets from it. */
-  nonce: string
-  /** The owner's proof of being the host (standard base64). */
-  hostToken: string
-}
-
-interface StoredLink {
-  roomId: string
-  nonce: string
-  info: string
-  waitingRoom: boolean
-  createdAt: string
-}
-
 /** Where a meeting opens: this server's chat app, the secret in the fragment. */
 export function callLinkUrl(fragment: string): string {
-  return `${window.location.origin}/call#${fragment}`
-}
-
-/**
- * The fragment of something a person pasted or opened: a whole link, or the
- * fragment alone. Null when it does not look like one.
- */
-export function callLinkFragmentOf(value: string): string | null {
-  const text = value.trim()
-  const hash = text.indexOf('#')
-  const fragment = hash >= 0 ? text.slice(hash + 1) : text
-  // base64url of version (1) + secret (32): 44 characters.
-  return /^[A-Za-z0-9_-]{44}$/.test(fragment) ? fragment : null
+  return meetingUrl(window.location.origin, fragment)
 }
 
 /** Open a link from its fragment; throws when it is not a meeting link. */
@@ -70,33 +46,12 @@ export async function openCallLink(fragment: string): Promise<OpenCallLink> {
   return { secret, fragment, ...wasm.callLinkKeys(secret) }
 }
 
-async function ownerSecret(callLinkRoot: CallLinkRoot, nonce: string): Promise<string> {
-  return (await loadChatWasm()).callLinkOwnerSecret(callLinkRoot, nonce)
-}
-
-async function owned(callLinkRoot: CallLinkRoot, stored: StoredLink): Promise<OwnedCallLink | null> {
-  const wasm = await loadChatWasm()
-  const secret = await ownerSecret(callLinkRoot, stored.nonce)
-  // A row this account's key does not explain is not shown as a meeting.
-  if (wasm.callLinkKeys(secret).roomId !== stored.roomId) return null
-  let info: MeetingInfo
-  try {
-    info = wasm.callLinkOpenInfo(secret, stored.info)
-  } catch {
-    return null
-  }
-  const { hostToken } = wasm.callLinkHostToken(callLinkRoot, stored.nonce)
+/** A stored meeting as its owner sees it, its host token kept for joining from this browser. */
+async function owned(callLinkRoot: CallLinkRoot, stored: StoredCallLink): Promise<OwnedCallLink | null> {
+  const link = ownedCallLink(await loadChatWasm(), callLinkRoot, stored, window.location.origin)
   const account = getSession()?.accountId
-  if (account) rememberHostToken(account, stored.roomId, hostToken)
-  return {
-    roomId: stored.roomId,
-    createdAt: stored.createdAt,
-    url: callLinkUrl(wasm.callLinkFragment(secret)),
-    info,
-    waitingRoom: stored.waitingRoom,
-    nonce: stored.nonce,
-    hostToken,
-  }
+  if (link && account) rememberHostToken(account, link.roomId, link.hostToken)
+  return link
 }
 
 /** Make a meeting and register it with this server. */
@@ -112,38 +67,22 @@ export async function createCallLink(
   /** The room id of one of this account's links that the new one replaces, at once. */
   replaces?: string,
 ): Promise<OwnedCallLink> {
-  const wasm = await loadChatWasm()
-  const nonce = wasm.callLinkNonce()
-  const secret = await ownerSecret(callLinkRoot, nonce)
-  const keys = wasm.callLinkKeys(secret)
-  const { data } = await api.post<StoredLink>('/chat/call-links', {
-    roomId: keys.roomId,
-    nonce,
-    accessTokenHash: keys.accessTokenHash,
-    info: wasm.callLinkSealInfo(secret, info),
-    hostTokenHash: wasm.callLinkHostToken(callLinkRoot, nonce).hostTokenHash,
-    waitingRoom,
-    ...(replaces ? { replaces } : {}),
-  })
-  const link = await owned(callLinkRoot, data)
-  if (!link) throw new Error('the server returned another meeting')
+  const link = await createOwnedCallLink(await loadChatWasm(), callLinkRoot, info, window.location.origin, waitingRoom, replaces)
+  const account = getSession()?.accountId
+  if (account) rememberHostToken(account, link.roomId, link.hostToken)
   return link
 }
 
 /** The account's meetings, newest first, as any of its devices derives them. */
 export async function listCallLinks(callLinkRoot: CallLinkRoot): Promise<OwnedCallLink[]> {
-  const { data } = await api.get<{ links: StoredLink[] }>('/chat/call-links')
+  const { data } = await api.get<{ links: StoredCallLink[] }>('/chat/call-links')
   const links = await Promise.all(data.links.map((stored) => owned(callLinkRoot, stored)))
   return links.filter((link): link is OwnedCallLink => link !== null)
 }
 
 /** Change what one of the account's meetings is called or when it is. */
 export async function updateCallLinkInfo(link: OwnedCallLink, info: MeetingInfo): Promise<OwnedCallLink> {
-  const wasm = await loadChatWasm()
-  const fragment = callLinkFragmentOf(link.url)
-  if (!fragment) throw new Error('not a meeting link')
-  const secret = wasm.callLinkParse(fragment)
-  await api.put(`/chat/call-links/${link.roomId}/info`, { info: wasm.callLinkSealInfo(secret, info) })
+  await updateOwnedCallLinkInfo(await loadChatWasm(), link, info)
   return { ...link, info }
 }
 

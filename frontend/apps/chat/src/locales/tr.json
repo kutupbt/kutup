@@ -897,6 +897,8 @@
       "copied": "Toplantı bağlantısı kopyalandı.",
       "copyFailed": "Bağlantı kopyalanamadı. Seçip kendiniz kopyalayın.",
       "addToCalendar": "Takvime ekle",
+      "addToKutupCalendar": "Kutup Takvim'e ekle",
+      "downloadIcs": ".ics indir",
       "edit": "Değiştir",
       "delete": "Sil",
       "deleteTitle": "\"{{title}}\" silinsin mi?",

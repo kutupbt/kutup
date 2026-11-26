@@ -138,6 +138,7 @@ describe('this event, this and future events, all events (Proton’s)', () => {
     summary,
     description: null,
     location: null,
+    conference: null,
   })
 
   it('changes one occurrence as an event of its own, and deletes one by EXDATE', async () => {

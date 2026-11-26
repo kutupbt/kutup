@@ -14,6 +14,8 @@ import { useNow } from '../../lib/useNow'
 import { callLinkUrl, type OwnedCallLink } from './callLinks'
 import { rememberCallName } from './callName'
 import { downloadMeetingIcs } from './ics'
+import { calendarMeetingUrl } from '@kutup/chat-core/ownedMeetings'
+import { appUrl } from '@kutup/session/apps'
 import { MeetingDialog } from './MeetingDialog'
 import type { JoinedMeeting } from './meetingHistory'
 import { isUpcoming, meetingStartText } from './meetingTime'
@@ -284,10 +286,16 @@ function MeetingRow({
           <Copy />
           {t('chat.meetings.copy')}
         </Button>
-        {info.startsAtMs !== undefined ? (
-          <Button size="sm" variant="outline" onClick={() => downloadMeetingIcs(meeting)} data-testid="chat-meeting-ics">
+        {/* Kutup Calendar opens its editor filled in with the meeting (E5c); the .ics is for other calendar apps. */}
+        <Button size="sm" variant="outline" asChild>
+          <a href={calendarMeetingUrl(appUrl('calendar'), meeting)} target="_blank" rel="noopener" data-testid="chat-meeting-calendar">
             <CalendarPlus />
-            {t('chat.meetings.addToCalendar')}
+            {t('chat.meetings.addToKutupCalendar')}
+          </a>
+        </Button>
+        {info.startsAtMs !== undefined ? (
+          <Button size="sm" variant="ghost" onClick={() => downloadMeetingIcs(meeting)} data-testid="chat-meeting-ics">
+            {t('chat.meetings.downloadIcs')}
           </Button>
         ) : null}
         <Button size="sm" variant="ghost" onClick={onEdit} data-testid="chat-meeting-edit">
