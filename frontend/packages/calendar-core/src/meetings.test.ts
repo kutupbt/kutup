@@ -26,7 +26,7 @@ vi.mock('@kutup/crypto/calendar', () => ({
       callLinkFragment: () => fragment,
       callLinkParse: () => 'secret:parsed',
       callLinkSealInfo: (_secret: string, info: unknown) => JSON.stringify(info),
-      callLinkOpenInfo: (_secret: string, sealed: string) => JSON.parse(sealed),
+      callLinkOpenInfo: (_secret: string, sealed: string) => JSON.parse(sealed) as unknown,
     }),
 }))
 

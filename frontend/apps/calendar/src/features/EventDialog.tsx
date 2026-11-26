@@ -35,7 +35,8 @@ import { RecurringDialog } from './recurrence/RecurringDialog'
 import { RepeatField } from './recurrence/RepeatField'
 import { planOf, runPlan, type Plan } from './recurrence/run'
 import { ParticipantsRow } from './invitations/ParticipantsRow'
-import { draftMeetingInfo, MeetingRow } from './meetings/MeetingRow'
+import { MeetingRow } from './meetings/MeetingRow'
+import { draftMeetingInfo } from './meetings/draftMeeting'
 import { followEvent } from '@kutup/calendar-core/meetings'
 
 /** Kutup-crypto's limits (`calendar_event`), as Proton's. */

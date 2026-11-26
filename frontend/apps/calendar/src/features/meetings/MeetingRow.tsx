@@ -3,21 +3,13 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { instantOf } from '@kutup/calendar-core/api'
-import { isKutupMeeting, makeMeeting, meetingInfoOf, meetingsAvailable } from '@kutup/calendar-core/meetings'
+import { isKutupMeeting, makeMeeting, meetingsAvailable } from '@kutup/calendar-core/meetings'
 import { useRequiredSession } from '@kutup/session/store'
 import { Button } from '@kutup/ui/components/button'
 import { Label } from '@kutup/ui/components/label'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { formOf, type Draft } from '../eventDraft'
-
-/** The event's meeting info as the draft says now: its title and time. */
-export async function draftMeetingInfo(draft: Draft, weekStart: number, fallbackTitle: string) {
-  const form = await formOf({ ...draft, frequency: null }, weekStart, null)
-  const startUtc = await instantOf(form.start)
-  const endUtc = form.end ? await instantOf(form.end) : startUtc
-  return meetingInfoOf({ title: draft.title, startUtc, endUtc, fullDay: draft.allDay }, fallbackTitle)
-}
+import type { Draft } from '../eventDraft'
+import { draftMeetingInfo } from './draftMeeting'
 
 /**
  * The editor's video meeting (docs/plans/calendar.md, E5c): "Add Kutup
