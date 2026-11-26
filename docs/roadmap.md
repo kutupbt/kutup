@@ -340,8 +340,9 @@ Today:
 - **Drive:** Proton Drive has no set, so `?` lists the keys the file list
   takes; the switch turns off `/` (search) and `?`, list keys always work.
   The switch is also in Drive's Settings.
-- **Photos:** the viewer's keys; no list.
-- **Contacts, Pass:** none.
+- **Photos:** the viewer's keys (moving between photos, Escape) only:
+  navigation, which stays on; a `?` list comes with its first shortcut.
+- **Contacts, Pass:** none yet; the same when they gain one.
 
 ### Security log: sign-ins and 2FA events (Proton parity)
 
