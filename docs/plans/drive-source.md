@@ -101,6 +101,26 @@ night to cover several:
 4. **Sharing and search**, then the remaining direct imports removed (a lint
    rule keeps `apps/drive/src/features` off drive-core's internals).
 
+**Sharing (decided on #458, 2026-11-26).** The source *supplies* the sharing
+dialogs as components; the common core is data. Kutup's share dialogs stay
+exactly as they are and where their security reviews left them: identity pins,
+the key-rotation review and federation live inside them, and they keep reading
+drive-core and the pins themselves. The slots are narrow (the screens pass only
+what they show):
+
+| Slot | Props | Kutup supplies |
+|---|---|---|
+| `ShareDialog` | `{ target: ItemRef \| null, open, onOpenChange }` | `ShareDialog` (with `AccessList`) for a folder, `FileShareDialog` for a file (as its owner, or as an editor of a file shared with them), and the federated invite shown after |
+| `PublicLinkDialog` | `{ target: ItemRef \| null, open, onOpenChange }` | the public link made with `useCreatePublicLink` and shown once |
+| `AcceptInviteDialog` | `{ open, onOpenChange }` (capability `invites`; null without) | `AcceptInviteDialog` |
+| `DetailsBanner` | `{ folder, file }` (null for none) | the content signature check |
+
+The shared lists and the details use only the common data (shares, people,
+rights, links, capability flags) and `mayShare` / `mayLink`; no Kutup-only
+field reaches them: an identity or federation state stays behind its
+capability and in the slot components. The home edition supplies simpler
+dialogs of its own.
+
 **How the interface grows.** `source.ts` holds what is implemented and used,
 nothing more (no stubs); each step adds its part. The whole target, as
 reviewed, is `packages/drive-source/src/source.ts` at `afbd1d9`. Two

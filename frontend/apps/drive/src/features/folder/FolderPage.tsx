@@ -15,11 +15,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { useCreateActions } from '../create/useCreateActions'
 import { ColorDialog } from '../dialogs/ColorDialog'
 import { FolderPickerDialog } from '../dialogs/FolderPickerDialog'
-import { LinkDialog } from '../dialogs/LinkDialog'
 import { NameDialog } from '@kutup/drive-ui/NameDialog'
-import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
-import { ShareDialog } from '../dialogs/ShareDialog'
-import { canShareFile } from '@kutup/drive-core/fileShares'
 import { folderHex } from '../drive/colors'
 import { useDeclareCurrentFolder } from '../drive/currentFolderContext'
 import { isWithin } from '@kutup/drive-source/tree'
@@ -27,8 +23,6 @@ import { useFolderFiles } from '@kutup/drive-core/files'
 import { canonicalName } from '@kutup/drive-source/names'
 import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
-import { useCreatePublicLink } from '@kutup/drive-core/mutations'
-import { isTargetBlocked, sharingOffScope } from '@kutup/drive-core/publicSharing'
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { isListName } from '@kutup/map/list'
 import { useDriveSource } from '@kutup/drive-source/context'
@@ -56,8 +50,7 @@ type Dialog =
   | { kind: 'history'; key: string }
   /** By keys too: the dialog follows the items as the list refreshes them. */
   | { kind: 'details'; keys: string[] }
-  | { kind: 'link'; url: string }
-  | { kind: 'invite'; url: string; account: string }
+  | { kind: 'link'; folder: Folder }
   | { kind: 'copy'; targets: Target[] }
   | { kind: 'move'; targets: Target[] }
   | null
@@ -135,7 +128,6 @@ export function FolderPage() {
   const renameFile = source.useRenameFile()
   const trashFolder = source.useTrashFolder()
   const trashFile = source.useTrashFile()
-  const publicLink = useCreatePublicLink()
   const copy = source.useCopy()
   const move = source.useMove()
   const create = useCreateActions(folder ?? null)
@@ -295,7 +287,7 @@ export function FolderPage() {
         if (source.mayMove(target)) {
           actions.push({ id: 'move', label: t('drive.actions.moveTo'), icon: <FolderInput />, onSelect: () => setDialog({ kind: 'move', targets: [target] }) })
         }
-        if (canShareFile(container, file)) {
+        if (source.mayShare(target)) {
           actions.push({ id: 'share', label: t('drive.actions.share'), icon: <UserPlus />, onSelect: () => setDialog({ kind: 'shareFile', key: itemKey(item) }), separated: true })
         }
         // Editors see a file's history (as Proton's "See version history"); files on another server are not offered it.
@@ -323,25 +315,7 @@ export function FolderPage() {
       if (f.canManage) {
         actions.push(
           { id: 'share', label: t('drive.actions.share'), icon: <UserPlus />, onSelect: () => setDialog({ kind: 'share', folder: f }), separated: true },
-          {
-            id: 'link',
-            label: t('drive.actions.publicLink'),
-            icon: <Link2 />,
-            onSelect: () =>
-              publicLink.mutate(f, {
-                onSuccess: (url) => setDialog({ kind: 'link', url }),
-                onError: (error) => {
-                  const off = sharingOffScope(error)
-                  toast.error(
-                    off
-                      ? t(`publicSharing.off.${off}`)
-                      : isTargetBlocked(error)
-                        ? t('publicSharing.targetBlocked')
-                        : apiErrorMessage(error, t('drive.linkFailed')),
-                  )
-                },
-              }),
-          },
+          { id: 'link', label: t('drive.actions.publicLink'), icon: <Link2 />, onSelect: () => setDialog({ kind: 'link', folder: f }) },
           { id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setDialog({ kind: 'rename', target }), separated: true },
           { id: 'color', label: t('drive.actions.color'), icon: <Palette />, onSelect: () => setDialog({ kind: 'color', folder: f }) },
           { id: 'trash', label: t('drive.actions.trash'), icon: <Trash2 />, onSelect: () => void moveToTrash([target]), destructive: true, separated: true },
@@ -349,7 +323,7 @@ export function FolderPage() {
       }
       return actions
     },
-    [lookup, mayChangeFile, moveToTrash, open, download, publicLink, source, t],
+    [lookup, mayChangeFile, moveToTrash, open, download, source, t],
   )
 
   const selectedTargets = [...selection].flatMap((key) => {
@@ -723,31 +697,19 @@ export function FolderPage() {
         }}
       />
       <ColorDialog folder={dialog?.kind === 'color' ? dialog.folder : null} onClose={() => setDialog(null)} />
-      <ShareDialog
-        folder={dialog?.kind === 'share' ? dialog.folder : null}
-        onClose={() => setDialog(null)}
-        onInvite={(url, account) => setDialog({ kind: 'invite', url, account })}
-      />
-      <FileShareDialog
+      <source.ShareDialog
         target={(() => {
+          if (dialog?.kind === 'share') return { folder: dialog.folder }
           const target = dialog?.kind === 'shareFile' ? lookup.get(dialog.key) : undefined
-          return target?.file ? { folder: target.folder, file: target.file, role: 'owner' as const } : null
+          return target?.file ? target : null
         })()}
-        onClose={() => setDialog(null)}
+        open={dialog?.kind === 'share' || dialog?.kind === 'shareFile'}
+        onOpenChange={(o) => !o && setDialog(null)}
       />
-      <LinkDialog
-        link={dialog?.kind === 'link' ? dialog.url : null}
-        title={t('dialogs.publicLink.title')}
-        description={t('dialogs.publicLink.description')}
-        warning={t('dialogs.publicLink.warning')}
-        onClose={() => setDialog(null)}
-      />
-      <LinkDialog
-        link={dialog?.kind === 'invite' ? dialog.url : null}
-        title={t('dialogs.invite.title')}
-        description={t('dialogs.invite.description', { account: dialog?.kind === 'invite' ? dialog.account : '' })}
-        warning={t('dialogs.invite.warning')}
-        onClose={() => setDialog(null)}
+      <source.PublicLinkDialog
+        target={dialog?.kind === 'link' ? { folder: dialog.folder } : null}
+        open={dialog?.kind === 'link'}
+        onOpenChange={(o) => !o && setDialog(null)}
       />
     </div>
   )

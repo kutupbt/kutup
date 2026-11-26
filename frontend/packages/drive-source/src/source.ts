@@ -207,8 +207,16 @@ export type Playback =
 /** What a stream that failed before it played is replaced with. */
 export type PlaybackFallback = Playback | { kind: 'failed' }
 
+/** The props of a dialog the source supplies: what it is for, and whether it is open. */
+export interface SlotProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
 /** What a source can do; the screens hide what is missing. */
 export interface Capabilities {
+  /** Accepting invites from other servers (the AcceptInviteDialog slot). */
+  invites: boolean
   /** Folder colours. */
   folderColors: boolean
 }
@@ -276,6 +284,20 @@ export interface DriveSource {
   useFolderCreator: (folder: FolderView) => PersonLookup
   /** What the owner shares a folder (or a file in it) with; undefined while loading, null when not shared. */
   useSharingSummary: (folder: FolderView, file?: FileView) => SharingSummary | null | undefined
+  /** Whether the person may share an item with people. */
+  mayShare: (item: ItemRef) => boolean
+  /** Whether the person may make a public link to an item. */
+  mayLink: (item: ItemRef) => boolean
+  /**
+   * The sharing dialogs, supplied by the source (Kutup's keep identity pins, the
+   * key-rotation review and federation inside them; another source supplies
+   * simpler ones). The screens pass only the item and whether it is open.
+   */
+  ShareDialog: ComponentType<SlotProps & { target: ItemRef | null }>
+  PublicLinkDialog: ComponentType<SlotProps & { target: ItemRef | null }>
+  /** Capability `invites`; null without. */
+  AcceptInviteDialog: ComponentType<SlotProps> | null
+
   /** Shown above an item's details (Kutup: the check of the content's signature); null for none. */
   DetailsBanner: ComponentType<{ folder: FolderView; file: FileView }> | null
 

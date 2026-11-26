@@ -12,7 +12,6 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { downloadFile, downloadFolderZip } from '@kutup/editors/files/downloads'
 import { useLeaveRemoteFileShare, useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
 import { useRenameFile } from '@kutup/drive-core/mutations'
-import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
 import { NameDialog } from '@kutup/drive-ui/NameDialog'
 import { useFolders } from '@kutup/drive-core/folders'
 import type { Folder } from '@kutup/drive-core/model'
@@ -24,7 +23,7 @@ import { Explorer } from '../explorer/Explorer'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
-import { AcceptInviteDialog } from './AcceptInviteDialog'
+import { useDriveSource } from '@kutup/drive-source/context'
 import { folderOwnerClaim } from '@kutup/drive-core/identityStatus'
 import { IdentityWarningIcon } from '@kutup/drive-ui/IdentityWarning'
 
@@ -33,6 +32,8 @@ import { IdentityWarningIcon } from '@kutup/drive-ui/IdentityWarning'
  * servers, and single files (docs/plans/drive-file-sharing.md).
  */
 export function SharedPage() {
+  const source = useDriveSource()
+  const AcceptInvite = source.AcceptInviteDialog
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const folders = useFolders()
@@ -87,10 +88,12 @@ export function SharedPage() {
     <div className="flex min-h-[calc(100svh-3.5rem)] flex-col">
       <div className="sticky top-14 z-20 flex min-h-12 flex-wrap items-center gap-2 border-b border-border bg-background/95 px-3 py-1.5 backdrop-blur-sm md:px-6">
         <h1 className="min-w-0 flex-1 font-display text-lg font-semibold">{t('nav.shared')}</h1>
-        <Button variant="outline" size="sm" onClick={() => setInviting(true)}>
-          <Plus />
-          {t('shared.addInvite')}
-        </Button>
+        {AcceptInvite ? (
+          <Button variant="outline" size="sm" onClick={() => setInviting(true)}>
+            <Plus />
+            {t('shared.addInvite')}
+          </Button>
+        ) : null}
         <Toolbar prefs={prefs} update={updatePrefs} />
       </div>
       {folders.isError || sharedFiles.isError ? (
@@ -198,7 +201,7 @@ export function SharedPage() {
           }}
         />
       )}
-      <AcceptInviteDialog open={inviting} onClose={() => setInviting(false)} />
+      {AcceptInvite ? <AcceptInvite open={inviting} onOpenChange={setInviting} /> : null}
       <ConfirmDestructive
         open={leavingFile !== null}
         onOpenChange={(o) => !o && (setLeavingFile(null), leaveFile.reset())}
@@ -210,12 +213,13 @@ export function SharedPage() {
         errorFallback={t('shared.leaveFailed')}
         onConfirm={() => leavingFile && leaveFile.mutate(leavingFile, { onSuccess: () => setLeavingFile(null) })}
       />
-      <FileShareDialog
+      <source.ShareDialog
         target={(() => {
           const s: SharedFile | undefined = sharing ? filesById.get(sharing) : undefined
-          return s?.canShare ? { folder: s.container, file: s.file, role: 'editor' as const } : null
+          return s?.canShare ? { folder: s.container, file: s.file } : null
         })()}
-        onClose={() => setSharing(null)}
+        open={sharing !== null}
+        onOpenChange={(o) => !o && setSharing(null)}
       />
       {(() => {
         const s = renaming ? filesById.get(renaming) : undefined

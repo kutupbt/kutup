@@ -2,22 +2,20 @@ import { ExternalLink, UserPlus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
 import type { Folder } from '@kutup/drive-core/model'
 import { useSharedByMe, type SharedByMeItem } from '@kutup/drive-core/sharedByMe'
 import { Alert } from '@kutup/ui/components/alert'
 import { EmptyState } from '@kutup/ui/components/states'
 import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { ShareDialog } from '../dialogs/ShareDialog'
-import { LinkDialog } from '../dialogs/LinkDialog'
+import { useDriveSource } from '@kutup/drive-source/context'
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { Explorer } from '../explorer/Explorer'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
 
-type Dialog = { kind: 'folder'; folder: Folder } | { kind: 'file'; key: string } | { kind: 'invite'; url: string; account: string } | null
+type Dialog = { kind: 'folder'; folder: Folder } | { kind: 'file'; key: string } | null
 
 /**
  * What you share: your folders shared with people or by link, and your files
@@ -25,6 +23,7 @@ type Dialog = { kind: 'folder'; folder: Folder } | { kind: 'file'; key: string }
  * click away (as Proton Drive's "Shared" section).
  */
 export function SharedByMePage() {
+  const source = useDriveSource()
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const shared = useSharedByMe()
@@ -71,9 +70,10 @@ export function SharedByMePage() {
   const manage = (item: SharedByMeItem) =>
     setDialog(item.file ? { kind: 'file', key: itemKey({ type: 'file', id: item.file.id }) } : { kind: 'folder', folder: item.folder })
 
-  const fileTarget = (() => {
+  const shareTarget = (() => {
+    if (dialog?.kind === 'folder') return { folder: dialog.folder }
     const item = dialog?.kind === 'file' ? byKey.get(dialog.key) : undefined
-    return item?.file ? { folder: item.folder, file: item.file, role: 'owner' as const } : null
+    return item?.file ? { folder: item.folder, file: item.file } : null
   })()
 
   if (shared.loading && shared.items.length === 0) return <ListSkeleton label={t('common.loading')} />
@@ -126,19 +126,7 @@ export function SharedByMePage() {
           }}
         />
       )}
-      <ShareDialog
-        folder={dialog?.kind === 'folder' ? dialog.folder : null}
-        onClose={() => setDialog(null)}
-        onInvite={(url, account) => setDialog({ kind: 'invite', url, account })}
-      />
-      <FileShareDialog target={fileTarget} onClose={() => setDialog(null)} />
-      <LinkDialog
-        link={dialog?.kind === 'invite' ? dialog.url : null}
-        title={t('dialogs.invite.title')}
-        description={t('dialogs.invite.description', { account: dialog?.kind === 'invite' ? dialog.account : '' })}
-        warning={t('dialogs.invite.warning')}
-        onClose={() => setDialog(null)}
-      />
+      <source.ShareDialog target={shareTarget} open={dialog !== null} onOpenChange={(o) => !o && setDialog(null)} />
     </div>
   )
 }
