@@ -37,6 +37,7 @@ import { usePush } from '../features/reminders/usePush'
 import { openEditor } from '../features/editorState'
 import { useCalendarPrefs } from '../features/prefs'
 import { SettingsDialog } from '../features/SettingsDialog'
+import { CalendarShortcuts } from '../features/shortcuts'
 import { useMeetingLink } from '../features/meetings/meetingLink'
 import { ShareCalendarDialog } from '../features/sharing/ShareCalendarDialog'
 import { SharedWithYou } from '../features/sharing/SharedWithYou'
@@ -295,6 +296,7 @@ export function CalendarShell() {
       <ImportDialog open={importing} onOpenChange={setImporting} />
       {exporting ? <ExportDialog calendar={exporting} onClose={() => setExporting(null)} /> : null}
       <SettingsDialog open={settings} onOpenChange={setSettings} />
+      <CalendarShortcuts />
       {sharing ? <ShareCalendarDialog calendar={sharing} open onOpenChange={(open) => !open && setSharing(null)} /> : null}
       {reviewing ? (
         <DueRotationDialog

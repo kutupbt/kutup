@@ -41,6 +41,15 @@
     "pass": "Pass",
     "calendar": "Calendar"
   },
+  "shortcutsSetting": {
+    "title": "Keyboard shortcuts",
+    "description": "Keys for quick actions and moving between views. Press ? to see this list.",
+    "toggle": "Keyboard shortcuts",
+    "toggleHint": "On or off in every Kutup app, on all your devices.",
+    "saveFailed": "The change couldn't be saved. Try again.",
+    "or": "or",
+    "open": "Keyboard shortcuts"
+  },
   "theme": {
     "dark": "Dark theme",
     "light": "Light theme",

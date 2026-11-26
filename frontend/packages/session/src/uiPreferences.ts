@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useTheme } from 'next-themes'
 import { useTranslation } from 'react-i18next'
 import api from './client'
+import { takeAccountShortcuts } from './shortcuts'
 
 /**
  * Theme and language follow the account (docs/roadmap.md, "Web · theme and
@@ -20,6 +21,8 @@ export type LanguageChoice = 'en' | 'tr'
 export interface UiPreferences {
   theme: ThemeChoice | null
   language: LanguageChoice | null
+  /** Keyboard shortcuts in every app; null: never chosen (on). */
+  shortcuts?: boolean | null
 }
 
 const PATH = '/account/ui-preferences'
@@ -58,6 +61,7 @@ export function useAccountUiPreferences(): void {
       }
       if (!current) return
       account.current = stored
+      takeAccountShortcuts(stored.shortcuts)
       if (stored.theme && stored.theme !== localRef.current.theme) {
         arriving.current.theme = stored.theme
         setTheme(stored.theme)

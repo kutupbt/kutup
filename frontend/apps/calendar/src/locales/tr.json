@@ -12,6 +12,18 @@
   "nav": {
     "calendars": "Takvimler"
   },
+  "keys": {
+    "basic": "Temel işlemler",
+    "newEvent": "Yeni etkinlik oluştur",
+    "help": "Klavye kısayollarını göster",
+    "views": "Görünüm seçenekleri",
+    "today": "Bugün",
+    "day": "Gün görünümü",
+    "week": "Hafta görünümü",
+    "month": "Ay görünümü",
+    "next": "Sonraki dönem",
+    "previous": "Önceki dönem"
+  },
   "meetings": {
     "label": "Görüntülü toplantı",
     "kutup": "Kutup toplantısı",

@@ -1,4 +1,5 @@
 import { AlarmClock, Archive, Ban, Check, Clock, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Hourglass, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
+import { shortcutsEnabled } from '@kutup/session/shortcuts'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -340,6 +341,8 @@ export function MailboxPage() {
     // Handled already: a dialog's Escape closes it, and React may have
     // removed the dialog before this listener runs.
     if (event.altKey || event.defaultPrevented) return
+    // Off for the account: no shortcut in any app (Proton's setting).
+    if (!shortcutsEnabled()) return
     if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return
     if (document.querySelector('[role="dialog"], [role="menu"]')) return
     const meta = event.metaKey || event.ctrlKey

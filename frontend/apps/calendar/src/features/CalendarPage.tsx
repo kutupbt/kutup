@@ -1,4 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
+import { isShortcutKey } from '@kutup/session/shortcuts'
+import { openShortcuts } from './shortcutsState'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -55,18 +57,20 @@ export function CalendarPage() {
     queryFn: () => placeAll(events.data!.events, (event) => colors.get(event.calendarId) ?? '#8080ff', prefs.zone, range.data!.start, range.data!.end),
   })
 
-  // Proton's shortcuts: ← → through time, T today, 1 2 3 the views, N a new event.
+  // Proton's shortcuts (and D W M): ← → through time, T today, the views,
+  // N a new event, ? the list. Off for the account: none of them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [role="dialog"]')) return
-      if (e.altKey || e.ctrlKey || e.metaKey || !date || pressActive()) return
-      if (e.key === 'ArrowLeft') go({ date: stepDate(view, date, customRange, -1) })
-      else if (e.key === 'ArrowRight') go({ date: stepDate(view, date, customRange, 1) })
-      else if ((e.key === 't' || e.key === 'T') && today) go({ date: today, range: 0 })
-      else if (e.key === '1') go({ view: 'day', range: 0 })
-      else if (e.key === '2') go({ view: 'week', range: 0 })
-      else if (e.key === '3') go({ view: 'month', range: 0 })
-      else if ((e.key === 'n' || e.key === 'N') && today) {
+      if (!isShortcutKey(e) || !date || pressActive()) return
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
+      if (key === 'ArrowLeft') go({ date: stepDate(view, date, customRange, -1) })
+      else if (key === 'ArrowRight') go({ date: stepDate(view, date, customRange, 1) })
+      else if (key === 't' && today) go({ date: today, range: 0 })
+      else if (key === '1' || key === 'd') go({ view: 'day', range: 0 })
+      else if (key === '2' || key === 'w') go({ view: 'week', range: 0 })
+      else if (key === '3' || key === 'm') go({ view: 'month', range: 0 })
+      else if (key === '?') openShortcuts()
+      else if (key === 'n' && today) {
         // At the next half hour from now in the calendar's zone, as
         // Proton's new event: tomorrow's first once today's last has begun.
         const next = newEventStart(nowMinutes)

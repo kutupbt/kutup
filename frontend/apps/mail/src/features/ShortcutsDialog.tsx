@@ -1,5 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
+import { ShortcutsSwitch } from '@kutup/ui/components/shortcuts-dialog'
+import { setShortcutsEnabled, useShortcutsEnabled } from '@kutup/session/shortcuts'
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 const META = isMac ? '⌘' : 'Ctrl'
@@ -59,12 +61,14 @@ const SECTIONS: { id: string; shortcuts: [string, string[]][] }[] = [
 /** The list of keyboard shortcuts, as Proton's "?" shows them. */
 export function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation()
+  const enabled = useShortcutsEnabled()
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl" data-testid="shortcuts-dialog">
         <DialogHeader>
           <DialogTitle>{t('shortcuts.title')}</DialogTitle>
         </DialogHeader>
+        <ShortcutsSwitch enabled={enabled} onEnabledChange={setShortcutsEnabled} />
         <div className="grid gap-6 sm:grid-cols-2">
           {SECTIONS.map((section) => (
             <section key={section.id} aria-labelledby={`shortcuts-${section.id}`}>

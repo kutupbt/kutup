@@ -331,11 +331,13 @@ has them now. Rules for all of them, as Proton's:
   only the list and Escape.
 
 Today:
-- **Mail:** Proton's set and the overlay; the setting is missing.
+- **The setting** is built (2026-11-26): `account_ui_preferences.shortcuts`
+  (null: on), `@kutup/session/shortcuts` (`isShortcutKey`, the switch), and
+  `@kutup/ui`'s `ShortcutsDialog` / `ShortcutsSwitch`.
+- **Mail:** Proton's set and the overlay, with the switch; off stops them.
+- **Calendar:** Proton's set (`N`, `T`, `1` `2` `3`, arrows) plus `D` `W`
+  `M`, and `?` (also from Settings). Still to add: `/` with encrypted search.
 - **Drive:** arrows, Enter, Space (Quick look), Escape; no list.
-- **Calendar:** `N` and Escape. To add: `D` `W` `M` (views), `T` (today),
-  arrows and `J` `K` (previous, next), `/` (search, with encrypted search),
-  `?`, and the setting (calendar-parity.md, gap 10).
 - **Photos:** the viewer's keys; no list.
 - **Contacts, Pass:** none.
 

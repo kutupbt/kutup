@@ -11,4 +11,5 @@ specs/209-calendar-recurrence.spec.ts
 specs/210-calendar-popovers.spec.ts
 specs/218-calendar-ics-import-export.spec.ts
 specs/230-calendar-meetings.spec.ts
+specs/231-calendar-shortcuts.spec.ts
 specs/220-calendar-invitation-kutup.spec.ts

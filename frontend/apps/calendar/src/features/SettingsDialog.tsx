@@ -3,7 +3,10 @@ import { saveCalendarZone } from '@kutup/calendar-core/api'
 import { useTranslation } from 'react-i18next'
 import { timeZones } from '@kutup/crypto/calendar'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
+import { Keyboard } from 'lucide-react'
+import { Button } from '@kutup/ui/components/button'
 import { Label } from '@kutup/ui/components/label'
+import { openShortcuts } from './shortcutsState'
 import { Choice } from './Choice'
 import { formatWeekday, zoneOptions } from './format'
 import { setPrefs, useCalendarPrefs } from './prefs'
@@ -62,6 +65,24 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           <p className="text-xs text-muted-foreground">{t('settings.thisDevice')}</p>
           <InvitationSettings />
           <NotificationSettings />
+          <div className="space-y-1.5">
+            <Label>{t('shortcutsSetting.title')}</Label>
+            <div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  onOpenChange(false)
+                  openShortcuts()
+                }}
+                data-testid="settings-shortcuts"
+              >
+                <Keyboard className="size-4" aria-hidden />
+                {t('shortcutsSetting.open')}
+              </Button>
+            </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

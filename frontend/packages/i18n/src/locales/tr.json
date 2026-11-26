@@ -41,6 +41,15 @@
     "pass": "Kasa",
     "calendar": "Takvim"
   },
+  "shortcutsSetting": {
+    "title": "Klavye kısayolları",
+    "description": "Hızlı işlemler ve görünümler arasında geçiş için tuşlar. Bu listeyi görmek için ? tuşuna basın.",
+    "toggle": "Klavye kısayolları",
+    "toggleHint": "Tüm Kutup uygulamalarında, tüm cihazlarınızda açık ya da kapalı.",
+    "saveFailed": "Değişiklik kaydedilemedi. Yeniden deneyin.",
+    "or": "veya",
+    "open": "Klavye kısayolları"
+  },
   "theme": {
     "dark": "Koyu tema",
     "light": "Açık tema",

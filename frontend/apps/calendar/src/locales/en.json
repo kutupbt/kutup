@@ -12,6 +12,18 @@
   "nav": {
     "calendars": "Calendars"
   },
+  "keys": {
+    "basic": "Basic actions",
+    "newEvent": "Create new event",
+    "help": "Show keyboard shortcuts",
+    "views": "View options",
+    "today": "Today",
+    "day": "Day view",
+    "week": "Week view",
+    "month": "Month view",
+    "next": "Next period",
+    "previous": "Previous period"
+  },
   "meetings": {
     "label": "Video meeting",
     "kutup": "Kutup meeting",
