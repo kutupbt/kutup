@@ -23,7 +23,7 @@ import { kutupDriveSource } from './source/kutupSource'
 import { DriveSettingsPage } from './features/settings/DriveSettingsPage'
 import { UploadPanel } from '@kutup/drive-ui/UploadPanel'
 import { useRequiredSession } from '@kutup/session/store'
-import { useUploadActions } from './features/uploads/useUploadActions'
+import { useUploadActions } from './source/kutup/uploads/useUploadActions'
 import { setThumbnailStoredListener } from '@kutup/drive-core/thumbnailQueue'
 import { NotFoundPage } from './NotFoundPage'
 

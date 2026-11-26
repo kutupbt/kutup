@@ -45,7 +45,7 @@ import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/
 import { Toolbar } from '../explorer/Toolbar'
 import { QuickLook, type QuickLookTarget } from '../quicklook/QuickLook'
 import { FileThumbnail } from '../thumbnails/FileThumbnail'
-import { useUploadActions } from '../uploads/useUploadActions'
+import { useUploadActions } from '../../source/kutup/uploads/useUploadActions'
 import { VersionHistoryDialog } from '../versions/VersionHistoryDialog'
 import { DetailsDialog } from '../details/DetailsDialog'
 

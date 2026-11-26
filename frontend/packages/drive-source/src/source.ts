@@ -31,6 +31,10 @@ export interface FolderView {
   isRoot: boolean
   /** One's own, shared with one, on another server, or a single shared file's place. */
   source: 'owned' | 'shared' | 'remote' | 'file'
+  /** Federation: the share a folder on another server is reached through (its route, `/remote/:id`). */
+  remoteShareId?: string
+  /** Federation: the share a single file from another server is reached through. */
+  remoteFileShareId?: string
 }
 
 /** Every folder the person can see, and how they hang together. */
@@ -94,6 +98,28 @@ export interface TrashedView {
   files?: number
 }
 
+/** A file of a dropped or chosen folder, with the folders it is in (not its own name). */
+export interface FolderEntry {
+  file: File
+  relativePath: string[]
+}
+
+/**
+ * Uploads as the screens start them; the source runs them (Kutup: sealed and
+ * resumable, with its thumbnails drawn after the upload) and reports through
+ * the shared upload panel.
+ */
+export interface UploadActions {
+  uploadFiles: (folder: FolderView, files: File[]) => void
+  uploadDirectory: (folder: FolderView, entries: FolderEntry[], name: string) => void
+  /** Refreshes a folder's listing. */
+  refreshFolder: (folder: FolderView) => Promise<void>
+  /** After uploads: refresh what they changed (lists, storage used). */
+  settled: () => void
+  /** One new file (a new document from a template): its id, or null if none was made. */
+  createFile: (folder: FolderView, file: File) => Promise<{ fileId: string } | null>
+}
+
 /** What a source can do; the screens hide what is missing. */
 export interface Capabilities {
   /** Folder colours. */
@@ -106,6 +132,11 @@ export interface Capabilities {
  */
 export interface DriveSource {
   readonly capabilities: Capabilities
+
+  /** Whether a folder can be opened and listed (Kutup: its key is at hand). */
+  isOpen: (folder: FolderView) => boolean
+  /** The names of the files in a folder (for new names that are free). */
+  namesIn: (folder: FolderView) => Promise<string[]>
 
   useFolders: () => UseQueryResult<FolderTree>
   useFolderFiles: (folder: FolderView | undefined) => UseQueryResult<FileView[]>
@@ -122,4 +153,6 @@ export interface DriveSource {
   /** Deletes a trash entry for good, by id. */
   usePurge: () => UseMutationResult<void, Error, string>
   useEmptyTrash: () => UseMutationResult<void, Error, void>
+
+  useUploadActions: () => UploadActions
 }

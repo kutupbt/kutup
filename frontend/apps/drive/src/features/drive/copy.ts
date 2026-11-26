@@ -1,7 +1,7 @@
 import { createOwnedCollectionV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { readFile } from '@kutup/editors/content'
-import { uploadCreating } from '../uploads/useUploadActions'
+import { uploadCreating } from '../../source/kutup/uploads/useUploadActions'
 import { copyEmbedded, embeddingKind } from '@kutup/editors/files/embedded'
 import { loadFolderFiles } from '@kutup/drive-core/files'
 import type { FolderIndex } from '@kutup/drive-core/folders'

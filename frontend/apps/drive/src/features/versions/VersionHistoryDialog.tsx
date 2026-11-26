@@ -49,8 +49,8 @@ import {
 } from '@kutup/ui/components/dropdown-menu'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { canReplace, replaceContent } from '../uploads/replace'
-import { thumbnailAfterUpload } from '../thumbnails/schedule'
+import { canReplace, replaceContent } from '../../source/kutup/uploads/replace'
+import { thumbnailAfterUpload } from '../../source/kutup/thumbnails/schedule'
 import type { QuickLookTarget } from '../quicklook/QuickLook'
 
 /** The periods with a name of their own (as Drive → Settings names them). */

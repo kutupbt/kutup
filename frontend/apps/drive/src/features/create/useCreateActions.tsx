@@ -5,13 +5,11 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { filesToFolderEntries } from '@kutup/files/upload/uploadFolder'
 import { NameDialog } from '@kutup/drive-ui/NameDialog'
-import { loadFolderFiles } from '@kutup/drive-core/files'
-import type { Folder } from '@kutup/drive-core/model'
-import { useCreateFolder } from '@kutup/drive-core/mutations'
+import { useDriveSource } from '@kutup/drive-source/context'
+import type { FolderView } from '@kutup/drive-source/source'
 import { openFile } from '@kutup/editors/paths'
 import { appUrl } from '@kutup/session/apps'
 import type { ExplorerAction } from '../explorer/Explorer'
-import { uploadOne, useUploadActions } from '../uploads/useUploadActions'
 import { newDocumentFile, type NewDocument } from './templates'
 
 const DOCUMENTS: { type: NewDocument; icon: ReactNode }[] = [
@@ -34,29 +32,29 @@ const DOCUMENTS: { type: NewDocument; icon: ReactNode }[] = [
  * `elements` (the file pickers and the folder-name dialog) must be rendered
  * by the caller.
  */
-export function useCreateActions(target: Folder | null): {
+export function useCreateActions(target: FolderView | null): {
   actions: ExplorerAction[]
   busy: boolean
   elements: ReactNode
 } {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { uploadFiles, uploadDirectory, settled } = useUploadActions()
-  const createFolder = useCreateFolder()
+  const source = useDriveSource()
+  const { uploadFiles, uploadDirectory, settled, createFile } = source.useUploadActions()
+  const createFolder = source.useCreateFolder()
   const [naming, setNaming] = useState(false)
   const [creating, setCreating] = useState<NewDocument | null>(null)
   const filesInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
 
-  if (!target?.key || !target.canUpload) return { actions: [], busy: false, elements: null }
+  if (!target || !source.isOpen(target) || !target.canUpload) return { actions: [], busy: false, elements: null }
   const folder = target
 
   async function createDocument(type: NewDocument) {
     setCreating(type)
     try {
-      const existing = await loadFolderFiles(folder)
-      const file = newDocumentFile(type, t(`newMenu.untitled.${type}`), existing.flatMap((f) => (f.name ? [f.name] : [])))
-      const uploaded = await uploadOne(folder, file)
+      const file = newDocumentFile(type, t(`newMenu.untitled.${type}`), await source.namesIn(folder))
+      const uploaded = await createFile(folder, file)
       settled()
       if (uploaded) openFile(navigate, folder, { id: uploaded.fileId, name: file.name })
     } catch {
