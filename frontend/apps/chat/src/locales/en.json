@@ -897,6 +897,8 @@
       "copied": "Meeting link copied.",
       "copyFailed": "The link could not be copied. Select it and copy it yourself.",
       "addToCalendar": "Add to calendar",
+      "addToKutupCalendar": "Add to Kutup Calendar",
+      "downloadIcs": "Download .ics",
       "edit": "Change",
       "delete": "Delete",
       "deleteTitle": "Delete \"{{title}}\"?",

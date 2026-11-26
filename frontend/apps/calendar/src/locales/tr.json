@@ -12,6 +12,18 @@
   "nav": {
     "calendars": "Takvimler"
   },
+  "meetings": {
+    "label": "Görüntülü toplantı",
+    "kutup": "Kutup toplantısı",
+    "add": "Kutup toplantısı ekle",
+    "addFailed": "Toplantı oluşturulamadı. Yeniden deneyin.",
+    "join": "Katıl",
+    "copy": "Toplantı bağlantısını kopyala",
+    "copied": "Toplantı bağlantısı kopyalandı",
+    "copyFailed": "Bağlantı kopyalanamadı.",
+    "remove": "Toplantıyı bu etkinlikten kaldır",
+    "untitled": "Toplantı"
+  },
   "feeds": {
     "new": "URL'den takvim ekle",
     "newTitle": "URL'den takvim ekle",

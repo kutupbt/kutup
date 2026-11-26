@@ -145,6 +145,7 @@ fn fields(uid: &str, organizer: Option<&str>, start: &str, sequence: u32) -> Eve
         summary: Some("Planning".into()),
         description: None,
         location: None,
+        conference: None,
         status: Some("confirmed".into()),
         transp: Some("opaque".into()),
         comment: None,

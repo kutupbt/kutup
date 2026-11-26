@@ -143,6 +143,7 @@ fn fields(uid: &str, start: &str, end: &str, summary: &str) -> EventFieldsV1 {
         summary: Some(summary.into()),
         description: None,
         location: None,
+        conference: None,
         status: Some("confirmed".into()),
         transp: Some("opaque".into()),
         comment: None,

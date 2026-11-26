@@ -1038,8 +1038,68 @@ feed events signed by a server key; order E5a, E5c, E5b).
 ### E5c: Kutup meeting links in events
 
 "Add Kutup meeting" in the event editor makes a Chat call link (its title
-encrypted, as Proton Meet's) and puts it in the event; it replaces Chat's
-`.ics` download, and a repeating meeting is a repeating event.
+encrypted, as Proton Meet's) and puts it in the event; a repeating meeting
+is a repeating event.
+
+**Decisions (2026-11-26, the user's).**
+
+- **All encrypted.** The link is RFC 7986's `CONFERENCE` property
+  (`VALUE=URI`, `FEATURE=AUDIO,VIDEO`, `LABEL=Kutup meeting`) in the shared
+  **encrypted** part only. Proton splits it: `X-PM-CONFERENCE-ID` in the
+  signed part, which its server reads, and `X-PM-CONFERENCE-URL` encrypted.
+  Its reason is server-side meeting management (its server creates and
+  updates Zoom meetings through Zoom's API, `createZoomMeeting`, and manages
+  Proton Meet rooms). Kutup's server never manages a meeting for an event: a
+  call link is made and changed in the browser. So the server isn't told
+  which event is which meeting. `CONFERENCE` is what Google, Apple and
+  Thunderbird read, so exports and invitations carry it as is.
+- **Chat's meeting page** gets "Add to Kutup Calendar": it opens the
+  Calendar editor filled in with the meeting (title, time, link). The `.ics`
+  download stays, for other calendar apps.
+
+**Build.**
+
+- `EventFieldsV1.conference` (the URL) and `SharedEncrypted.conference`,
+  read and written by the `.ics` reader, export and invitations. Older
+  clients keep the line in `other` (docs/plans/format-evolution.md, rule 3).
+- The call-link functions Calendar needs (nonce, owner secret, host token,
+  keys, fragment, parse, seal and open the info) are exposed by the
+  `crypto-calendar` WASM Calendar already loads, not Chat's engine WASM. The
+  browser code that makes and changes a link moves from the Chat app into
+  a shared package, given its crypto.
+- The editor: "Add Kutup meeting" makes a link titled and timed as the
+  event; saving a changed title or time changes the meeting's too (the
+  owner's own links); removing it from the event leaves the meeting in
+  Chat's list. The event view shows "Join" for a `CONFERENCE` link.
+
+**As built (2026-11-26).**
+
+- Format: `SharedEncrypted.conference` / `EventFieldsV1.conference`, written
+  `CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:<https URL>` (at most 2048
+  bytes). Only that exact form is read as the link; any other `CONFERENCE`
+  line stays in `other`, so events kept before E5c open as before. Absent,
+  it isn't serialized (the checked-in vectors are unchanged). Imports take
+  the first https `CONFERENCE;VALUE=URI` or Proton's `X-PM-CONFERENCE-URL`;
+  exports and REQUEST invitations write it (not CANCEL).
+- `crypto-calendar` exports Chat's owner functions under Chat's names
+  (`crates/kutup-crypto-wasm/src/call_link.rs`); the browser code that
+  makes, lists and renames an own meeting is
+  `@kutup/chat-core/ownedMeetings`, given a runtime; Chat passes its engine,
+  Calendar the calendar runtime (`@kutup/calendar-core/meetings`).
+- The editor's row is hidden when the server hosts no meetings
+  (`chat.callLinks`, no call server); an event's existing link still shows.
+  After a save the meeting takes the event's title and time (a PUT to the
+  owner's own meeting; anyone else's is left alone). The details popover
+  shows "Join"; a link from elsewhere is named by its host.
+- Chat → Calendar: `calendar.<domain>/#meeting=<link>&title=…&start=<ms>&minutes=<n>`.
+  The fragment carries the link's secret and never reaches a server;
+  Calendar takes only a meeting of its own server's Chat, opens the editor
+  filled in (nothing is saved by the link) and clears the fragment from the
+  address and its history entry.
+- Mail's invitation card shows the link by its host, with Join.
+- Tests: Rust format, import and invitation round trips; calendar-core and
+  the hand-over unit tests; browser spec 230 (needs the call server, as
+  spec 41).
 
 ### E5b: import from Google (D-3: in the browser)
 

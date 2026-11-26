@@ -539,3 +539,24 @@ fn the_export_writes_zones_and_alarms() {
     });
     assert!(refused.is_err());
 }
+
+#[test]
+fn a_meeting_link_is_imported_from_conference_or_protons_property() {
+    let text = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\n\
+BEGIN:VEVENT\r\nUID:a@t\r\nDTSTAMP:20261101T000000Z\r\nDTSTART:20261105T090000Z\r\nSUMMARY:A\r\n\
+CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL=Meet:https://meet.example/abc\r\nEND:VEVENT\r\n\
+BEGIN:VEVENT\r\nUID:b@t\r\nDTSTAMP:20261101T000000Z\r\nDTSTART:20261105T090000Z\r\nSUMMARY:B\r\n\
+X-PM-CONFERENCE-URL:https://meet.proton.me/join/x\r\nEND:VEVENT\r\n\
+BEGIN:VEVENT\r\nUID:c@t\r\nDTSTAMP:20261101T000000Z\r\nDTSTART:20261105T090000Z\r\nSUMMARY:C\r\n\
+CONFERENCE;VALUE=URI:http://insecure.example/x\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let read = read(text);
+    assert_eq!(
+        by_title(&read, "A").fields.conference.as_deref(),
+        Some("https://meet.example/abc")
+    );
+    assert_eq!(
+        by_title(&read, "B").fields.conference.as_deref(),
+        Some("https://meet.proton.me/join/x")
+    );
+    assert_eq!(by_title(&read, "C").fields.conference, None);
+}

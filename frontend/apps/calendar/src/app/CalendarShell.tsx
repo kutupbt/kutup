@@ -37,6 +37,7 @@ import { usePush } from '../features/reminders/usePush'
 import { openEditor } from '../features/editorState'
 import { useCalendarPrefs } from '../features/prefs'
 import { SettingsDialog } from '../features/SettingsDialog'
+import { useMeetingLink } from '../features/meetings/meetingLink'
 import { ShareCalendarDialog } from '../features/sharing/ShareCalendarDialog'
 import { SharedWithYou } from '../features/sharing/SharedWithYou'
 import { DueRotationDialog } from '../features/sharing/DueRotationDialog'
@@ -138,6 +139,8 @@ export function CalendarShell() {
   const today = useToday(prefs.zone)
   const account = useMailAccount()
   const calendars = useCalendars()
+  // Chat's "Add to Kutup Calendar": the editor opens with the meeting (E5c).
+  useMeetingLink(prefs.zone, today, !!calendars.data?.calendars.length)
   const first = useFirstCalendar()
   const [editing, setEditing] = useState<Calendar | 'new' | 'url' | null>(null)
   const [settings, setSettings] = useState(false)

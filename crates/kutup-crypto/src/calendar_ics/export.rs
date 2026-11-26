@@ -152,6 +152,10 @@ pub fn export(calendar: &ExportCalendarV1) -> Result<String> {
         if let Some(location) = &secret.location {
             line(text_line("LOCATION", location));
         }
+        // The meeting link as other apps read it (RFC 7986).
+        if let Some(url) = &secret.conference {
+            line(format!("CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:{url}"));
+        }
         if let Some(status) = &event.fields.status {
             line(format!("STATUS:{}", status.to_ascii_uppercase()));
         }

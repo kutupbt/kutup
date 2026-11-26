@@ -22,6 +22,8 @@ export type EditorTarget =
       /** What the quick-create popover had (its "More options"). */
       title?: string
       calendarId?: string
+      /** A Kutup meeting's link, from Chat's "Add to Kutup Calendar" (E5c). */
+      conference?: string
     }
   | {
       kind: 'edit'

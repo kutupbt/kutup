@@ -177,6 +177,9 @@ importers:
       '@kutup/calendar-core':
         specifier: workspace:*
         version: link:../../packages/calendar-core
+      '@kutup/chat-core':
+        specifier: workspace:*
+        version: link:../../packages/chat-core
       '@kutup/contacts-core':
         specifier: workspace:*
         version: link:../../packages/contacts-core
@@ -858,6 +861,9 @@ importers:
 
   packages/calendar-core:
     dependencies:
+      '@kutup/chat-core':
+        specifier: workspace:*
+        version: link:../chat-core
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../crypto

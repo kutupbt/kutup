@@ -33,6 +33,15 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
  * calendar part of a received message, above its body. The calendar
  * runtimes load only here, for a message that has one (Q-4).
  */
+/** A link's host, as a meeting link from an invitation is named. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
 export function InvitationWidgets({ account, message, parsed }: { account: MailAccount; message: MailMessage; parsed: ParsedMessage }) {
   const limits = useQuery({ queryKey: ['calendar', 'invitation-limits'], queryFn: invitationLimits, staleTime: Infinity })
   const parts = limits.data ? calendarParts(parsed.attachments, limits.data.invitationIcsMaxBytes) : []
@@ -172,6 +181,17 @@ function InvitationWidget({ account, text, message, messageId }: { account: Mail
           {when(shown, i18n.language)}
         </p>
         {shown.location ? <p className="text-muted-foreground">{shown.location}</p> : null}
+        {shown.conference ? (
+          // The link's host, never a label: an outside invitation chooses its link (E5c).
+          <p className="flex items-center gap-2 text-muted-foreground" data-testid="invitation-meeting">
+            <span className="min-w-0 truncate">
+              {t('invitation.widget.meeting')} · {hostOf(shown.conference)}
+            </span>
+            <a href={shown.conference} target="_blank" rel="noopener noreferrer" className="font-medium text-primary underline-offset-2 hover:underline" data-testid="invitation-join">
+              {t('invitation.widget.join')}
+            </a>
+          </p>
+        ) : null}
         {invitation.organizer ? (
           <p className="text-xs text-muted-foreground">
             {/* The address always: a display name alone is anyone's to write (security review L3). */}

@@ -12,6 +12,18 @@
   "nav": {
     "calendars": "Calendars"
   },
+  "meetings": {
+    "label": "Video meeting",
+    "kutup": "Kutup meeting",
+    "add": "Add Kutup meeting",
+    "addFailed": "The meeting couldn't be made. Try again.",
+    "join": "Join",
+    "copy": "Copy meeting link",
+    "copied": "Meeting link copied",
+    "copyFailed": "The link couldn't be copied.",
+    "remove": "Remove the meeting from this event",
+    "untitled": "Meeting"
+  },
   "feeds": {
     "new": "Add calendar from URL",
     "newTitle": "Add calendar from URL",

@@ -185,6 +185,10 @@ pub struct SharedEncrypted {
     pub summary: Option<String>,
     pub description: Option<String>,
     pub location: Option<String>,
+    /// A video meeting's link (RFC 7986 `CONFERENCE`, docs/plans/calendar.md,
+    /// E5c): encrypted, so the server isn't told which event is which
+    /// meeting.
+    pub conference: Option<String>,
     /// Unfolded content lines of properties no part names, in order.
     pub other: Vec<String>,
 }
@@ -390,6 +394,9 @@ impl SharedEncrypted {
             MAX_DESCRIPTION_CHARS,
         )?;
         push_text(&mut lines, "LOCATION", &self.location, MAX_LOCATION_CHARS)?;
+        if let Some(url) = &self.conference {
+            lines.push(conference_line(url)?);
+        }
         push_other(&mut lines, &self.other)?;
         Ok(wrap(&lines))
     }
@@ -405,6 +412,15 @@ impl SharedEncrypted {
                 "SUMMARY" => part.summary = Some(unescape(&prop.value)?),
                 "DESCRIPTION" => part.description = Some(unescape(&prop.value)?),
                 "LOCATION" => part.location = Some(unescape(&prop.value)?),
+                // Only the form this part writes is the meeting link; any
+                // other CONFERENCE (an import kept as it came, before E5c)
+                // stays as it is.
+                "CONFERENCE"
+                    if part.conference.is_none()
+                        && conference_line(&prop.value).is_ok_and(|line| line == prop.line) =>
+                {
+                    part.conference = Some(prop.value.clone())
+                }
                 name if KNOWN.contains(&name) => return Err(not_in_part(prop)),
                 _ => part.other.push(prop.line.clone()),
             }
@@ -738,6 +754,10 @@ pub struct EventFieldsV1 {
     pub summary: Option<String>,
     pub description: Option<String>,
     pub location: Option<String>,
+    /// A video meeting's link (RFC 7986 `CONFERENCE`, E5c), an https URL.
+    /// Left out when there is none, so events without one read as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conference: Option<String>,
     /// `tentative`, `confirmed` or `cancelled`.
     pub status: Option<String>,
     /// `opaque` (busy) or `transparent` (free).
@@ -801,6 +821,7 @@ impl EventFieldsV1 {
                 summary: self.summary.clone(),
                 description: self.description.clone(),
                 location: self.location.clone(),
+                conference: self.conference.clone(),
                 other: self.other.clone(),
             },
             calendar_signed: CalendarSigned {
@@ -857,6 +878,7 @@ impl EventFieldsV1 {
             summary: secret.summary.clone(),
             description: secret.description.clone(),
             location: secret.location.clone(),
+            conference: secret.conference.clone(),
             status: calendar.status.map(|status| status.as_str().to_lowercase()),
             transp: calendar.transp.map(|transp| transp.as_str().to_lowercase()),
             comment: parts
@@ -914,6 +936,29 @@ pub(crate) fn escape(text: &str) -> String {
         }
     }
     out
+}
+
+/// The longest meeting link taken.
+pub const MAX_CONFERENCE_BYTES: usize = 2048;
+
+/// Whether `url` is a meeting link an event takes (an https address).
+pub fn check_conference(url: &str) -> Result<()> {
+    conference_line(url).map(|_| ())
+}
+
+/// A meeting link as the shared encrypted part writes it (RFC 7986): an
+/// https URI, audio and video.
+fn conference_line(url: &str) -> Result<String> {
+    if url.len() > MAX_CONFERENCE_BYTES
+        || !url.starts_with("https://")
+        || url.len() == "https://".len()
+        || url.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err(CryptoError::InvalidInput(
+            "a meeting link is an https address".into(),
+        ));
+    }
+    Ok(format!("CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:{url}"))
 }
 
 fn push_text(
@@ -1397,5 +1442,42 @@ mod tests {
         // A date start with a timed end: refused.
         part.dtend = Some(EventTime::Utc(stamp()));
         assert!(part.build().is_err());
+    }
+
+    #[test]
+    fn a_meeting_link_is_kept_in_the_encrypted_part_only() {
+        let part = SharedEncrypted {
+            uid: "m@kutup".into(),
+            conference: Some("https://chat.kutup.example/call#abc-def".into()),
+            ..SharedEncrypted::default()
+        };
+        let text = part.build().unwrap();
+        assert!(text.replace("\r\n ", "").contains(
+            "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:https://chat.kutup.example/call#abc-def"
+        ));
+        assert_eq!(SharedEncrypted::parse(&text).unwrap(), part);
+        for bad in [
+            "http://example.org/x",
+            "https://",
+            "https://a b",
+            "javascript:alert(1)",
+        ] {
+            let part = SharedEncrypted {
+                uid: "m@kutup".into(),
+                conference: Some(bad.into()),
+                ..SharedEncrypted::default()
+            };
+            assert!(part.build().is_err(), "{bad}");
+        }
+        // Another app's CONFERENCE, kept before E5c, stays as it was.
+        let kept = SharedEncrypted {
+            uid: "m@kutup".into(),
+            other: vec!["CONFERENCE;VALUE=URI;LABEL=Meet:https://meet.example/x".into()],
+            ..SharedEncrypted::default()
+        };
+        assert_eq!(
+            SharedEncrypted::parse(&kept.build().unwrap()).unwrap(),
+            kept
+        );
     }
 }

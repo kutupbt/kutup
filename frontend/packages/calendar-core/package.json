@@ -8,6 +8,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
+    "@kutup/chat-core": "workspace:*",
     "@kutup/crypto": "workspace:*",
     "@kutup/i18n": "workspace:*",
     "@kutup/mail-core": "workspace:*",

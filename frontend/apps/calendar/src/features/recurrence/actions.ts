@@ -38,6 +38,8 @@ export interface FormValues {
   summary: string | null
   description: string | null
   location: string | null
+  /** The video meeting's link (RFC 7986 CONFERENCE, E5c). */
+  conference: string | null
 }
 
 /** The span the Rust core expands a series over (Proton's 1970–2037). */
@@ -245,7 +247,7 @@ async function futureRule(form: FormValues, parent: CalendarEvent, number: numbe
 }
 
 function withForm(fields: EventFields, form: FormValues): EventFields {
-  return { ...fields, start: form.start, end: form.end, summary: form.summary, description: form.description, location: form.location, dtstamp: now() }
+  return { ...fields, start: form.start, end: form.end, summary: form.summary, description: form.description, location: form.location, conference: form.conference, dtstamp: now() }
 }
 
 /**
@@ -266,12 +268,13 @@ async function planAll(context: SeriesContext, form: FormValues, reminders: Remi
       summary: form.summary,
       description: form.description,
       location: form.location,
+      conference: form.conference,
       dtstamp: now(),
       sequence,
     }
     // Proton's smart rules: what changed in the series changes in its changed occurrences.
     const changes: Partial<EventFields> = {}
-    for (const key of ['summary', 'description', 'location'] as const) if (form[key] !== parent.fields[key]) changes[key] = form[key]
+    for (const key of ['summary', 'description', 'location', 'conference'] as const) if (form[key] !== (parent.fields[key] ?? null)) changes[key] = form[key]
     const steps: Step[] = []
     if (Object.keys(changes).length > 0) {
       for (const child of context.children) {

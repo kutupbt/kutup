@@ -153,6 +153,30 @@ pub(super) const METHODS: [&str; 8] = [
     "REFRESH",
 ];
 
+/// The event's video meeting link (E5c): the first RFC 7986 `CONFERENCE`
+/// that is an https URI, else Proton's `X-PM-CONFERENCE-URL`. Anything else
+/// is dropped, as other properties are.
+fn supported_conference(component: &reader::Component) -> Option<String> {
+    let usable = |value: &str| {
+        let url = value.trim();
+        crate::calendar_event::check_conference(url)
+            .is_ok()
+            .then(|| url.to_owned())
+    };
+    component
+        .all("CONFERENCE")
+        .filter(|prop| {
+            prop.param("VALUE")
+                .is_some_and(|value| value.eq_ignore_ascii_case("URI"))
+        })
+        .find_map(|prop| usable(&prop.value))
+        .or_else(|| {
+            component
+                .all("X-PM-CONFERENCE-URL")
+                .find_map(|prop| usable(&value::text(&prop.value)))
+        })
+}
+
 /// Reads an `.ics` file for import.
 pub fn import(text: &str, options: &ImportOptionsV1) -> crate::error::Result<ImportOutcomeV1> {
     let now: Timestamp = options
@@ -814,6 +838,7 @@ pub(super) fn event(component: &Component, context: &Context) -> Result<Candidat
         summary: supported_text(component.property("SUMMARY"), MAX_SUMMARY_CHARS),
         description: supported_text(component.property("DESCRIPTION"), MAX_DESCRIPTION_CHARS),
         location: supported_text(component.property("LOCATION"), MAX_LOCATION_CHARS),
+        conference: supported_conference(component),
         status: word("STATUS", &["tentative", "confirmed", "cancelled"]),
         transp: word("TRANSP", &["opaque", "transparent"]),
         comment: None,

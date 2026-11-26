@@ -33,6 +33,8 @@ export interface EventFields {
   summary: string | null
   description: string | null
   location: string | null
+  /** A video meeting's link (RFC 7986 CONFERENCE, docs/plans/calendar.md E5c); absent when none. */
+  conference?: string | null
   status: 'tentative' | 'confirmed' | 'cancelled' | null
   transp: 'opaque' | 'transparent' | null
   comment: string | null
@@ -367,6 +369,17 @@ async function wasm(): Promise<CalendarWasm> {
     throw new Error('this app loads the crypto runtime without calendars (use crypto-calendar)')
   }
   return module as CalendarWasm
+}
+
+/**
+ * The calendar runtime's meeting-link functions (E5c): the ones Chat's
+ * engine exports under the same names, for making and changing the
+ * account's own meetings (`@kutup/chat-core/ownedMeetings`).
+ */
+export async function calendarCallLinkRuntime(): Promise<unknown> {
+  const module = (await getCalendarCryptoWasm()) as unknown as { callLinkNonce?: unknown }
+  if (typeof module.callLinkNonce !== 'function') throw new Error('this runtime has no meeting links (use crypto-calendar)')
+  return module
 }
 
 function keyArgs(key: SealedMailKey): KeyArgs {

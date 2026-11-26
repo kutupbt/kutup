@@ -20,6 +20,8 @@ export interface Draft {
   endTime: string
   tzid: string
   location: string
+  /** The video meeting's link, if the event has one (E5c). */
+  conference: string | null
   description: string
   /**
    * Proton's notifications: the calendar's defaults until edited
@@ -62,6 +64,7 @@ export function draftOf(target: EditorTarget, zone: string, defaultCalendar: str
       endTime: hhmm(end),
       tzid: zone,
       location: '',
+      conference: target.conference ?? null,
       description: '',
     }
   }
@@ -70,7 +73,7 @@ export function draftOf(target: EditorTarget, zone: string, defaultCalendar: str
   const fields = instance ? { ...target.event.fields, start: instance.start, end: instance.end } : target.event.fields
   // A duplicate goes to the event's calendar, or the first one written to when that one is only read.
   const calendarId = target.kind === 'duplicate' && !target.writable ? defaultCalendar : target.event.calendarId
-  const base = { calendarId, title: fields.summary ?? '', location: fields.location ?? '', description: fields.description ?? '' }
+  const base = { calendarId, title: fields.summary ?? '', location: fields.location ?? '', conference: fields.conference ?? null, description: fields.description ?? '' }
   const moved = target.kind === 'edit' ? target.moved : undefined
   if ('date' in fields.start) {
     if (moved) return { ...base, allDay: true, startDate: moved.start, startTime: '09:00', endDate: moved.end, endTime: '10:00', tzid: zone }
@@ -99,6 +102,7 @@ export async function formOf(draft: Draft, weekStart: number, previous: string |
     summary: draft.title.trim() || null,
     description: draft.description || null,
     location: draft.location.trim() || null,
+    conference: draft.conference,
   }
 }
 
@@ -125,6 +129,7 @@ export function fieldsOf(form: FormValues, domain: string, existing?: CalendarEv
     summary: form.summary,
     description: form.description,
     location: form.location,
+    conference: form.conference,
     status: before?.status ?? 'confirmed',
     transp: before?.transp ?? 'opaque',
     comment: before?.comment ?? null,
