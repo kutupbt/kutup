@@ -4,7 +4,12 @@
 // The views are what Kutup's objects already are (a Folder is a FolderView, a
 // DriveFile a FileView, a TrashEntry a TrashedView), and in Kutup the screens
 // only ever hold objects drive-core gave them. So the hooks take Kutup's own
-// types back: the casts below say that, nothing is converted.
+// types back: the casts below say that, nothing is converted. Each is a plain
+// `as`, which TypeScript allows only between related types: if drive-core's
+// hook and the interface drift apart, it stops compiling (kutupSource.test.ts
+// holds such drifts as @ts-expect-error). Where a plain `as` cannot be written
+// (an object of functions: the upload actions), a typed adapter converts each
+// view instead.
 
 import { useMemo } from 'react'
 import type { DriveSource, FileView, FolderView, UploadActions } from '@kutup/drive-source/source'
@@ -35,16 +40,24 @@ import { sharedByMeRowOf, useSharedByMe, useSharedByMeRows } from '@kutup/drive-
 import { folderLocation } from '@kutup/drive-core/model'
 import { downloadFile, downloadFolderZip, downloadRevision, downloadSelectionZip, FsaRequiredError } from '@kutup/editors/files/downloads'
 import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
-import { readFile, readRevision, type RevisionToRead } from '@kutup/editors/content'
+import { readFile, readRevision } from '@kutup/editors/content'
+import type { HistoryEntry } from '@kutup/editors/history'
 import { openPlayback } from '@kutup/drive-core/playback'
 
 /** Kutup's uploads (sealed, resumable, thumbnails drawn after) as the screens start them. */
 function useKutupUploadActions(): UploadActions {
   const actions = useUploadActions()
-  return {
-    ...(actions as unknown as Omit<UploadActions, 'createFile'>),
-    createFile: (folder, file) => uploadOne(folder as Folder, file),
-  }
+  // Typed against UploadActions method by method: each view is converted with a checked `as`.
+  return useMemo(
+    (): UploadActions => ({
+      uploadFiles: (folder, files) => actions.uploadFiles(folder as Folder, files),
+      uploadDirectory: (folder, entries, name) => actions.uploadDirectory(folder as Folder, entries, name),
+      refreshFolder: (folder) => actions.refreshFolder(folder as Folder),
+      settled: actions.settled,
+      createFile: (folder, file) => uploadOne(folder as Folder, file),
+    }),
+    [actions],
+  )
 }
 
 /** What this account shares, as the server counts it (shared-by-me rows). */
@@ -80,22 +93,22 @@ export const kutupDriveSource: DriveSource = {
   useFolderFiles: useFolderFiles as DriveSource['useFolderFiles'],
   useTrash,
 
-  useCreateFolder: useCreateFolder as unknown as DriveSource['useCreateFolder'],
-  useRenameFolder: useRenameFolder as unknown as DriveSource['useRenameFolder'],
-  useRenameFile: useRenameFile as unknown as DriveSource['useRenameFile'],
-  useSetFolderColor: useSetFolderColor as unknown as DriveSource['useSetFolderColor'],
-  useTrashFolder: useTrashFolder as unknown as DriveSource['useTrashFolder'],
-  useTrashFile: useTrashFile as unknown as DriveSource['useTrashFile'],
+  useCreateFolder: useCreateFolder as DriveSource['useCreateFolder'],
+  useRenameFolder: useRenameFolder as DriveSource['useRenameFolder'],
+  useRenameFile: useRenameFile as DriveSource['useRenameFile'],
+  useSetFolderColor: useSetFolderColor as DriveSource['useSetFolderColor'],
+  useTrashFolder: useTrashFolder as DriveSource['useTrashFolder'],
+  useTrashFile: useTrashFile as DriveSource['useTrashFile'],
   useRestore,
   usePurge,
   useEmptyTrash,
 
   useUploadActions: useKutupUploadActions,
 
-  useCopy: useCopy as unknown as DriveSource['useCopy'],
-  useMove: useMove as unknown as DriveSource['useMove'],
+  useCopy: useCopy as DriveSource['useCopy'],
+  useMove: useMove as DriveSource['useMove'],
   read: (folder, file, signal) => readFile(folder as Folder, file as DriveFile, signal),
-  readVersion: (file, version, signal) => readRevision(file as DriveFile, version as unknown as RevisionToRead, { signal }),
+  readVersion: (file, version, signal) => readRevision(file as DriveFile, version as HistoryEntry, { signal }),
   openPlayback: (folder, file, signal, onProgress, onFallback) => openPlayback(folder, file as DriveFile, signal, onProgress, onFallback),
 
   downloadFile: (folder, file) => downloadFile(folder as Folder, file as DriveFile),
@@ -110,8 +123,8 @@ export const kutupDriveSource: DriveSource = {
   // Shares from other servers can be left; one on this server is the sharer's to take back.
   mayLeaveFolder: (folder) => folder.source === 'remote',
   mayLeaveFile: (shared) => Boolean((shared as SharedFile).remoteShareId),
-  useLeaveFolder: useLeaveRemoteShare as unknown as DriveSource['useLeaveFolder'],
-  useLeaveFile: useLeaveRemoteFileShare as unknown as DriveSource['useLeaveFile'],
+  useLeaveFolder: useLeaveRemoteShare as DriveSource['useLeaveFolder'],
+  useLeaveFile: useLeaveRemoteFileShare as DriveSource['useLeaveFile'],
   usePersonName: useKutupPersonName,
   SharedFrom: KutupSharedFrom,
   // A file by itself as canShareFile says; a folder by whoever manages it.
@@ -121,10 +134,10 @@ export const kutupDriveSource: DriveSource = {
   usePublicLink: useKutupPublicLink,
   AcceptInviteDialog: KutupAcceptInviteDialog,
 
-  useVersionHistory: useKutupVersionHistory as unknown as DriveSource['useVersionHistory'],
+  useVersionHistory: useKutupVersionHistory as DriveSource['useVersionHistory'],
   useAuthorName: useKutupAuthorName,
   useVersionRetention: useKutupVersionRetention,
-  downloadVersion: (file, version) => downloadRevision(file as DriveFile, version as unknown as RevisionToRead),
+  downloadVersion: (file, version) => downloadRevision(file as DriveFile, version as HistoryEntry),
   downloadFolderZip: (folder, onProgress) => downloadFolderZip(folder as Folder, onProgress),
   downloadSelectionZip: (items, archive, onProgress) => downloadSelectionZip(items as MoveSource[], archive, onProgress),
   downloadFailure: (error) => (error instanceof FsaRequiredError ? 'zipTooLarge' : error instanceof BlobDownloadTooLarge ? 'fileTooLarge' : 'other'),
