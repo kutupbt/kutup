@@ -10,7 +10,7 @@
 // the hooks are drive-core's, so every query key stays as it is.
 
 import type { UseMutationResult, UseQueryResult } from '@tanstack/react-query'
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import type { FileKind, ItemKind } from './kinds'
 import type { AskRestoreName } from './restore'
 
@@ -213,6 +213,17 @@ export interface SlotProps {
   onOpenChange: (open: boolean) => void
 }
 
+/**
+ * Making a public link. A link is made on the server, so it is made on the
+ * person's action (`create`, from the menu item), never while rendering or in an
+ * effect: a dialog that made its link when it opened would make one more each
+ * time its props changed. `dialog` shows the link made, once.
+ */
+export interface PublicLinkAction {
+  create: (target: ItemRef) => void
+  dialog: ReactNode
+}
+
 /** Something the person shares: a folder, or a file shared by itself, with counts. */
 export interface SharedByMeView {
   folder: FolderView
@@ -345,7 +356,8 @@ export interface DriveSource {
    * simpler ones). The screens pass only the item and whether it is open.
    */
   ShareDialog: ComponentType<SlotProps & { target: ItemRef | null }>
-  PublicLinkDialog: ComponentType<SlotProps & { target: ItemRef | null }>
+  /** A public link: made by `create` on the person's action, shown by `dialog`. */
+  usePublicLink: () => PublicLinkAction
   /** Capability `invites`; null without. */
   AcceptInviteDialog: ComponentType<SlotProps> | null
 

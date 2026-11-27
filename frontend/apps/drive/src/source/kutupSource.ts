@@ -24,7 +24,8 @@ import { backfill } from './kutup/thumbnails/backfill'
 import { useKutupAuthorName, useKutupVersionHistory, useKutupVersionRetention } from './kutup/versions'
 import { useKutupFileDetails, useKutupFolderCreator, useKutupSharingSummary } from './kutup/details'
 import { KutupSignatureBanner } from './kutup/SignatureBanner'
-import { KutupAcceptInviteDialog, KutupPublicLinkDialog, KutupShareDialog } from './kutup/sharing/slots'
+import { useKutupPublicLink } from './kutup/sharing/publicLink'
+import { KutupAcceptInviteDialog, KutupShareDialog } from './kutup/sharing/slots'
 import { canShareFile, useLeaveRemoteFileShare, useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
 import { useLeaveRemoteShare } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
@@ -117,7 +118,7 @@ export const kutupDriveSource: DriveSource = {
   mayShare: (item) => (item.file ? canShareFile(item.folder as Folder, item.file as DriveFile) : item.folder.canManage),
   mayLink: (item) => !item.file && item.folder.canManage,
   ShareDialog: KutupShareDialog,
-  PublicLinkDialog: KutupPublicLinkDialog,
+  usePublicLink: useKutupPublicLink,
   AcceptInviteDialog: KutupAcceptInviteDialog,
 
   useVersionHistory: useKutupVersionHistory as unknown as DriveSource['useVersionHistory'],

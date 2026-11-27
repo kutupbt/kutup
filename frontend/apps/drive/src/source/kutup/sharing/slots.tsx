@@ -3,15 +3,11 @@
 // key-rotation review and federation stay in them and read drive-core and the
 // pins themselves. The screens pass only the item and whether it is open.
 
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
-import { useCreatePublicLink } from '@kutup/drive-core/mutations'
-import { isTargetBlocked, sharingOffScope } from '@kutup/drive-core/publicSharing'
 import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
 import type { ItemRef } from '@kutup/drive-source/source'
-import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { LinkDialog } from '../../../features/dialogs/LinkDialog'
 import { AcceptInviteDialog } from './AcceptInviteDialog'
 import { ShareDialog } from './ShareDialog'
@@ -57,41 +53,6 @@ export function KutupShareDialog({ target, open, onOpenChange }: SlotProps & { t
       />
       <InviteDialog invite={invite} onClose={() => setInvite(null)} />
     </>
-  )
-}
-
-/** A public link to a folder: made when the dialog opens, then shown once; nothing shows if it cannot be made. */
-export function KutupPublicLinkDialog({ target, open, onOpenChange }: SlotProps & { target: ItemRef | null }) {
-  const { t } = useTranslation()
-  const publicLink = useCreatePublicLink()
-  const [url, setUrl] = useState<string | null>(null)
-  const asked = useRef<ItemRef | null>(null)
-  useEffect(() => {
-    // Closed (or never opened): the next open makes a new link.
-    if (!open) {
-      asked.current = null
-      setUrl(null)
-      return
-    }
-    if (!target || asked.current === target) return
-    asked.current = target
-    publicLink.mutate(target.folder as Folder, {
-      onSuccess: (made) => setUrl(made),
-      onError: (error) => {
-        const off = sharingOffScope(error)
-        toast.error(off ? t(`publicSharing.off.${off}`) : isTargetBlocked(error) ? t('publicSharing.targetBlocked') : apiErrorMessage(error, t('drive.linkFailed')))
-        onOpenChange(false)
-      },
-    })
-  }, [open, target, publicLink, onOpenChange, t])
-  return (
-    <LinkDialog
-      link={open ? url : null}
-      title={t('dialogs.publicLink.title')}
-      description={t('dialogs.publicLink.description')}
-      warning={t('dialogs.publicLink.warning')}
-      onClose={() => onOpenChange(false)}
-    />
   )
 }
 

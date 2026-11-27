@@ -120,7 +120,7 @@ what they show):
 | Slot | Props | Kutup supplies |
 |---|---|---|
 | `ShareDialog` | `{ target: ItemRef \| null, open, onOpenChange }` | `ShareDialog` (with `AccessList`) for a folder, `FileShareDialog` for a file (as its owner, or as an editor of a file shared with them), and the federated invite shown after |
-| `PublicLinkDialog` | `{ target: ItemRef \| null, open, onOpenChange }` | the public link made with `useCreatePublicLink` and shown once |
+| `usePublicLink()` → `{ create(target), dialog }` | none: the screen calls `create` from the menu item and renders `dialog` | the public link made with `useCreatePublicLink` on that click and shown once |
 | `AcceptInviteDialog` | `{ open, onOpenChange }` (capability `invites`; null without) | `AcceptInviteDialog` |
 | `DetailsBanner` | `{ folder, file }` (null for none) | the content signature check |
 
@@ -129,6 +129,13 @@ rights, links, capability flags) and `mayShare` / `mayLink`; no Kutup-only
 field reaches them: an identity or federation state stays behind its
 capability and in the slot components. The home edition supplies simpler
 dialogs of its own.
+
+A public link is the one sharing action that writes on the server as it
+starts, so it is not a dialog slot. The first conversion made it one, and it
+made its link in an effect when it opened; the screen passes a new target on
+every render, so each render made another link (Drive suite, 226 and 228, on
+`fea6dfe`). The link is made on the person's click again, as on master, and
+nothing on the source's path writes in an effect.
 
 **How the interface grows.** `source.ts` holds what is implemented and used,
 nothing more (no stubs); each step adds its part. The whole target, as

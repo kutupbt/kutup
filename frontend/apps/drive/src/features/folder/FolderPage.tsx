@@ -46,7 +46,6 @@ type Dialog =
   | { kind: 'history'; key: string }
   /** By keys too: the dialog follows the items as the list refreshes them. */
   | { kind: 'details'; keys: string[] }
-  | { kind: 'link'; folder: FolderView }
   | { kind: 'copy'; targets: Target[] }
   | { kind: 'move'; targets: Target[] }
   | null
@@ -98,6 +97,7 @@ export function FolderPage() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const source = useDriveSource()
+  const { create: createPublicLink, dialog: publicLinkDialog } = source.usePublicLink()
   const session = useRequiredSession()
   const params = useParams()
   const folders = source.useFolders()
@@ -311,7 +311,7 @@ export function FolderPage() {
       if (f.canManage) {
         actions.push(
           { id: 'share', label: t('drive.actions.share'), icon: <UserPlus />, onSelect: () => setDialog({ kind: 'share', folder: f }), separated: true },
-          { id: 'link', label: t('drive.actions.publicLink'), icon: <Link2 />, onSelect: () => setDialog({ kind: 'link', folder: f }) },
+          { id: 'link', label: t('drive.actions.publicLink'), icon: <Link2 />, onSelect: () => createPublicLink({ folder: f }) },
           { id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setDialog({ kind: 'rename', target }), separated: true },
           { id: 'color', label: t('drive.actions.color'), icon: <Palette />, onSelect: () => setDialog({ kind: 'color', folder: f }) },
           { id: 'trash', label: t('drive.actions.trash'), icon: <Trash2 />, onSelect: () => void moveToTrash([target]), destructive: true, separated: true },
@@ -319,7 +319,7 @@ export function FolderPage() {
       }
       return actions
     },
-    [lookup, mayChangeFile, moveToTrash, open, download, source, t],
+    [lookup, mayChangeFile, moveToTrash, open, download, source, createPublicLink, t],
   )
 
   const selectedTargets = [...selection].flatMap((key) => {
@@ -702,11 +702,7 @@ export function FolderPage() {
         open={dialog?.kind === 'share' || dialog?.kind === 'shareFile'}
         onOpenChange={(o) => !o && setDialog(null)}
       />
-      <source.PublicLinkDialog
-        target={dialog?.kind === 'link' ? { folder: dialog.folder } : null}
-        open={dialog?.kind === 'link'}
-        onOpenChange={(o) => !o && setDialog(null)}
-      />
+      {publicLinkDialog}
     </div>
   )
 }
