@@ -131,13 +131,13 @@ fn decode_public(public: &[u8]) -> Result<[u8; 32]> {
 fn derive(info: &[u8], private: &[u8; 32], public: &[u8]) -> Result<Zeroizing<[u8; 64]>> {
     let point = decode_public(public)?;
     let mut shared = Zeroizing::new([0u8; 32]);
-    crypto_scalarmult(&mut shared, private, &point);
     // A low-order point gives the all-zero secret: refused, as libsodium's
-    // crypto_scalarmult refuses it.
+    // crypto_scalarmult refuses it. dryoc (2.x, RUSTSEC-2026-0603) checks it
+    // in constant time; the check below stays as a second line.
+    let refused = || CryptoError::InvalidInput("provisioning key agreement failed".into());
+    crypto_scalarmult(&mut shared, private, &point).map_err(|_| refused())?;
     if shared.iter().all(|byte| *byte == 0) {
-        return Err(CryptoError::InvalidInput(
-            "provisioning key agreement failed".into(),
-        ));
+        return Err(refused());
     }
     let mut keys = Zeroizing::new([0u8; 64]);
     Hkdf::<Sha256>::new(Some(&[0u8; 32]), shared.as_ref())

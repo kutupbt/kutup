@@ -33,7 +33,7 @@ rust-version = "1.91.1"
 # Crypto — libsodium-compatible primitives in pure Rust (no C toolchain), plus the
 # RustCrypto crates for the constructions dryoc does not expose (HKDF-SHA256, the
 # IETF XChaCha20-Poly1305 AEAD used for asset blobs, and Ed25519 frame signatures).
-dryoc = "0.7"
+dryoc = "2.0.1"
 hkdf = "0.12"
 hmac = "0.12"
 unicode-normalization = "0.1"
