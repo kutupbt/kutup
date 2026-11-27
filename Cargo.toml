@@ -150,3 +150,9 @@ inherits = "release"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+
+# dryoc 2's Argon2id unoptimized takes ~14 s per hash at the V1 cost (0.7.2:
+# ~5 s), which every test that signs in pays: dev and test builds compile it
+# optimized. Release builds already are (2.3x faster than 0.7.2 there).
+[profile.dev.package.dryoc]
+opt-level = 3

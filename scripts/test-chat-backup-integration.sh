@@ -22,6 +22,10 @@ export RATE_LIMIT_RECOVERY_PER_HOUR=500
 export REGISTRATION_MODE=on
 # The device tests register more than 20 devices on one account in a minute.
 export RATE_LIMIT_DEVICE_REGISTRATIONS_PER_MIN=1000
+# The admin API (120 a minute per address by default): the live tests set
+# limits, entitlements and settings from one address, and with sign-ins fast
+# (dryoc optimized in test builds) they make more than 120 such calls a minute.
+export RATE_LIMIT_ADMIN_PER_MIN=1000
 # Held names freed within seconds of their date, for the renames test.
 export NAME_SWEEP_SECONDS=2
 export POSTGRES_DB="kutup_backup_test"
