@@ -7,6 +7,8 @@ import { Checkbox } from '@kutup/ui/components/checkbox'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { Skeleton } from '@kutup/ui/components/skeleton'
+import { ShortcutsSwitch } from '@kutup/ui/components/shortcuts-dialog'
+import { setShortcutsEnabled, useShortcutsEnabled } from '@kutup/session/shortcuts'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { readDefaultView, writeDefaultView, type DefaultView } from '../explorer/prefs'
@@ -48,6 +50,7 @@ export function DriveSettingsPage() {
     setView((current) => ({ ...current, ...patch }))
   }
 
+  const shortcuts = useShortcutsEnabled()
   return (
     <PageBody width="prose">
       <PageHeader title={t('settings.title')} description={t('settings.description')} />
@@ -109,6 +112,9 @@ export function DriveSettingsPage() {
           <Checkbox checked={view.showPreviews} onCheckedChange={(value) => change({ showPreviews: value === true })} />
           {t('explorer.showPreviews')}
         </label>
+      </Section>
+      <Section title={t('shortcutsSetting.title')} description={t('settings.shortcutsHint')}>
+        <ShortcutsSwitch enabled={shortcuts} onEnabledChange={setShortcutsEnabled} />
       </Section>
     </PageBody>
   )

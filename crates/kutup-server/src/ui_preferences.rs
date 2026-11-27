@@ -28,6 +28,10 @@ pub struct UiPreferences {
     /// One of the languages the apps ship ([`LANGUAGES`]); null until the
     /// account chooses one.
     pub language: Option<String>,
+    /// Keyboard shortcuts in every app (Proton's one setting); null until
+    /// chosen, which is on. A save that leaves it out keeps the stored one.
+    #[serde(default)]
+    pub shortcuts: Option<bool>,
 }
 
 impl UiPreferences {
@@ -63,13 +67,18 @@ pub async fn get_ui_preferences(
     user: AuthAccount,
 ) -> AppResult<Json<UiPreferences>> {
     let user_id = trusted_uuid(&user.account_id)?;
-    let row: Option<(Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT theme, language FROM account_ui_preferences WHERE account_id = $1")
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let (theme, language) = row.unwrap_or_default();
-    Ok(Json(UiPreferences { theme, language }))
+    let row: Option<(Option<String>, Option<String>, Option<bool>)> = sqlx::query_as(
+        "SELECT theme, language, shortcuts FROM account_ui_preferences WHERE account_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (theme, language, shortcuts) = row.unwrap_or_default();
+    Ok(Json(UiPreferences {
+        theme,
+        language,
+        shortcuts,
+    }))
 }
 
 /// `PUT /api/v1/account/ui-preferences` — set the theme and language; a null
@@ -92,20 +101,28 @@ pub async fn put_ui_preferences(
 ) -> AppResult<Json<UiPreferences>> {
     request.validate()?;
     let user_id = trusted_uuid(&user.account_id)?;
-    sqlx::query(
-        "INSERT INTO account_ui_preferences (account_id, theme, language, updated_at)
-         VALUES ($1, $2, $3, now())
+    sqlx::query_as::<_, (Option<bool>,)>(
+        "INSERT INTO account_ui_preferences (account_id, theme, language, shortcuts, updated_at)
+         VALUES ($1, $2, $3, $4, now())
          ON CONFLICT (account_id) DO UPDATE SET
              theme = EXCLUDED.theme,
              language = EXCLUDED.language,
-             updated_at = now()",
+             shortcuts = COALESCE(EXCLUDED.shortcuts, account_ui_preferences.shortcuts),
+             updated_at = now()
+         RETURNING shortcuts",
     )
     .bind(user_id)
     .bind(&request.theme)
     .bind(&request.language)
-    .execute(&state.pool)
-    .await?;
-    Ok(Json(request))
+    .bind(request.shortcuts)
+    .fetch_one(&state.pool)
+    .await
+    .map(|shortcuts: (Option<bool>,)| UiPreferences {
+        shortcuts: shortcuts.0,
+        ..request
+    })
+    .map(Json)
+    .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -116,6 +133,7 @@ mod tests {
         UiPreferences {
             theme: theme.map(str::to_owned),
             language: language.map(str::to_owned),
+            shortcuts: None,
         }
     }
 

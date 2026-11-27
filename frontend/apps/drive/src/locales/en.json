@@ -421,7 +421,22 @@
       "size": "A preview picture: the file is too large to show here. Open or download it."
     }
   },
+  "keys": {
+    "basic": "Basic actions",
+    "search": "Search",
+    "help": "Show keyboard shortcuts",
+    "list": "In the file list",
+    "move": "Move between items",
+    "firstLast": "First or last item",
+    "open": "Open",
+    "quickLook": "Quick look (a file)",
+    "extend": "Extend the selection",
+    "all": "Select all",
+    "clear": "Clear the selection",
+    "trash": "Move to trash"
+  },
   "settings": {
+    "shortcutsHint": "Press ? in Drive to see them.",
     "title": "Drive settings",
     "description": "How Drive keeps your files and opens folders. Your profile and security are in your account settings.",
     "versions": {
