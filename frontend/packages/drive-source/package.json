@@ -1,0 +1,22 @@
+{
+  "name": "@kutup/drive-source",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    "./source": "./src/source.ts",
+    "./context": "./src/context.ts",
+    "./provider": "./src/provider.tsx",
+    "./kinds": "./src/kinds.ts",
+    "./restore": "./src/restore.ts",
+    "./tree": "./src/tree.ts",
+    "./names": "./src/names.ts",
+    "./editorKind": "./src/editorKind.ts",
+    "./documents": "./src/documents.ts"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5",
+    "react": "^18.3.1"
+  }
+}

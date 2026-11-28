@@ -1,4 +1,4 @@
-import type { ItemKind } from '@kutup/drive-core/kinds'
+import type { ItemKind } from '@kutup/drive-source/kinds'
 
 /** One row of the unified list: a folder or a file, side by side. */
 export interface ExplorerItem {

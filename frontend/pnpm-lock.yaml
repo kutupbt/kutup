@@ -393,6 +393,9 @@ importers:
       '@kutup/drive-core':
         specifier: workspace:*
         version: link:../../packages/drive-core
+      '@kutup/drive-source':
+        specifier: workspace:*
+        version: link:../../packages/drive-source
       '@kutup/drive-ui':
         specifier: workspace:*
         version: link:../../packages/drive-ui
@@ -1009,6 +1012,9 @@ importers:
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../crypto
+      '@kutup/drive-source':
+        specifier: workspace:*
+        version: link:../drive-source
       '@kutup/files':
         specifier: workspace:*
         version: link:../files
@@ -1025,6 +1031,15 @@ importers:
       '@types/react':
         specifier: ^18.3.3
         version: 18.3.31
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+
+  packages/drive-source:
+    dependencies:
+      '@tanstack/react-query':
+        specifier: ^5
+        version: 5.103.2(react@18.3.1)
       react:
         specifier: ^18.3.1
         version: 18.3.1

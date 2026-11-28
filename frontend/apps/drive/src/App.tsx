@@ -6,6 +6,7 @@ import { FileRoute } from '@kutup/editors/FileRoute'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
 import { requestFork } from '@kutup/session/fork'
 import { ManifestSignerWarnings } from '@kutup/drive-ui/ManifestSignerWarnings'
+import { DriveSourceProvider } from '@kutup/drive-source/provider'
 import { Toaster } from '@kutup/ui/components/sonner'
 import { TooltipProvider } from '@kutup/ui/components/tooltip'
 import { Boot } from './app/Boot'
@@ -13,15 +14,16 @@ import { DriveShell } from './app/DriveShell'
 import { NewMenu } from './features/create/NewMenu'
 import { CurrentFolderProvider } from './features/drive/currentFolder'
 import { FolderPage } from './features/folder/FolderPage'
-import { PublicSharePage } from './features/public/PublicSharePage'
+import { PublicSharePage } from './public/PublicSharePage'
 import { SearchPage } from './features/search/SearchPage'
 import { SharedByMePage } from './features/shared/SharedByMePage'
 import { SharedPage } from './features/shared/SharedPage'
 import { TrashPage } from './features/trash/TrashPage'
+import { kutupDriveSource } from './source/kutupSource'
 import { DriveSettingsPage } from './features/settings/DriveSettingsPage'
 import { UploadPanel } from '@kutup/drive-ui/UploadPanel'
 import { useRequiredSession } from '@kutup/session/store'
-import { useUploadActions } from './features/uploads/useUploadActions'
+import { useUploadActions } from './source/kutup/uploads/useUploadActions'
 import { setThumbnailStoredListener } from '@kutup/drive-core/thumbnailQueue'
 import { NotFoundPage } from './NotFoundPage'
 
@@ -60,28 +62,30 @@ function DriveUploadPanel() {
 function SignedIn() {
   return (
     <Boot>
-      <UnauthenticatedHandler />
-      <FileSharesUpkeep />
-      <ThumbnailRefresh />
-      <CurrentFolderProvider>
-        <Routes>
-          {/* A file opens full screen, outside the Drive frame. */}
-          <Route path="/file/:cid/:fid" element={<FileRoute />} />
-          <Route path="/shared/file/:fid" element={<FileRoute shared />} />
-          <Route element={<DriveShell primaryAction={<NewMenu />} />}>
-            <Route index element={<FolderPage />} />
-            <Route path="/folders/:id" element={<FolderPage />} />
-            <Route path="/remote/:shareId" element={<FolderPage />} />
-            <Route path="/shared" element={<SharedPage />} />
-            <Route path="/shared-by-me" element={<SharedByMePage />} />
-            <Route path="/search" element={<SearchPage />} />
-            <Route path="/trash" element={<TrashPage />} />
-            <Route path="/settings" element={<DriveSettingsPage />} />
-            <Route path="*" element={<NotFoundPage />} />
-          </Route>
-        </Routes>
-        <DriveUploadPanel />
-      </CurrentFolderProvider>
+      <DriveSourceProvider source={kutupDriveSource}>
+        <UnauthenticatedHandler />
+        <FileSharesUpkeep />
+        <ThumbnailRefresh />
+        <CurrentFolderProvider>
+          <Routes>
+            {/* A file opens full screen, outside the Drive frame. */}
+            <Route path="/file/:cid/:fid" element={<FileRoute />} />
+            <Route path="/shared/file/:fid" element={<FileRoute shared />} />
+            <Route element={<DriveShell primaryAction={<NewMenu />} />}>
+              <Route index element={<FolderPage />} />
+              <Route path="/folders/:id" element={<FolderPage />} />
+              <Route path="/remote/:shareId" element={<FolderPage />} />
+              <Route path="/shared" element={<SharedPage />} />
+              <Route path="/shared-by-me" element={<SharedByMePage />} />
+              <Route path="/search" element={<SearchPage />} />
+              <Route path="/trash" element={<TrashPage />} />
+              <Route path="/settings" element={<DriveSettingsPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Route>
+          </Routes>
+          <DriveUploadPanel />
+        </CurrentFolderProvider>
+      </DriveSourceProvider>
     </Boot>
   )
 }

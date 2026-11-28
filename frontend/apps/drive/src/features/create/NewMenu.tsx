@@ -10,14 +10,14 @@ import {
   DropdownMenuTrigger,
 } from '@kutup/ui/components/dropdown-menu'
 import { useCurrentFolder } from '../drive/currentFolderContext'
-import { useFolders } from '@kutup/drive-core/folders'
+import { useDriveSource } from '@kutup/drive-source/context'
 import { useCreateActions } from './useCreateActions'
 
 /** The sidebar's New: into the folder on screen, or My Files elsewhere. */
 export function NewMenu() {
   const { t } = useTranslation()
   const current = useCurrentFolder()
-  const folders = useFolders()
+  const folders = useDriveSource().useFolders()
   const target = current ?? folders.data?.root ?? null
   const { actions, busy, elements } = useCreateActions(target)
 

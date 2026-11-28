@@ -1,18 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, Info, Loader2, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
+import { ChevronDown, Info } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { AccountRef } from '@kutup/crypto/accountRef'
-import { useAccountName } from '@kutup/drive-core/accountName'
-import type { FolderIndex } from '@kutup/drive-core/folders'
-import { useDriveIdentity } from '@kutup/drive-core/identity'
-import type { ManifestSignerVerdict } from '@kutup/drive-core/manifestSigners'
-import { fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
-import { personOf, personOfAccount, usePeople } from '@kutup/drive-core/people'
-import type { ClaimedAuthor } from '@kutup/drive-core/revisionAuthors'
-import { sharedByMeRowOf, useSharedByMeRows, type SharedByMeRow } from '@kutup/drive-core/sharedByMe'
-import { currentContentSignature } from '@kutup/editors/files/signature'
-import { fileHistory, holdsYjsState, listVersions, ORIGINAL, type HistoryEntry } from '@kutup/editors/history'
+import { useDriveSource } from '@kutup/drive-source/context'
+import type { FileView, FolderTree, FolderView, PersonLookup, SharingSummary } from '@kutup/drive-source/source'
+import { holdsYjsState } from '@kutup/editors/history'
 import { useRequiredSession } from '@kutup/session/store'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -21,7 +12,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes } from '@kutup/ui/lib/format'
 
 /** A folder, or a file with the folder it is in. */
-export type DetailsTarget = { folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile }
+export type DetailsTarget = { folder: FolderView; file?: undefined } | { folder: FolderView; file: FileView }
 
 /**
  * An item's details (Proton Drive's `DetailsModal`): for a file its name,
@@ -40,7 +31,7 @@ export function DetailsDialog({
   onClose,
 }: {
   targets: DetailsTarget[] | null
-  index: FolderIndex
+  index: FolderTree
   onClose: () => void
 }) {
   const { t } = useTranslation()
@@ -106,9 +97,9 @@ function When({ at }: { at: string }) {
 }
 
 /** "My files › Projects", "Shared with me › Their folder": where `folder` is, itself included. */
-function locationTrail(index: FolderIndex, folder: Folder, labels: { myFiles: string; sharedWithMe: string; encrypted: string }): string {
+function locationTrail(index: FolderTree, folder: FolderView, labels: { myFiles: string; sharedWithMe: string; encrypted: string }): string {
   const names: string[] = []
-  let at: Folder | undefined = folder
+  let at: FolderView | undefined = folder
   const owned = folder.source === 'owned'
   while (at && !at.isRoot) {
     names.unshift(at.name ?? labels.encrypted)
@@ -120,7 +111,7 @@ function locationTrail(index: FolderIndex, folder: Folder, labels: { myFiles: st
 }
 
 /** Where an item is: a file in its folder; a folder in its parent. */
-function useWhere(index: FolderIndex, target: DetailsTarget): string {
+function useWhere(index: FolderTree, target: DetailsTarget): string {
   const { t } = useTranslation()
   const labels = { myFiles: t('nav.myFiles'), sharedWithMe: t('nav.shared'), encrypted: t('drive.encrypted') }
   if (target.file) return locationTrail(index, target.folder, labels)
@@ -130,30 +121,20 @@ function useWhere(index: FolderIndex, target: DetailsTarget): string {
   return parent ? locationTrail(index, parent, labels) : labels.myFiles
 }
 
-/** Someone named by their permanent id: their profile name once they gave it, else their address. */
-function AccountName({ account }: { account: AccountRef }) {
+/** Someone as the source names them: a name, with the address as its tooltip. */
+function Person({ who }: { who: PersonLookup }) {
   const { t } = useTranslation()
-  const address = useAccountName(account)
-  const people = usePeople()
-  if (address.isPending) return <span className="text-muted-foreground">…</span>
-  if (!address.data) return <span className="text-muted-foreground">{t('details.unknownPerson')}</span>
-  const { name } = personOfAccount(people.data, account, address.data)
-  return <span title={address.data}>{name}</span>
-}
-
-/** Someone named by their address (the owner of a folder shared with you). */
-function AddressName({ address }: { address: string }) {
-  const people = usePeople()
-  return <span title={address}>{personOf(people.data, address).name}</span>
+  if (who === 'pending') return <span className="text-muted-foreground">…</span>
+  if (who === 'unknown') return <span className="text-muted-foreground">{t('details.unknownPerson')}</span>
+  return <span title={who.address}>{who.name}</span>
 }
 
 /** What the owner shares an item with, as the server counts it. */
-function SharingText({ row }: { row: SharedByMeRow | undefined }) {
+function SharingText({ row }: { row: SharingSummary | null }) {
   const { t } = useTranslation()
   if (!row) return <>{t('details.notShared')}</>
   const parts: string[] = []
-  const people = row.people + row.otherServers
-  if (people > 0) parts.push(t('details.sharedPeople', { count: people }))
+  if (row.people > 0) parts.push(t('details.sharedPeople', { count: row.people }))
   if (row.links > 0) parts.push(t('details.sharedLinks', { count: row.links }))
   return <>{parts.length > 0 ? parts.join(' · ') : t('details.notShared')}</>
 }
@@ -178,11 +159,12 @@ function Advanced({ children }: { children: ReactNode }) {
   )
 }
 
-function FolderDetails({ folder, index }: { folder: Folder; index: FolderIndex }) {
+function FolderDetails({ folder, index }: { folder: FolderView; index: FolderTree }) {
   const { t } = useTranslation()
+  const source = useDriveSource()
   const location = useWhere(index, { folder })
-  const identity = useDriveIdentity()
-  const sharing = useSharedByMeRows()
+  const creator = source.useFolderCreator(folder)
+  const sharing = source.useSharingSummary(folder)
   const owned = folder.source === 'owned'
   const name = folder.isRoot ? t('nav.myFiles') : (folder.name ?? t('drive.encrypted'))
   return (
@@ -197,7 +179,7 @@ function FolderDetails({ folder, index }: { folder: Folder; index: FolderIndex }
           </Row>
         ) : null}
         <Row id="created-by" label={t('details.createdBy')}>
-          {owned ? (identity.data?.account ?? '…') : folder.ownerAccount ? <AddressName address={folder.ownerAccount} /> : t('details.unknownPerson')}
+          <Person who={creator} />
         </Row>
         {folder.source === 'remote' ? (
           // A share from another server says when it was shared, not when the folder was made.
@@ -219,7 +201,7 @@ function FolderDetails({ folder, index }: { folder: Folder; index: FolderIndex }
         </Row>
         {folder.canManage && !folder.isRoot ? (
           <Row id="shared" label={t('details.shared')}>
-            {sharing.isPending ? '…' : <SharingText row={sharedByMeRowOf(sharing.data, folder.id)} />}
+            {sharing === undefined ? '…' : <SharingText row={sharing} />}
           </Row>
         ) : null}
         {!owned ? (
@@ -239,85 +221,22 @@ function FolderDetails({ folder, index }: { folder: Folder; index: FolderIndex }
   )
 }
 
-/** A digest as the metadata keeps it (base64), as `sha256sum` prints it; null when it is not one. */
-function hexOfBase64(value: string): string | null {
-  try {
-    return Array.from(atob(value), (c) => c.charCodeAt(0).toString(16).padStart(2, '0')).join('')
-  } catch {
-    return null
-  }
-}
-
-/** The revision a history entry is (the original upload's is named by the metadata). */
-function revisionOf(file: DriveFile, entry: HistoryEntry): string | null {
-  return entry.id === ORIGINAL ? file.originalRevisionId : entry.id
-}
-
-/** Who the history says saved an entry, as the signature must agree. */
-function claimOf(file: DriveFile, entry: HistoryEntry | undefined): ClaimedAuthor | null {
-  if (!entry) return null
-  if (entry.id === ORIGINAL) return file.uploaderAccountId ? { accountId: file.uploaderAccountId } : null
-  // Someone on another server is named by their server's id there, which the pins can't compare: no claim.
-  if (entry.remoteAuthor) return null
-  return entry.authorAccountId ? { accountId: entry.authorAccountId } : null
-}
-
-function FileDetails({ folder, file, index }: { folder: Folder; file: DriveFile; index: FolderIndex }) {
+function FileDetails({ folder, file, index }: { folder: FolderView; file: FileView; index: FolderTree }) {
   const { t, i18n } = useTranslation()
   const session = useRequiredSession()
+  const source = useDriveSource()
   const location = useWhere(index, { folder, file })
-  const identity = useDriveIdentity()
-  const server = identity.data?.accountRef.server
-  const sharing = useSharedByMeRows()
-  // The history is this server's: a file on another server has none here.
-  const local = fileLocation(folder).kind === 'local'
-  // Asked again on every open: a replace or an editor's save adds versions without telling this query.
-  const versions = useQuery({
-    queryKey: ['versions', file.id],
-    queryFn: () => listVersions(file.id),
-    enabled: local && Boolean(file.fileKey),
-    refetchOnMount: 'always',
-  })
-  const history = versions.data ? fileHistory(file, versions.data) : null
-  const current = history?.find((e) => e.current)
+  const details = source.useFileDetails(folder, file)
+  const sharing = source.useSharingSummary(folder, file)
+  const Banner = source.DetailsBanner
   const yjs = holdsYjsState(file.name)
-  const checkable = Boolean(file.fileKey && file.content) && !yjs && (!local || (versions.isSuccess && !versions.isFetching) || versions.isError)
-  const signature = useQuery({
-    queryKey: ['details-signature', file.id, file.content?.revisionId, file.contentKeyGeneration, current?.id ?? null],
-    enabled: checkable,
-    retry: false,
-    staleTime: 60_000,
-    queryFn: () =>
-      currentContentSignature(folder, file, (revisionId) => {
-        if (history) return claimOf(file, history.find((e) => revisionOf(file, e) === revisionId))
-        // No history here: the original upload is the uploader's.
-        return revisionId === file.originalRevisionId && file.uploaderAccountId ? { accountId: file.uploaderAccountId } : null
-      }),
-  })
-
-  // People on this server are named by id; on another server only the owner is known by address.
-  const accountRef = (accountId: string | null): AccountRef | null =>
-    accountId && server && folder.source !== 'remote' ? { server, accountId } : null
-  const creator = accountRef(file.uploaderAccountId)
-  const remoteOwnerUploaded = folder.source === 'remote' && file.uploaderAccountId === folder.ownerAccountId && folder.ownerAccount
-  const lastAuthor: AccountRef | null = current
-    ? (current.remoteAuthor ?? accountRef(current.id === ORIGINAL ? file.uploaderAccountId : current.authorAccountId))
-    : null
-  const lastIsCreator =
-    !lastAuthor || (current?.remoteAuthor === null && lastAuthor.accountId === file.uploaderAccountId)
-  // What the current content takes on the server, sealed (Proton's "Size"). A
-  // note's size in its metadata stays the upload's, so it shows only this one.
-  const storedSize = current && current.sizeBytes > 0 ? current.sizeBytes : null
+  const { storedSize, sha256 } = details
   const owner = folder.ownerAccountId === session.accountId && folder.source === 'owned'
-  const fileRow = sharedByMeRowOf(sharing.data, folder.id, file.id)
-  const folderRow = sharedByMeRowOf(sharing.data, folder.id)
-  // The upload's hash says what the content is only while the server's content hash stands.
-  const sha256 = !yjs && file.sha256 && file.contentHash ? hexOfBase64(file.sha256) : null
   const bytes = (n: number) => new Intl.NumberFormat(i18n.language).format(n)
 
   return (
     <>
-      {checkable ? <SignatureBanner pending={signature.isPending} failed={signature.isError} verdict={signature.data?.verdict ?? null} claimed={Boolean(signature.data?.claimed)} hidden={signature.isSuccess && signature.data === null} /> : null}
+      {Banner ? <Banner folder={folder} file={file} /> : null}
       <Rows>
         <Row id="name" label={t('details.name')}>
           {file.name ?? t('drive.encrypted')}
@@ -325,18 +244,14 @@ function FileDetails({ folder, file, index }: { folder: Folder; file: DriveFile;
         <Row id="location" label={t('details.location')}>
           {location}
         </Row>
-        {creator ? (
+        {details.createdBy ? (
           <Row id="created-by" label={t('details.createdBy')}>
-            <AccountName account={creator} />
-          </Row>
-        ) : remoteOwnerUploaded ? (
-          <Row id="created-by" label={t('details.createdBy')}>
-            <AddressName address={folder.ownerAccount!} />
+            <Person who={details.createdBy} />
           </Row>
         ) : null}
-        {lastAuthor && !lastIsCreator ? (
+        {details.lastUploadedBy ? (
           <Row id="last-uploaded-by" label={t('details.lastUploadedBy')}>
-            <AccountName account={lastAuthor} />
+            <Person who={details.lastUploadedBy} />
           </Row>
         ) : null}
         <Row id="uploaded" label={t('details.uploaded')}>
@@ -363,19 +278,19 @@ function FileDetails({ folder, file, index }: { folder: Folder; file: DriveFile;
             {formatBytes(file.size, i18n.language)}
           </Row>
         ) : null}
-        {history ? (
+        {details.versions !== null ? (
           <Row id="versions" label={t('details.versions')}>
-            {history.length}
+            {details.versions}
           </Row>
         ) : null}
         {owner ? (
           <Row id="shared" label={t('details.shared')}>
-            {sharing.isPending ? (
+            {sharing === undefined ? (
               '…'
             ) : (
               <>
-                <SharingText row={fileRow} />
-                {folderRow && !folder.isRoot ? <span className="block text-xs font-normal text-muted-foreground">{t('details.folderShared')}</span> : null}
+                <SharingText row={sharing} />
+                {sharing?.folderShared ? <span className="block text-xs font-normal text-muted-foreground">{t('details.folderShared')}</span> : null}
               </>
             )}
           </Row>
@@ -404,84 +319,6 @@ function FileDetails({ folder, file, index }: { folder: Folder; file: DriveFile;
         </Rows>
       </Advanced>
     </>
-  )
-}
-
-/**
- * Proton's signature banner: the signature on what the file holds now,
- * checked against the people you know (docs/plans/drive-identity-pins.md).
- */
-function SignatureBanner({
-  pending,
-  failed,
-  verdict,
-  claimed,
-  hidden,
-}: {
-  pending: boolean
-  failed: boolean
-  verdict: ManifestSignerVerdict | null
-  /** The history names who saved the content, so a good signature is theirs. */
-  claimed: boolean
-  hidden: boolean
-}) {
-  const { t } = useTranslation()
-  if (hidden) return null
-  let tone: 'ok' | 'bad' | 'muted' = 'muted'
-  let text: string
-  let Icon = ShieldQuestion
-  if (pending) {
-    text = t('details.signature.checking')
-    Icon = Loader2
-  } else if (failed || !verdict) {
-    text = t('details.signature.failed')
-  } else {
-    switch (verdict.kind) {
-      case 'verified':
-        tone = 'ok'
-        Icon = ShieldCheck
-        text = claimed ? t('details.signature.verified') : t('details.signature.verifiedKey')
-        break
-      case 'unknown':
-        text = t('details.signature.unknown')
-        break
-      case 'forged':
-        tone = 'bad'
-        Icon = ShieldAlert
-        text = verdict.name ? t('identityCheck.content.forged', { name: verdict.name }) : t('identityCheck.content.forgedUnnamed')
-        break
-      case 'changed':
-        tone = 'bad'
-        Icon = ShieldAlert
-        text = verdict.name ? t('identityCheck.content.changed', { name: verdict.name }) : t('identityCheck.content.changedUnnamed')
-        break
-      case 'authorMismatch':
-        tone = 'bad'
-        Icon = ShieldAlert
-        text =
-          verdict.name && verdict.claimed
-            ? t('identityCheck.content.authorMismatch', { name: verdict.name, claimed: verdict.claimed })
-            : verdict.name
-              ? t('identityCheck.content.authorMismatchSigner', { name: verdict.name })
-              : t('identityCheck.content.authorMismatchUnnamed')
-        break
-    }
-  }
-  return (
-    <div
-      className={cn(
-        'mb-4 flex items-start gap-2 rounded-md border px-3 py-2 text-sm',
-        tone === 'ok' && 'border-status-ok/40 bg-status-ok/10',
-        tone === 'bad' && 'border-destructive/40 bg-destructive/10 text-destructive',
-        tone === 'muted' && 'border-border bg-muted text-muted-foreground',
-      )}
-      role={tone === 'bad' ? 'alert' : undefined}
-      data-testid="details-signature"
-      data-verdict={pending ? 'pending' : failed || !verdict ? 'failed' : verdict.kind}
-    >
-      <Icon className={cn('mt-0.5 size-4 shrink-0', pending && 'animate-spin', tone === 'ok' && 'text-status-ok')} aria-hidden />
-      <span>{text}</span>
-    </div>
   )
 }
 

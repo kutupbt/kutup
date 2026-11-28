@@ -12,7 +12,8 @@
     "@kutup/crypto": "workspace:*",
     "@kutup/files": "workspace:*",
     "@kutup/session": "workspace:*",
-    "axios": "^1.20.0"
+    "axios": "^1.20.0",
+    "@kutup/drive-source": "workspace:*"
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5",

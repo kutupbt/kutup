@@ -1,14 +1,12 @@
 import { Download, ExternalLink, FolderOpen, Info } from 'lucide-react'
-import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { folderHex } from '../drive/colors'
-import { downloadFile, downloadFolderZip, FsaRequiredError } from '@kutup/editors/files/downloads'
-import type { FolderIndex } from '@kutup/drive-core/folders'
-import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { useDriveSource } from '@kutup/drive-source/context'
+import type { FileView, FolderTree, FolderView } from '@kutup/drive-source/source'
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { Explorer, type ExplorerAction } from '../explorer/Explorer'
 import { useExplorerPrefs } from '../explorer/prefs'
@@ -16,20 +14,18 @@ import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/
 import { Toolbar } from '../explorer/Toolbar'
 import { FileThumbnail } from '../thumbnails/FileThumbnail'
 import { matches, terms } from '@kutup/editors/search'
-import { useDriveIndex } from '@kutup/editors/driveIndex'
-import { sharedByMeRowOf, useSharedByMeRows } from '@kutup/drive-core/sharedByMe'
 import { useRequiredSession } from '@kutup/session/store'
 import { DetailsDialog } from '../details/DetailsDialog'
 import { FilterBar } from './FilterBar'
 import { activeFilters, filtersFromParams, passesFilters, withFilters, type FilterSubject } from './filters'
 
-type Hit = { folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile }
+type Hit = { folder: FolderView; file?: undefined } | { folder: FolderView; file: FileView }
 
 /** "My files › Projects › 2024", or the shared folder's name for shared items. */
-function trail(index: FolderIndex, folder: Folder, myFiles: string): string {
+function trail(index: FolderTree, folder: FolderView, myFiles: string): string {
   if (folder.source !== 'owned') return folder.name ?? ''
   const names: string[] = []
-  let at: Folder | undefined = folder
+  let at: FolderView | undefined = folder
   while (at && !at.isRoot) {
     names.unshift(at.name ?? '…')
     at = at.parentId ? index.byId.get(at.parentId) : undefined
@@ -51,9 +47,10 @@ export function SearchPage() {
   const filtering = activeFilters(filters) > 0
   const session = useRequiredSession()
   const me = session.accountId
-  const { index, files, loading } = useDriveIndex(true)
+  const source = useDriveSource()
+  const { index, files, loading } = source.useSearchIndex(true)
   // What this account shares, for the "Shared by me" filter.
-  const sharing = useSharedByMeRows()
+  const sharedByMe = source.useSharedLookup()
   const [prefs, updatePrefs] = useExplorerPrefs()
   const [selection, setSelection] = useState<Set<string>>(new Set())
   const [details, setDetails] = useState<Hit | null>(null)
@@ -63,19 +60,18 @@ export function SearchPage() {
     const items: ExplorerItem[] = []
     if (!index) return { items, hits }
     const now = new Date()
-    const rows = sharing.data
     // A folder's creator is its owner; a file's, its uploader (on this server: another server's ids are its own).
-    const folderSubject = (folder: Folder): FilterSubject => ({
+    const folderSubject = (folder: FolderView): FilterSubject => ({
       modifiedAt: folder.updatedAt,
       owned: folder.source === 'owned',
       createdByMe: folder.source !== 'remote' && folder.ownerAccountId === me,
-      sharedByMe: folder.source === 'owned' && Boolean(sharedByMeRowOf(rows, folder.id)),
+      sharedByMe: Boolean(sharedByMe?.(folder)),
     })
-    const fileSubject = (folder: Folder, file: DriveFile): FilterSubject => ({
+    const fileSubject = (folder: FolderView, file: FileView): FilterSubject => ({
       modifiedAt: file.updatedAt,
       owned: folder.source === 'owned',
       createdByMe: folder.source !== 'remote' && file.uploaderAccountId === me,
-      sharedByMe: folder.source === 'owned' && Boolean(sharedByMeRowOf(rows, folder.id, file.id)),
+      sharedByMe: Boolean(sharedByMe?.(folder, file)),
     })
     const q = terms(query)
     for (const folder of index.all) {
@@ -108,21 +104,21 @@ export function SearchPage() {
       hits.set(itemKey(item), { folder, file })
     }
     return { items, hits }
-  }, [index, files, query, filters, sharing.data, me])
+  }, [index, files, query, filters, sharedByMe, me])
 
   const shown = useMemo(
     () => sortItems(filterItems(items, prefs.kinds), prefs.sort, i18n.language),
     [items, prefs.kinds, prefs.sort, i18n.language],
   )
 
-  const containerOf = (hit: Hit): Folder | undefined =>
+  const containerOf = (hit: Hit): FolderView | undefined =>
     hit.file ? hit.folder : hit.folder.parentId ? index?.byId.get(hit.folder.parentId) : undefined
 
   const open = (item: ExplorerItem) => {
     const hit = hits.get(itemKey(item))
     if (!hit) return
     if (!hit.file) {
-      if (hit.folder.key) void navigate(folderPath(hit.folder))
+      if (source.isOpen(hit.folder)) void navigate(folderPath(hit.folder))
     } else if (hit.folder.source === 'remote') {
       void save(hit)
     } else {
@@ -132,17 +128,12 @@ export function SearchPage() {
 
   async function save(hit: Hit) {
     try {
-      if (hit.file) await downloadFile(hit.folder, hit.file)
-      else if ((await downloadFolderZip(hit.folder, () => {})) === 'empty') toast.info(t('drive.zipEmpty'))
+      if (hit.file) await source.downloadFile(hit.folder, hit.file)
+      else if ((await source.downloadFolderZip(hit.folder, () => {})) === 'empty') toast.info(t('drive.zipEmpty'))
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return
-      toast.error(
-          error instanceof FsaRequiredError
-            ? t('drive.zipTooLarge')
-            : error instanceof BlobDownloadTooLarge
-              ? t('drive.fileTooLargeForBrowser')
-              : t('drive.downloadFailed'),
-        )
+      const failure = source.downloadFailure(error)
+      toast.error(failure === 'zipTooLarge' ? t('drive.zipTooLarge') : failure === 'fileTooLarge' ? t('drive.fileTooLargeForBrowser') : t('drive.downloadFailed'))
     }
   }
 
@@ -184,7 +175,7 @@ export function SearchPage() {
         onChange={(next) => setParams(withFilters(params, next), { replace: true })}
       />
       {shown.length === 0 ? (
-        loading || (filters.sharedByMe && sharing.isPending) ? (
+        loading || (filters.sharedByMe && sharedByMe === undefined) ? (
           <LoadingPanel label={t('search.searching', { query })} />
         ) : (
           <EmptyState title={t('search.noneTitle')} description={filtering ? t('search.noneFiltered', { query }) : t('search.none', { query })} />

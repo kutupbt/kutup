@@ -121,14 +121,14 @@ export function mayDeleteEntry(
   return me === owner || (entry.remoteAuthor === null && entry.authorAccountId === me)
 }
 
-export interface HistoryGroup {
+export interface HistoryGroup<E = HistoryEntry> {
   /** `today`, `yesterday`, `weekday`, `lastWeek`, `month` or `year`: what the title says. */
   kind: 'today' | 'yesterday' | 'weekday' | 'lastWeek' | 'month' | 'year'
   /** Stable key (`d3`, `m10`, `2025`). */
   key: string
   /** The day, month or year it names, for the title (`weekday`, `month`, `year`). */
   date: Date
-  entries: HistoryEntry[]
+  entries: E[]
 }
 
 function startOfDay(date: Date): Date {
@@ -147,18 +147,18 @@ function startOfWeek(date: Date): Date {
  * today, yesterday, each other day of this week, last week, each other month
  * of this year, then each year. Order kept (newest first).
  */
-export function groupHistory(entries: readonly HistoryEntry[], now = new Date()): HistoryGroup[] {
+export function groupHistory<E extends { createdAt: string } = HistoryEntry>(entries: readonly E[], now = new Date()): HistoryGroup<E>[] {
   const today = startOfDay(now).getTime()
   const yesterday = new Date(today)
   yesterday.setDate(yesterday.getDate() - 1)
   const thisWeek = startOfWeek(now)
   const lastWeek = new Date(thisWeek)
   lastWeek.setDate(lastWeek.getDate() - 7)
-  const groups = new Map<string, HistoryGroup>()
+  const groups = new Map<string, HistoryGroup<E>>()
   for (const entry of entries) {
     const at = new Date(entry.createdAt)
     const day = startOfDay(at).getTime()
-    let kind: HistoryGroup['kind']
+    let kind: HistoryGroup<E>['kind']
     let key: string
     if (day >= today) [kind, key] = ['today', 'today']
     else if (day >= yesterday.getTime()) [kind, key] = ['yesterday', 'yesterday']

@@ -12,7 +12,9 @@ import { Explorer } from '../explorer/Explorer'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
-import { RestoreCancelled, useEmptyTrash, usePurge, useRestore, useTrash, type TrashEntry } from '@kutup/drive-core/trash'
+import { useDriveSource } from '@kutup/drive-source/context'
+import { RestoreCancelled } from '@kutup/drive-source/restore'
+import type { TrashedView } from '@kutup/drive-source/source'
 import { useRestoreNameDialog } from '@kutup/drive-ui/RestoreNameDialog'
 
 /**
@@ -22,14 +24,15 @@ import { useRestoreNameDialog } from '@kutup/drive-ui/RestoreNameDialog'
  */
 export function TrashPage() {
   const { t, i18n } = useTranslation()
-  const trash = useTrash()
+  const source = useDriveSource()
+  const trash = source.useTrash()
   const restoreName = useRestoreNameDialog()
-  const restore = useRestore(restoreName.ask)
-  const purge = usePurge()
-  const empty = useEmptyTrash()
+  const restore = source.useRestore(restoreName.ask)
+  const purge = source.usePurge()
+  const empty = source.useEmptyTrash()
   const [prefs, updatePrefs] = useExplorerPrefs()
   const [selection, setSelection] = useState<Set<string>>(new Set())
-  const [purging, setPurging] = useState<TrashEntry | null>(null)
+  const [purging, setPurging] = useState<TrashedView | null>(null)
   const [emptying, setEmptying] = useState(false)
 
   const entries = useMemo(() => new Map((trash.data ?? []).map((e) => [itemKey(e), e])), [trash.data])
@@ -47,7 +50,7 @@ export function TrashPage() {
   )
   const shown = sortItems(filterItems(items, prefs.kinds), prefs.sort, i18n.language)
 
-  const doRestore = (entry: TrashEntry) =>
+  const doRestore = (entry: TrashedView) =>
     restore.mutate(entry, {
       onSuccess: () => toast.success(t('trash.restored', { name: entry.name ?? t('drive.encrypted') })),
       onError: (error) => {
