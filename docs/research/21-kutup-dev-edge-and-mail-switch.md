@@ -35,7 +35,8 @@ before and after):
 **Check.** A, PTR, MX, SPF, DKIM, DMARC and WKD pass. A resolver that had
 cached the earlier "no such record" kept reporting DKIM and DMARC missing for
 some minutes; Cloudflare's own name servers and public resolvers had them.
-An inbound test message from an outside account is still to be sent.
+An inbound test message from an outside account to `admin@kutup.dev`
+arrived (confirmed by the user, 2026-11-25).
 
 ## 2. Edge: nginx replaced by Koru
 
@@ -128,4 +129,3 @@ the `koru` container, restore the edge lines of `.env` from the backup, and
   precompressed files this needs; Kutup's browser suites have not yet run
   against it.
 - **The deploy's mail check** on a redeploy of an unchanged release (above).
-- An inbound test message to `admin@kutup.dev`.

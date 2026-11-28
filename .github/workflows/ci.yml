@@ -692,6 +692,9 @@ jobs:
     env:
       KUTUP_E2E_SAFE_ARTIFACTS: "1"
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+      # Spec 116 names the domain badges' tones when its wait gives up
+      # (tones only: ok, warn, danger, neutral).
+      KUTUP_E2E_MAIL_DIAGNOSTICS: "1"
     steps:
       - uses: actions/checkout@v7
       - name: Set up Node

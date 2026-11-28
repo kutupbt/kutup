@@ -65,6 +65,25 @@ async function tab(wizard: Locator, name: string) {
   await wizard.getByRole('tab', { name }).click()
 }
 
+/**
+ * Runs the domain checks' wait; when it gives up, names each badge's tone
+ * (ok, warn, danger, neutral: never the domain or its records) on the
+ * sanitized channel, so a failure in CI says which check stayed red.
+ */
+async function namingBadgesOnFailure(page: Page, wait: () => Promise<void>) {
+  try {
+    await wait()
+  } catch (error) {
+    const tones: string[] = []
+    for (const label of ['Verified', 'MX', 'SPF', 'DKIM', 'DMARC']) {
+      const tone = await (await badge(page, label)).first().getAttribute('data-tone', { timeout: 2_000 }).catch(() => 'missing')
+      tones.push(`${label.toLowerCase()}=${tone ?? 'none'}`)
+    }
+    console.log(`MAIL DIAGNOSTIC spec116 badges ${tones.join(' ')}`)
+    throw error
+  }
+}
+
 async function badge(page: Page, label: string | RegExp) {
   return page.getByTestId('domain-status').getByText(label, { exact: typeof label === 'string' })
 }
@@ -140,19 +159,21 @@ test('custom domains: the wizard, addresses on the domain, catch-all, deleting i
     `_dmarc IN TXT ${txt(dmarc)}`,
     ...dkim.map((record) => `${record.host} IN CNAME ${absolute(record.value)}`),
   ])
-  await expect(async () => {
-    await mail.getByRole('button', { name: 'Refresh status' }).click()
-    for (const label of ['Verified', 'MX', 'SPF', 'DKIM']) {
-      await expect(await badge(mail, label)).toHaveAttribute('data-tone', 'ok', { timeout: 5_000 })
-    }
-    // DMARC checks "relaxed" (Proton's RELAXED: DKIM aligned relaxed), which
-    // Proton's badge shows neutral, never as a fault.
-    await expect(await badge(mail, 'DMARC')).not.toHaveAttribute('data-tone', 'danger', { timeout: 5_000 })
-    // Read in the same pass: a refresh re-renders the whole row, so a badge
-    // found before it can be the one replaced.
-    await expect(await badge(mail, '0 addresses')).toHaveAttribute('data-tone', 'danger', { timeout: 5_000 })
-    await expect(mail.getByTestId('domains-used')).toContainText('1 /', { timeout: 5_000 })
-  }).toPass({ timeout: 120_000 })
+  await namingBadgesOnFailure(mail, () =>
+    expect(async () => {
+      await mail.getByRole('button', { name: 'Refresh status' }).click()
+      for (const label of ['Verified', 'MX', 'SPF', 'DKIM']) {
+        await expect(await badge(mail, label)).toHaveAttribute('data-tone', 'ok', { timeout: 5_000 })
+      }
+      // DMARC checks "relaxed" (Proton's RELAXED: DKIM aligned relaxed), which
+      // Proton's badge shows neutral, never as a fault.
+      await expect(await badge(mail, 'DMARC')).not.toHaveAttribute('data-tone', 'danger', { timeout: 5_000 })
+      // Read in the same pass: a refresh re-renders the whole row, so a badge
+      // found before it can be the one replaced.
+      await expect(await badge(mail, '0 addresses')).toHaveAttribute('data-tone', 'danger', { timeout: 5_000 })
+      await expect(mail.getByTestId('domains-used')).toContainText('1 /', { timeout: 5_000 })
+    }).toPass({ timeout: 120_000 }),
+  )
 
   // Addresses on it, in Identity and addresses.
   await mail.goto(appUrl('mail', '/settings/identity'))
