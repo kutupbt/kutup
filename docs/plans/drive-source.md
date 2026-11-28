@@ -1,14 +1,12 @@
 # Drive screens over a `DriveSource` — plan
 
-**Status:** PR 1 converted (2026-11-26): the Drive screens in
-`apps/drive/src/features` read their data only through `@kutup/drive-source`
-(a lint rule keeps them off drive-core); Kutup's implementation is in
-`apps/drive/src/source`. Nothing changes for Kutup's users. Left for PR 2:
-the app shell (`App.tsx`, `app/`: session, people, the boot), which is
-`SessionSource`'s, and Kutup's public link pages (`apps/drive/src/public`,
-outside the screens). The Kutup Home drive (`kutup-home-drive`,
-plain files in plain folders, no end-to-end encryption) is the second
-implementation this enables; its server is built and waiting for the screens.
+**Status:** PR 1 merged (#458, 2026-11-28): the Drive screens in
+`apps/drive/src/features` read their data only through `@kutup/drive-source`;
+Kutup's implementation is in `apps/drive/src/source`. **PR 2 is proposed below
+("PR 2: the screens move, with a session and public links"), for review before
+any code moves.** The Kutup Home drive (`kutup-home-drive`, plain files in plain
+folders, no end-to-end encryption) is the second implementation this enables;
+its server is built and waiting for the screens.
 
 **Rule for every PR of this series:** Kutup looks and behaves exactly as
 before, Kutup's build never contains a plain implementation, and no PR
@@ -154,6 +152,85 @@ refinements made while implementing:
 - **`kinds.ts` and the restore errors** moved into `@kutup/drive-source`
   (drive-core re-exports them unchanged), so every source decides a file's kind
   and reports a cancelled restore the same way, without a package cycle.
+
+## PR 2: the screens move, with a session and public links (proposal)
+
+What is left in `apps/drive` that is not Kutup's alone, inventoried on master
+2f60920e:
+
+- **The screens use the session for one thing:** the signed-in account's id
+  (`useRequiredSession().accountId`, in FolderPage, SearchPage, DetailsDialog
+  and VersionHistoryDialog, for "is this mine?"). Besides that: keyboard
+  shortcuts (`@kutup/session/shortcuts`: the pure `isShortcutKey` and the
+  on/off preference), one link into another app (`appUrl('pass', …)`: "New
+  password" in the New menu), and the settings page reads and sets version
+  retention with `api` (`/account`) directly.
+- **The frame (`app/DriveShell.tsx`)** is half generic (sidebar: New, My files,
+  Shared with me, Trash; storage meter) and half the account's (user menu,
+  sign-out, feedback, app switcher, UI preferences, the account head-state
+  banner).
+- **The boot (`app/Boot.tsx`, `App.tsx`)** is Kutup's: `bootChildApp`, fork,
+  key-binding checks, the unauthenticated handler, keeping file shares current,
+  thumbnail listeners. It stays in Kutup's app.
+- **Public link pages (`public/`)** decrypt a link with the key in its URL
+  fragment (`@kutup/editors/public/share`) and reuse the explorer
+  (`features/explorer`). A plain drive serves public links from its server.
+
+### Proposed shape
+
+1. **`@kutup/drive-screens`** (name to agree): `apps/drive/src/features/*` and
+   `public/PublicSharePage` move there unchanged apart from imports, with their
+   locale strings (en, tr) as a namespace the app loads. It exports the routes
+   (`<DriveRoutes />`), the frame's generic part (`<DriveFrame>`), and the
+   public page. It depends on `drive-source`, the UI kit and the editors'
+   viewers, never on drive-core or session (the lint rule moves with it).
+2. **`SessionSource`** (in `@kutup/drive-source`, next to `DriveSource`):
+
+   ```ts
+   interface SessionSource {
+     /** The signed-in account's id: what the screens compare owners and uploaders with. */
+     accountId: string
+     /** Keyboard shortcuts on or off (the preference), and setting it. */
+     useShortcutsEnabled: () => boolean
+     setShortcutsEnabled: (on: boolean) => void
+     /** The account's parts of the frame: user menu (with sign-out), app switcher,
+      *  banner above the content; null where an app has none. */
+     UserMenu: ComponentType
+     AppSwitcher: ComponentType | null
+     Banner: ComponentType | null
+     /** Capability `passwords`: "New password" in the New menu opens it; null without. */
+     newPasswordUrl: ((folderId: string) => string) | null
+   }
+   ```
+
+   `isShortcutKey` is a pure helper and moves to the screens package (session
+   re-exports it). Kutup's implementation wraps today's code: `useRequiredSession`,
+   `@kutup/session/shortcuts`, Kutup's `UserMenu`/`AppSwitcher`/`HeadStateBanner`
+   and `appUrl('pass', …)`, so nothing changes for Kutup's users.
+3. **Version retention through the source:** `useVersionRetention()` (already
+   on `DriveSource`) gains the choices and a setter, and the settings page uses
+   it instead of `api('/account')`.
+4. **`PublicSource`** for the public page: `usePublicShare(token)` (what the
+   link shows: a file, or a folder's listing), with the content, thumbnail and
+   playback reads the page needs. Kutup's implementation is today's
+   `editors/public/share` (the key stays in the fragment and in Kutup's code);
+   the page itself moves with the screens.
+5. **Kutup's app becomes** its boot + `DriveFrame` with Kutup's session parts +
+   `DriveRoutes`, given Kutup's `DriveSource`, `SessionSource` and
+   `PublicSource`.
+
+As in PR 1: this section and the interfaces first; then the move in steps
+(session, retention, public source, then the package move), each with the unit
+tests and the Drive suite green.
+
+### Questions
+
+1. The package name (`@kutup/drive-screens`?).
+2. The frame split: generic `DriveFrame` in the package, account parts as
+   `SessionSource` components. Or should the whole frame stay per app?
+3. Locale strings: a namespace the package ships and the app loads, or kept in
+   `apps/drive/src/locales` with the package only reading keys?
+4. `PublicSource` as a third source, or part of `DriveSource`?
 
 ## Review
 
