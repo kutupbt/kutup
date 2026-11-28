@@ -25,27 +25,27 @@ is said) · ❌ missing · ➖ not for Kutup (Proton lacks it, or decided
 against; not counted). "Planned" names the phase or plan that covers a gap;
 "not planned" means no Kutup plan covers it yet.
 
-**Summary** (rows per area, 2026-11-24):
+**Summary** (rows per area, 2026-11-28):
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| Views and navigation | 8 | 0 | 5 |
-| Creating and moving on the grid | 9 | 0 | 1 |
-| The event editor | 6 | 2 | 2 |
-| Recurrence | 0 | 3 | 2 |
+| Views and navigation | 8 | 0 | 6 |
+| Creating and moving on the grid | 10 | 0 | 0 |
+| The event editor | 8 | 1 | 1 |
+| Recurrence | 5 | 0 | 0 |
 | Reminders and notifications | 6 | 0 | 0 |
 | Time zones | 1 | 2 | 2 |
-| Calendars | 6 | 0 | 3 |
-| Settings | 0 | 1 | 4 |
+| Calendars | 6 | 1 | 2 |
+| Settings | 3 | 1 | 2 |
 | Sharing: members and links | 11 | 0 | 2 |
-| Busy/free | 2 | 0 | 2 |
-| Invitations | 0 | 0 | 10 |
-| Import, export and other calendars | 0 | 2 | 3 |
-| Video calls | 0 | 0 | 1 |
-| Search and shortcuts | 1 | 0 | 2 |
+| Busy/free | 3 | 0 | 1 |
+| Invitations | 10 | 0 | 0 |
+| Import, export and other calendars | 3 | 0 | 1 |
+| Video calls | 1 | 0 | 0 |
+| Search and shortcuts | 1 | 1 | 1 |
 | Booking pages | 0 | 0 | 1 |
-| Other apps and platforms | 2 | 1 | 2 |
-| **All** | **52** | **11** | **43** |
+| Other apps and platforms | 3 | 1 | 1 |
+| **All** | **79** | **7** | **20** |
 
 ## Views and navigation
 
@@ -80,7 +80,7 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 | Quick-create popover (title, Save, More options) | `cal/components/eventModal/CreateEventPopover.tsx` | ✅ | `features/CalendarPopovers.tsx` (`QuickCreate`): title, the calendar, the span; dates and times in More options |
 | Event peek popover (details, Edit, Delete) | `cal/components/events/EventPopover.tsx`, `PopoverEventContent.tsx` | ✅ | `features/CalendarPopovers.tsx` (`EventPeek`); Delete through `features/EventDelete.tsx` |
 | Duplicate an event | `cal/components/events/eventPopoverButtons/EventPopoverButtons.tsx` "Duplicate event" | ✅ | the editor as a new event; a series' rule kept, a changed occurrence's dropped |
-| A repeating event moved or resized asks "this / this and future / all" | `cal/containers/calendar/confirmationModals/SelectRecurringType.tsx`, `eventActions/getRecurringSaveType.ts` | ❌ | planned: E2 app (calendar.md E2 §9) |
+| A repeating event moved or resized asks "this / this and future / all" | `cal/containers/calendar/confirmationModals/SelectRecurringType.tsx`, `eventActions/getRecurringSaveType.ts` | ✅ | a move or resize opens the editor at the new time (`features/moves.ts`); saving asks (`recurrence/RecurringDialog.tsx`, `choicesFor`) |
 
 ## The event editor
 
@@ -92,7 +92,7 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 | Edited on another device first: told, not overwritten | (sync errors) | ✅ | `events.changedElsewhere`, revision checks |
 | Signature check | `getEventInformation.ts` (verification status) | ✅ | "Not verified" on an event whose signature fails |
 | Start and end time zones apart | `rows/DateTimeRow.tsx` "Show time zones" | 🟡 | one zone for both start and end |
-| Repeat | `inputs/FrequencyInput.tsx`, `CustomFrequencyModal.tsx`, `rows/RepeatEveryRow.tsx`, `RepeatOnRow.tsx`, `EndsRow.tsx` | 🟡 | no control yet (the editor writes `rrule: null`); see Recurrence |
+| Repeat | `inputs/FrequencyInput.tsx`, `CustomFrequencyModal.tsx`, `rows/RepeatEveryRow.tsx`, `RepeatOnRow.tsx`, `EndsRow.tsx` | ✅ | `recurrence/RepeatField.tsx`: Proton's choices and custom (every N, weekdays, monthly by day or nth weekday, ends after or on) |
 | Participants | `rows/RowParticipants.tsx`, `inputs/ParticipantsInput.tsx` | ✅ | E4c: `features/invitations/ParticipantsRow.tsx` |
 | Colour per event | `inputs/EventColorSelect.tsx` "Custom event colors" | ❌ | events take their calendar's colour; not planned |
 | Links in the description and location clickable | `cal/hooks/useUrlifyString.tsx` | ✅ | `features/linkText.ts`: http, https and mailto only, written as text (never HTML), `rel="noopener noreferrer"` |
@@ -101,11 +101,11 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 
 | Feature | Proton | Kutup | Notes / where |
 |---|---|---|---|
-| Proton's rule subset (daily to yearly, interval, count or until, weekdays, monthly by day or nth weekday) | `psl/calendar/recurrence/rrule.ts` | 🟡 | the Rust core parses, normalises and expands it (`crates/kutup-crypto/src/calendar_recurrence.rs`, vectors, fuzzing) and the server takes it (range end, `handlers/calendar.rs`); no app control. Planned: E2 app (calendar.md E2 §9) |
-| Occurrences shown in the views | `psl/calendar/recurrence/recurring.ts` | ❌ | `features/placement.ts` places an event's first start only; planned: E2 app |
-| Change or delete one occurrence | `cal/containers/calendar/recurrence/updateSingleRecurrence.ts`, `deleteSingleRecurrence.ts` | 🟡 | the server checks a child against its parent's occurrences (RECURRENCE-ID, EXDATE); no app path. Planned: E2 app |
-| This and future occurrences | `recurrence/createFutureRecurrence.ts`, `deleteFutureRecurrence.ts` | 🟡 | the server side as above (idempotent steps, calendar.md E2 §2); no app path. Planned: E2 app |
-| All occurrences, with Proton's three choices when the start moved | `eventActions/getRecurringUpdateAllPossibilities.ts`, `confirmationModals/editRecurring/` | ❌ | planned: E2 app |
+| Proton's rule subset (daily to yearly, interval, count or until, weekdays, monthly by day or nth weekday) | `psl/calendar/recurrence/rrule.ts` | ✅ | the Rust core parses, normalises and expands it (`crates/kutup-crypto/src/calendar_recurrence.rs`, vectors, fuzzing); the server takes it (range end); the editor writes it (`RepeatField`) |
+| Occurrences shown in the views | `psl/calendar/recurrence/recurring.ts` | ✅ | `features/placement.ts` (`instancesOf`): every occurrence in the shown range, from the Rust core's expansion |
+| Change or delete one occurrence | `cal/containers/calendar/recurrence/updateSingleRecurrence.ts`, `deleteSingleRecurrence.ts` | ✅ | `recurrence/actions.ts` (`'single'`): a changed occurrence (RECURRENCE-ID) or an EXDATE; the server checks it against the series |
+| This and future occurrences | `recurrence/createFutureRecurrence.ts`, `deleteFutureRecurrence.ts` | ✅ | `recurrence/actions.ts` (`'future'`): the series ends, a new one starts (idempotent steps, calendar.md E2 §2) |
+| All occurrences, with Proton's three choices when the start moved | `eventActions/getRecurringUpdateAllPossibilities.ts`, `confirmationModals/editRecurring/` | ✅ | `recurrence/actions.ts` (`planAll`): times kept, same day new time, or the series starts where the form says; changed occurrences follow (Proton's smart rules) |
 
 ## Reminders and notifications
 
@@ -152,7 +152,7 @@ against; not counted). "Planned" names the phase or plan that covers a gap;
 | "Add to calendar and mark as pending" for received invitations | `CalendarInvitationsSection.tsx` | ✅ | E4: on the account, on by default; Kutup invitations adopted at once (`useAutoAdd`), outside ones added when Mail shows them |
 | Auto-add video links to invitations | `CalendarInvitationsSection.tsx` "Auto-add Meet links" | ❌ | with E5's Chat meetings |
 | "Show others when I'm busy" default for new calendars | `CalendarEventDefaultsSection.tsx` | ❌ | left out of E3 on purpose (roadmap); not planned |
-| Keyboard shortcuts on or off | `pcc/settings/CalendarOtherPreferencesSection.tsx` | ➖ | Kutup's are always on and never in a field or dialog (calendar.md UX parity) |
+| Keyboard shortcuts on or off | `pcc/settings/CalendarOtherPreferencesSection.tsx` | ✅ | one account switch for every app (`account_ui_preferences.shortcuts`, #459): `?` and Settings show it |
 | Quick settings drawer | `cal/components/drawer/CalendarQuickSettings.tsx` | ➖ | the Settings dialog holds the same |
 
 ## Sharing: members and links
@@ -204,9 +204,9 @@ All planned in E4 (`calendar-e4.md`, slices E4a–E4e) unless said.
 
 | Feature | Proton | Kutup | Notes / where |
 |---|---|---|---|
-| `.ics` import (a file, a calendar, a report) | `pcc/importModal/` | 🟡 | in progress (`feat/calendar-ics`); plan calendar.md E2 §5 |
-| `.ics` export | `pcc/exportModal/`, `pcc/settings/CalendarExportSection.tsx` | 🟡 | in progress (`feat/calendar-ics`); plan E2 §6 |
-| Import from Google (and Outlook) | `packages/activation` (Easy Switch, OAuth through Proton's server) | ❌ | planned: E5, Google only, in the browser (D-3); Outlook not planned |
+| `.ics` import (a file, a calendar, a report) | `pcc/importModal/` | ✅ | E2c: `features/ics/ImportDialog.tsx`, the Rust reader |
+| `.ics` export | `pcc/exportModal/`, `pcc/settings/CalendarExportSection.tsx` | ✅ | E2c: the calendar's dialog, the Rust writer |
+| Import from Google (and Outlook) | `packages/activation` (Easy Switch, OAuth through Proton's server) | ➖ | parked (calendar.md E5b): Google's verification per server; "Add calendar from URL" with Google's secret address, or an `.ics` export, instead |
 | Add calendar from URL (subscribed feeds, statuses) | `pcc/calendarModal/subscribedCalendarModal/`, `pcc/settings/OtherCalendarsSection.tsx` | ✅ | E5a: server fetch every 6 h (admin setting), Proton's statuses and 12-hour "not synced" |
 | Holiday calendars | `pcc/calendarModal/holidaysCalendarModal/` | ❌ | planned: after E5 (D-4) |
 | CalDAV | none | ➖ | as Proton ([`../research/06-webdav-support.md`](../research/06-webdav-support.md)) |
@@ -215,7 +215,7 @@ All planned in E4 (`calendar-e4.md`, slices E4a–E4e) unless said.
 
 | Feature | Proton | Kutup | Notes / where |
 |---|---|---|---|
-| A meeting link in the event (Proton Meet, title encrypted) | `rows/RowVideoConference.tsx` | ❌ | planned: E5, Chat's call links (calendar.md §10) |
+| A meeting link in the event (Proton Meet, title encrypted) | `rows/RowVideoConference.tsx` | ✅ | E5c (#456): "Add Kutup meeting", RFC 7986 `CONFERENCE` in the encrypted part only; Join in the details and Mail's card |
 | Zoom links made from the event | `RowVideoConference.tsx` "Add Zoom meeting" | ➖ | not now (calendar.md §11): a pasted link works |
 
 ## Search and shortcuts
@@ -224,7 +224,7 @@ All planned in E4 (`calendar-e4.md`, slices E4a–E4e) unless said.
 |---|---|---|---|
 | N, T, 1 2 3, ← → | `cal/hooks/useCalendarHotkeys.ts` | ✅ | `features/CalendarPage.tsx` |
 | Search events (`/`): an encrypted index in the browser, results by date | `cal/containers/calendar/search/`, `cal/containers/EncryptedSearchLibraryProvider.tsx` | ❌ | UX parity table; not planned |
-| Shortcuts list (`?`) and the quick actions menu (Meta+K) | `pcc/shortcutsModal/CalendarShortcutsModal.tsx`, `CalendarShortcutsAndCommander.tsx` | ❌ | UX parity table; not planned |
+| Shortcuts list (`?`) and the quick actions menu (Meta+K) | `pcc/shortcutsModal/CalendarShortcutsModal.tsx`, `CalendarShortcutsAndCommander.tsx` | 🟡 | `?` lists them with the switch (#459); Proton's set plus D W M; no Meta+K menu |
 
 ## Booking pages
 
@@ -283,6 +283,5 @@ What people hit first, then what blocks moving from Proton or Google:
 | CalDAV | Proton has none; Kutup serves no DAV | [`calendar.md`](calendar.md); the no-DAV rule |
 | Zoom links made from the event | an outside service holding the meeting; a pasted link works | calendar.md §11 |
 | Google import through the server | the token and events would reach Kutup's server | D-3: in the browser |
-| Keyboard shortcuts behind a setting | Kutup's never fire in a field or dialog | calendar.md "Calendar UX parity" |
 | Year view, offline | Proton has neither | — |
 | Counter-proposals acted on | Proton shows them only | E4 Q-1 |
